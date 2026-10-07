@@ -127,4 +127,3 @@ MVP 使用 SQLite FTS5 对 paper_chunks 建全文索引；`SearchService` 统一
 - SQLite 开启 WAL、外键约束和合理索引；写入事务短小明确。
 - 日志包含 request_id、job_id、paper_id，但不记录完整 PDF 或 API secret。
 - 测试覆盖 service 的关键路径、schema 校验、evidence 定位和 API smoke；前端至少覆盖路由、空状态和 Reader evidence 交互。
-

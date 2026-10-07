@@ -92,4 +92,3 @@
 ## 7. 后续迭代顺序
 
 完成 MVP 稳定性后，再按价值增加：真实 OpenAlex/Semantic Scholar 元数据、段落级翻译缓存、embedding 语义搜索、用户确认关系、Researcher 外部链接、Tauri 打包与可选同步。每项功能都要回答“是否加快阅读，或让未来更容易找回今天的理解”。
-

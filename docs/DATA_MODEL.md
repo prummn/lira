@@ -102,4 +102,3 @@ Citation Graph 的明确引用边应来自 `metadata` 或 `explicit`；Method Li
 ## 8. 迁移和数据安全
 
 初始 migration 创建上述核心表、枚举约束、外键、索引和 FTS5 触发器。每次 schema 变更必须有 up/down migration 和 fixture 兼容检查。导入文件使用 sha256；删除操作先归档数据库记录并移动文件到回收站目录，清理任务由用户显式触发。
-

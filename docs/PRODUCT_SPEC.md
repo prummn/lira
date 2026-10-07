@@ -93,4 +93,3 @@ MVP 不做用户注册、云同步、支付、多人协作、完整 Zotero/BibTe
 - 键盘快捷键：`Cmd/Ctrl+K` 全局搜索、`Cmd/Ctrl+Enter` 提问、`G then L/R/K` 切换工作区。
 - 长标题、中文字体、窄窗口必须可读；颜色不能单独承担状态含义。
 - 所有 AI 结论都能查看原始 prompt/model/时间和证据列表，便于复核。
-

@@ -76,4 +76,3 @@ PAPER_READER_MODEL_API_KEY=你的key
 「设置 → 界面外观」可以选择浅色、深色、跟随系统，以及简体中文/English；选择保存在当前浏览器。
 
 默认 SQLite 是 `D:\paper_reader\backend\paper_reader.db`，PDF 在 `D:\paper_reader\backend\storage`。配置覆盖路径后以实际配置为准。备份时先停止服务，再复制数据库、同名的 `-wal`/`-shm` 文件（若存在）及 PDF 目录。「导出 JSON」导出元数据，不包含原始 PDF，也不代替完整备份。
-
