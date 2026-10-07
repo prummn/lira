@@ -1,12 +1,14 @@
 import { useState } from 'react'
 import { ArrowUpRight, CheckCircle2, Download, Link2, LoaderCircle } from 'lucide-react'
-import type { PaperDetail } from '../types'
+import type { ModelSettings, PaperDetail } from '../types'
+import { remoteAvailable, useAnalysisPreference } from '../lib/intelligence'
+import { AnalysisImportChoice } from './ImportFilesDialog'
 import { api, errorMessage } from '../lib/api'
 import { useUi } from '../lib/i18n'
 import { ErrorBanner, Modal } from './Shared'
 
-export function ImportUrlDialog({ close, imported, openPaper, retryLabel }: {
-  close: () => void; imported: (paper: PaperDetail) => Promise<void>; openPaper: (id: string) => void; retryLabel?: string
+export function ImportUrlDialog({ close, imported, openPaper, retryLabel,settings }: {
+  close: () => void; imported: (paper: PaperDetail) => Promise<void>; openPaper: (id: string) => void; retryLabel?: string;settings:ModelSettings|null
 }) {
   const { t } = useUi()
   const [url, setUrl] = useState('')
@@ -14,6 +16,7 @@ export function ImportUrlDialog({ close, imported, openPaper, retryLabel }: {
   const [error, setError] = useState('')
   const [result, setResult] = useState<PaperDetail | null>(null)
   const [completed, setCompleted] = useState(false)
+  const [analyze,setAnalyze]=useAnalysisPreference()
   const finish = async (paper: PaperDetail) => {
     try { await imported(paper); setCompleted(true) }
     catch (e) { setError(errorMessage(e)); setCompleted(false) }
@@ -27,7 +30,7 @@ export function ImportUrlDialog({ close, imported, openPaper, retryLabel }: {
     if (busy || !url.trim()) return
     setBusy(true); setError('')
     try {
-      const paper = await api.importUrl(url.trim())
+      const paper = await api.importUrl(url.trim(),remoteAvailable(settings)&&analyze)
       setResult(paper)
       await finish(paper)
     } catch (e) { setError(errorMessage(e)) }
@@ -46,6 +49,7 @@ export function ImportUrlDialog({ close, imported, openPaper, retryLabel }: {
     </div> : <form onSubmit={e => { e.preventDefault(); void submit() }}>
       <label>{t('paperUrl')}<div className="url-input"><Link2 size={16}/><input autoFocus type="url" required aria-label={t('paperUrl')} value={url} onChange={e => setUrl(e.target.value)} disabled={busy} placeholder="https://arxiv.org/abs/1706.03762" /></div></label>
       <p className="dialog-footnote">{t('importUrlLocal')}</p>
+      <AnalysisImportChoice settings={settings} value={analyze} change={setAnalyze}/>
       {busy && <p className="download-progress" role="status"><LoaderCircle size={15} className="spin"/>{t('downloadingPaper')}</p>}
       <div className="modal-actions"><button type="button" className="btn secondary" disabled={busy} onClick={close}>{t('cancel')}</button>
         <button className="btn primary" disabled={busy || !url.trim()}>{busy ? <LoaderCircle size={15} className="spin"/> : <Download size={15}/>} {t(busy ? 'importing' : 'downloadImport')}</button></div>

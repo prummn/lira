@@ -23,6 +23,7 @@ test('official arXiv URL and three actual PDFs have accurate metadata and usable
     const expected = fixture.authoritative_metadata
     if (fixture.arxiv_id !== '1706.03762') {
       await page.locator('input[type=file]').setInputFiles(path.join(fixtures!, fixture.pdf.artifact.local_file))
+      await page.getByRole('dialog',{name:'确认批量导入'}).getByRole('button',{name:'开始导入',exact:true}).click()
       await expect(page.locator('.import-ok')).toContainText(fixture.pdf.artifact.local_file, { timeout: 60000 })
     }
     const row = page.locator('.paper-row').filter({ hasText: expected.title })

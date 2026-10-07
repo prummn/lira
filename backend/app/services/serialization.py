@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
-from ..models import Collection, Evidence, Note, Paper, PaperAuthor, PaperChunk, Translation
+from ..models import Collection, Evidence, IntelligenceTask, Note, Paper, PaperAuthor, PaperChunk, Translation
 from ..schemas import (
     AnalysisRead,
     ChunkRead,
@@ -18,6 +18,7 @@ from ..schemas import (
     PaperSummary,
     PaperCard,
     TranslationRead,
+    TaskRead,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ def load_options():
         selectinload(Paper.chunks),
         selectinload(Paper.notes),
         selectinload(Paper.translations),
+        selectinload(Paper.intelligence_tasks),
     )
 
 
@@ -88,6 +90,10 @@ def paper_summary(paper: Paper) -> PaperSummary:
         reading_status=paper.reading_status,
         is_favorite=paper.is_favorite,
         analysis_status=paper.analysis_status,
+        intelligence_status=paper.intelligence_status,
+        intelligence_report=json_object(paper.intelligence_report_json) if paper.intelligence_report_json else None,
+        intelligence_task=task_read(max(paper.intelligence_tasks, key=lambda task: (task.created_at, task.id))) if paper.intelligence_tasks else None,
+        intelligence_analyzed_at=utc(paper.intelligence_analyzed_at) if paper.intelligence_analyzed_at else None,
         tags=values(paper.tags_json),
         authors=[l.author.name for l in paper.author_links],
         collection_ids=[l.collection_id for l in paper.collection_links],
@@ -95,6 +101,20 @@ def paper_summary(paper: Paper) -> PaperSummary:
         is_demo=paper.is_demo,
         pdf_available=bool(paper.pdf_path and Path(paper.pdf_path).is_file()),
     )
+
+
+def json_object(raw: str | None) -> dict:
+    try:
+        value = json.loads(raw or '{}')
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def task_read(task: IntelligenceTask) -> TaskRead:
+    return TaskRead(id=task.id, paper_id=task.paper_id, status=task.status, phase=task.phase,
+        completed_steps=task.completed_steps, total_steps=task.total_steps, report=json_object(task.report_json),
+        error=task.error, created_at=utc(task.created_at), updated_at=utc(task.updated_at))
 
 
 def chunk_read(chunk: PaperChunk) -> ChunkRead:

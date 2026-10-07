@@ -2,7 +2,7 @@
 
 > 文档类型：**目标数据模型**。本表清单与字段是预期 schema，不能视为当前 SQLite 已有表。前轮仅实现核心 ORM 表的简化字段；本轮已有 Alembic、证据定位与用户笔记字段，完整类型知识实体仍属于后续目标。实际表结构以当前 Alembic migration 与 ORM 模型为准，交付情况见 [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)。
 
-当前已实现的默认存储为 `backend/paper_reader.db` 和 `backend/storage/{paper_id}.pdf`。Alembic 最新版本 `0006_arxiv_revision` 在 `0005_import_metadata` 的 `source_url VARCHAR(2048)`、`metadata_sources_json TEXT NOT NULL DEFAULT '{}'` 与 `metadata_warnings_json TEXT NOT NULL DEFAULT '[]'` 之上，增加 nullable `arxiv_version INTEGER`，记录实际 PDF 修订版，保留已有论文、分析、笔记与集合；下文的完整目标路径、实体和冲突表尚未全部落地。
+当前已实现的默认存储为 `backend/paper_reader.db` 和 `backend/storage/{paper_id}.pdf`。Alembic 最新版本 `0007_intelligence` 新增智能分析状态／报告、持久化任务和模型调用缓存；`0005_import_metadata` 的书目来源／警告与 `0006_arxiv_revision` 的实际 PDF 版本继续保留。以下标为「当前」的字段以实际 ORM／迁移为准；其余完整目标路径、实体和冲突表尚未全部落地。迁移与真实模型验证的执行结果分别见实施状态与 [intelligence-validation.md](intelligence-validation.md)。
 
 ## 1. 目标存储约定
 
@@ -21,6 +21,8 @@
 当前 ORM 使用 `pdf_path` 和唯一 `sha256` 保存文件路径与内容哈希；书目字段为 `title, year, venue, doi, arxiv_id`，作者按 `paper_authors.order_index` 读取。新增 `source_url` 保存用户输入的下载来源；`metadata_sources_json` 按 title/authors/year/venue/doi/arxiv_id 记录 `pdf_layout`、`pdf_metadata`、`pdf_text`、`arxiv_identifier`、`source_url`、`arxiv`、`crossref`、`filename` 或 `manual`。`metadata_warnings_json` 保存 provider 失败及原文块不能安全匹配等警告。API 将这两项 JSON 解码为 `metadata_sources` 对象和 `metadata_warnings` 数组。
 
 手动 PATCH 只将提交的书目字段标为 `manual`；手动清空 nullable 字段也保留该来源。重新识别跳过 manual 字段，不替换现有 chunk ID、原文、bbox、个人 notes 和 translations。arXiv 权威字段的 year 为首次提交年份，PDF 本地日期另有 `pdf_text` 或 `arxiv_identifier` 来源；当前没有独立 revision_year 字段。
+
+当前新增智能分析列为 `intelligence_status VARCHAR(32) NOT NULL DEFAULT 'unanalyzed'`、nullable `intelligence_report_json TEXT` 与 `intelligence_analyzed_at DATETIME`。`intelligence_status` 是 `unanalyzed|queued|running|completed|partial|failed|cancelled`，独立于 `reading_status` 和已有本地 `analysis_status`；Mock 原文摘录即使 ready 也不标远端智能分析已完成。API 解码为 `intelligence_report` 并附最新 `intelligence_task`，不返回内部 worker lease。
 
 ### authors / paper_authors
 
@@ -49,6 +51,8 @@
 ### paper_analysis
 
 `id, paper_id, analysis_version, provider, model, prompt_version, status, payload_json, error_message, created_at, updated_at`。`payload_json` 保存经过 schema 校验的 Paper Card，禁止把未校验的模型响应直接提供给前端；同一论文可保留多版本，当前版本通过 `status=ready` 和最新时间确定。
+
+上述多版本模型是目标。当前 `paper_analysis` 以 `paper_id` 为主键，每篇保存一张当前卡片：legacy 摘要字段、`card_json`、`provider`、`mode`、`model_version`、`prompt_version` 与 `evidence_ids_json`。新全文任务从可验证的分窗口抽取结果逐层归纳，通过引用校验后才替换当前卡片和机器 evidence；失败或取消保留已有结果，个人 notes 独立保存。卡片的模型写作仍标 AI，总结引文存在只说明来源匹配，不证明其语义必然成立。未知字段保留 null／空数组。
 
 ### evidence
 
@@ -97,7 +101,37 @@ Citation Graph 的明确引用边应来自 `metadata` 或 `explicit`；Method Li
 
 上述独立 external_identifiers/metadata_conflicts 表是目标。当前 arXiv/Crossref 查询已经可用，结果保存到 papers 的书目字段、字段来源与警告；不保存完整外部响应，也没有完整冲突历史／作者机构网络数据库。
 
-`jobs(id, type, entity_id, status, progress, error_code, error_message, started_at, finished_at, created_at)` 支持导入、解析、分析、索引和翻译任务。`settings(key, value_json, updated_at)` 保存主题、语言、默认 provider 等非敏感本地设置；密钥使用系统 keychain/环境变量，不写入 SQLite。
+通用 `jobs(id, type, entity_id, status, progress, error_code, error_message, started_at, finished_at, created_at)` 和 `settings(key, value_json, updated_at)` 仍是目标。当前实际智能分析任务、缓存和设置如下。
+
+### 当前 intelligence_tasks
+
+`id, paper_id, status, phase, run_token, completed_steps, total_steps, report_json, error, created_at, updated_at`。`paper_id` 外键级联到 papers；状态为 `queued|running|completed|partial|failed|cancelled`。SQLite 部分唯一索引 `uq_intelligence_active_paper` 对 `status IN ('queued','running')` 的 `paper_id` 建唯一约束，同一篇不能同时入两个活动任务。`run_token` 是 worker lease，不能当作 API key；API 不暴露它。
+
+单后台 worker 用短事务更新阶段，网络请求不持有 ORM 事务。内部阶段含 structure、extract、reduce、synthesize、complete；重启将 interrupted running 转为 queued/recovered。取消条件化更新状态，worker 在每个模型调用前后检查 lease／取消；已经发出的 HTTP 不能撤回，取消后仍记录该调用的 usage，但不得覆盖卡片。失败保留安全错误及已完成阶段的报告，不无限自动重试。
+
+`report_json` 保存文本覆盖（total／processed chars、windows、complete）、结构索引、通过核验的事实／citation 数、invalid_entries、accepted_card_fields、missing_fields、partial、model、prompt_version、usage 和 result_fingerprint。Usage 使用服务报告值，缺失保持未知；缓存命中与远端请求分开计数。`source_authenticity=locally_verified` 和 `semantic_verification=not_automatically_proven` 明确区分原句匹配与语义支持。Completed 可仍有 missing_fields，不能解释成所有卡片字段已知。
+
+任务由 `POST /api/intelligence/tasks` 接收 `{paper_ids, force:false}`（最多200个），GET 列表读取进度，`POST /api/intelligence/tasks/{id}/cancel` 请求取消。文件／链接导入的 `analyze` 默认 false；明确启用且有远端 provider 时才入队。重复请求复用已有活动任务；相同 completed 结果指纹可直接返回完成任务。Force 可重新入队，但完全一致的阶段请求仍使用缓存。
+
+### 当前 model_call_cache
+
+`key VARCHAR(64) PRIMARY KEY, operation VARCHAR(100), response_json TEXT, usage_json TEXT, model VARCHAR(200), created_at`。缓存键为 operation、system/payload 内容、输出预算、provider、endpoint、model、wire_api、reasoning effort、completion parameter 与 JSON mode 的 SHA-256，不包含凭证。`response_json` 保存解析后的模型 JSON，`usage_json` 保存净化后的 usage；消费者核验失败会移除不能重用的结果。
+
+全文处理以约20,000字符窗口覆盖每个实际 chunk，超长块按精确偏移拆分；每窗口最多128个片段。归纳组预算为24,000字符，最多8层，无法收敛时安全失败并保留已有结果及阶段缓存，不静默跳过后半文。结果指纹另包含源 chunk ID／全文／page／section／bbox、页面尺寸、算法和提示词，用于防止原文或配置变化后复用旧完成状态。
+
+### 当前只读文献员与来源契约
+
+`POST /api/intelligence/ask` 接收 question、collection_id、paper_ids、有限 history；question 最大4,000字符、显式论文最多50篇、history schema最多12条，实际模型上下文只取最近6条，每条末4,000字符。未指定论文的全库范围排除 demo，指定论文必须存在并属于指定集合。文献员读取 metadata、FTS5、当前 card 和 notes，由模型提出有限查询词与候选 ID；没有改库、任意 SQL、shell 或外部检索工具。只读指研究资料：模型请求缓存可写 SQLite，论文／笔记／集合不会由回答自动修改。
+
+每轮目录最多200篇，目录 summary 截取600字符；最多5个查询、12篇候选、72个来源、来源正文合计48,000字符，单来源最多6,000字符。检索报告标 `retrieval_is_partial`、候选 IDs、查询词、sources／characters 和目录截断，比较覆盖不全时提示。有限上下文不能证明库内全部不存在，更不能证明文献全球不存在。
+
+来源 ID 为 `chunk:{id}`、`note:{id}`、`metadata:{paper_id}`、`card:{paper_id}`，类型是 paper／user／external_metadata／ai。`metadata` 是带字段 provenance 的本地书目记录，包含 manual 等来源，不能把整个记录视为每个字段均由外部权威核实。卡片和最近历史只作检索背景；fact／comparison／inference 的引文须来自本次提交的 paper 原文，user_note 须来自 note，metadata 须来自目录记录。Comparison 条目须引用至少两篇；引用 page/bbox 来自本地 chunk，拒绝模型自报位置及跨范围 quote。
+
+响应包含分条 content／kind／citations、limitations、retrieved_paper_ids、coverage、usage 和 cached。请求缓存绑定本次目录、实际检索来源、问题和有限历史；每次重新读取当前研究资料，变化后的 notes／card 不沿用旧来源。文献员对话不建独立 DB conversation 表，当前 UI 仅在页面会话内保留最近轮次，刷新后不恢复；打开原文返回可继续。
+
+### 当前设置与凭证
+
+语言、主题、阅读位置和批次分析偏好在浏览器 localStorage；模型配置来自启动环境与 `.env`。支持 chat_completions／responses；SpacetimeAI profile 的公开地址／模型配置见 README，真实 key 不进入前端、模型缓存键、报告或 SQLite。仅注入某个进程的凭证不会被应用持久化；重启需再次由启动环境提供，或用户自行设置 `.env`／用户环境变量。设置页只展示配置，不写 key；系统 keychain 集成仍是目标。
 
 ## 7. 典型查询
 
@@ -110,3 +144,7 @@ Citation Graph 的明确引用边应来自 `metadata` 或 `explicit`；Method Li
 ## 8. 迁移和数据安全
 
 初始 migration 创建上述核心表、枚举约束、外键、索引和 FTS5 触发器。每次 schema 变更必须有 up/down migration 和 fixture 兼容检查。导入文件使用 sha256；删除操作先归档数据库记录并移动文件到回收站目录，清理任务由用户显式触发。
+
+当前自动 upgrade 到 `0007_intelligence`：增加三列、创建 intelligence_tasks 与 model_call_cache，不重建用户 PDF／notes／collections。已有 remote paper_analysis 来自旧有限上下文路径，迁移仅将其智能状态标为 partial，并写入 `{"legacy":true,"coverage":{"complete":false}}`，保留卡片内容供查看，不把历史卡片称作全文完成。Down migration 会删除智能任务／缓存及对应列；降级会丢失这些新增数据，执行前应备份。
+
+实际备份应停止服务后复制 SQLite、同名 WAL／SHM（若存在）和原始 PDF 目录；智能报告、个人笔记、翻译和模型输出缓存也属于研究数据。`.env`／用户环境配置须自行管理；数据库备份不包含模型凭证。完整目标软删除、回收站和所有扩展知识表不据迁移说明视为已实现。

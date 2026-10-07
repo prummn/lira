@@ -75,6 +75,8 @@ def settings() -> dict[str, object]:
         "metadata_providers": ["arxiv", "crossref"],
         "embeddings_connected": False,
         "model": getattr(provider,'model',None),
+        "wire_api": getattr(provider,'wire_api',None),
+        "reasoning_effort": getattr(provider,'reasoning_effort',None),
         "configuration_error": getattr(provider,'configuration_error',None),
     }
 

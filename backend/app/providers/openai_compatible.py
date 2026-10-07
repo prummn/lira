@@ -2,12 +2,15 @@
 from __future__ import annotations
 import json
 import hashlib
+import math
+import time
 from pathlib import Path
 from typing import Any
 import httpx
 from ..models import PaperChunk
 from .base import AnalysisResult, AnswerResult, ProviderError, VerifiedCitation
 from .validation import canonical_quote
+from .usage import sanitize_usage
 
 PROMPTS_DIR = Path(__file__).resolve().parents[3] / 'prompts'
 MAX_CONTEXT_CHARS = 24000
@@ -22,7 +25,7 @@ class OpenAICompatibleProvider:
     configured = True
     translation_available = True
 
-    def __init__(self, *, api_key: str, base_url: str = 'https://api.openai.com/v1', model: str = 'gpt-4.1-mini', transport: httpx.BaseTransport | None = None, timeout: float = 45.0) -> None:
+    def __init__(self, *, api_key: str, base_url: str = 'https://api.openai.com/v1', model: str = 'gpt-4.1-mini', transport: httpx.BaseTransport | None = None, timeout: float = 600.0, wire_api: str = 'chat_completions', reasoning_effort: str = 'disabled', completion_parameter: str = 'max_completion_tokens', json_mode: str = 'json_object') -> None:
         try:
             url = httpx.URL(base_url)
         except (httpx.InvalidURL, ValueError):
@@ -31,12 +34,22 @@ class OpenAICompatibleProvider:
             raise ValueError('模型地址必须是没有凭证或查询参数的 HTTP(S) base URL')
         if not api_key.strip() or not model.strip():
             raise ValueError('模型配置缺少 API key 或 model name')
+        if wire_api not in {'chat_completions', 'responses'} or completion_parameter not in {'max_tokens', 'max_completion_tokens'} or json_mode not in {'json_object', 'none'}:
+            raise ValueError('模型协议配置无效')
+        if (reasoning_effort not in {'disabled', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh'}
+                or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or not 1 <= timeout <= 1800):
+            raise ValueError('模型请求配置无效')
         self._api_key = api_key.strip()
         self.base_url = base_url.rstrip('/')
         self.model = model.strip()
         self._transport = transport
         self.timeout = timeout
+        self.wire_api = wire_api
+        self.reasoning_effort = reasoning_effort
+        self.completion_parameter = completion_parameter
+        self.json_mode = json_mode
         self.response_model: str | None = None
+        self.last_usage: dict = {}
 
     @staticmethod
     def _prompt(name: str) -> str:
@@ -45,20 +58,106 @@ class OpenAICompatibleProvider:
     @property
     def translation_configuration_version(self) -> str:
         # API keys never enter the persisted configuration fingerprint.
-        config = json.dumps([self.name, self.base_url, self.model], separators=(',', ':'))
+        config = json.dumps([self.name, self.base_url, self.model, self.wire_api, self.reasoning_effort, self.completion_parameter, self.json_mode], separators=(',', ':'))
         return hashlib.sha256(config.encode('utf-8')).hexdigest()
 
     @property
     def translation_prompt_version(self) -> str:
         return 'translate-sha256:' + hashlib.sha256(self._prompt('paper_translate.txt').encode('utf-8')).hexdigest()
 
-    def _complete(self, system: str, user: str, *, json_output: bool) -> str:
-        payload: dict[str, Any] = {'model':self.model,'messages':[{'role':'system','content':system},{'role':'user','content':user}], 'max_completion_tokens':3000}
-        if json_output:
-            payload['response_format'] = {'type':'json_object'}
+    def effective_reasoning_effort(self, requested: str | None = None) -> str | None:
+        # Nonreasoning endpoints must omit the parameter even when a stage requests it.
+        return None if self.reasoning_effort == 'disabled' else requested or self.reasoning_effort
+
+    @staticmethod
+    def _read_json_response(response: httpx.Response, deadline: float) -> bytes:
+        content = bytearray()
+        for chunk in response.iter_bytes():
+            if time.monotonic() > deadline:
+                raise ProviderError('模型服务请求超过时限，请重试；已有结果已保留', 504)
+            if len(content) + len(chunk) > 1000000:
+                raise ProviderError('模型服务响应过大，已拒绝处理')
+            content.extend(chunk)
+        if time.monotonic() > deadline:
+            raise ProviderError('模型服务请求超过时限，请重试；已有结果已保留', 504)
+        return bytes(content)
+
+    def _stream_response(self, response: httpx.Response, deadline: float) -> dict:
+        """Consume SSE while keeping the gateway active; publish only a final envelope."""
+        size, field_size, fields, buffer = 0, 0, [], bytearray()
+        for chunk in response.iter_bytes():
+            size += len(chunk)
+            # SSE repeats text in delta/done/final events and carries IDs per token.
+            if size > 8000000:
+                raise ProviderError('模型服务响应过大，已拒绝处理')
+            if time.monotonic() > deadline:
+                raise ProviderError('模型流式请求超过时限，请重试；已有结果已保留', 504)
+            buffer.extend(chunk)
+            while (newline := buffer.find(b'\n')) >= 0:
+                line = bytes(buffer[:newline]).rstrip(b'\r')
+                del buffer[:newline + 1]
+                if line.startswith(b'data:'):
+                    fields.append(line[5:].lstrip())
+                    field_size += len(line)
+                    if field_size > 1000000:
+                        raise ProviderError('模型服务响应过大，已拒绝处理')
+                    continue
+                if line or not fields:
+                    continue
+                raw, fields, field_size = b'\n'.join(fields), [], 0
+                if raw == b'[DONE]':
+                    raise ProviderError('模型流式连接结束但未完成输出，请重试；已有结果已保留')
+                try:
+                    event = json.loads(raw)
+                    if not isinstance(event, dict):
+                        raise ValueError()
+                except (ValueError, UnicodeDecodeError):
+                    raise ProviderError('模型流式响应格式无效，已有结果已保留') from None
+                event_type = event.get('type')
+                if event_type == 'error':
+                    raise ProviderError('模型流式请求失败，请重试；已有结果已保留')
+                if event_type in ('response.completed', 'response.incomplete', 'response.failed'):
+                    if not isinstance(event.get('response'), dict):
+                        raise ProviderError('模型流式响应格式无效，已有结果已保留')
+                    if event_type != 'response.completed':
+                        self.last_usage = sanitize_usage(event['response'].get('usage'))
+                        self.response_model = str(event['response'].get('model') or self.model)[:200]
+                        raise ProviderError('模型流式输出未完整完成，请重试；已有结果已保留')
+                    return event['response']
+            # Check incomplete lines before a peer can accumulate unbounded text.
+            if len(buffer) > 1000000:
+                raise ProviderError('模型服务响应过大，已拒绝处理')
+        raise ProviderError('模型流式连接结束但未完成输出，请重试；已有结果已保留')
+
+    def _complete(self, system: str, user: str, *, json_output: bool, max_output_tokens: int = 3000, reasoning_effort: str | None = None) -> str:
+        self.last_usage = {}
+        self.response_model = None
+        effort = self.effective_reasoning_effort(reasoning_effort)
+        if self.wire_api == 'responses':
+            payload: dict[str, Any] = {'model': self.model, 'instructions': system, 'input': [{'role': 'user', 'content': [{'type': 'input_text', 'text': ('Return JSON for this data:\n' if json_output else '') + user}]}], 'max_output_tokens': max_output_tokens, 'store': False, 'stream': True}
+            if effort is not None:
+                payload['reasoning'] = {'effort': effort}
+            if json_output and self.json_mode != 'none':
+                payload['text'] = {'format': {'type': 'json_object'}}
+            endpoint = '/responses'
+        else:
+            payload = {'model':self.model,'messages':[{'role':'system','content':system},{'role':'user','content':user}], self.completion_parameter: max_output_tokens}
+            if effort is not None:
+                payload['reasoning_effort'] = effort
+            if json_output and self.json_mode != 'none':
+                payload['response_format'] = {'type':'json_object'}
+            endpoint = '/chat/completions'
         try:
+            streamed = None
+            response_content = b''
+            deadline = time.monotonic() + self.timeout
             with httpx.Client(transport=self._transport, timeout=self.timeout, follow_redirects=False, headers={'Authorization':f'Bearer {self._api_key}', 'Accept-Encoding':'identity'}) as client:
-                response = client.post(self.base_url + '/chat/completions', json=payload)
+                with client.stream('POST', self.base_url + endpoint, json=payload) as response:
+                    if response.is_success:
+                        if self.wire_api == 'responses' and 'text/event-stream' in response.headers.get('content-type', ''):
+                            streamed = self._stream_response(response, deadline)
+                        else:
+                            response_content = self._read_json_response(response, deadline)
         except httpx.TimeoutException:
             raise ProviderError('模型服务请求超时，请稍后重试；原文和已有结果已保留',504) from None
         except httpx.HTTPError:
@@ -67,22 +166,37 @@ class OpenAICompatibleProvider:
             raise ProviderError('模型服务认证失败，请检查 API key 与账户权限')
         if response.status_code == 429:
             raise ProviderError('模型服务请求受限，请稍后重试',503)
+        if response.status_code in {408, 504, 524}:
+            raise ProviderError(f'模型网关等待响应超时（HTTP {response.status_code}），请稍后重试；已有结果已保留', 504)
         if not response.is_success:
-            raise ProviderError('模型服务返回错误，请检查所选模型是否支持 Chat Completions 和 JSON 输出')
-        if len(response.content) > 256000:
-            raise ProviderError('模型服务响应过大，已拒绝处理')
+            raise ProviderError('模型服务返回错误，请检查所选模型、接口协议与 JSON 输出配置')
         try:
-            data = response.json()
-            content = data['choices'][0]['message']['content']
+            data = streamed if streamed is not None else json.loads(response_content)
+            if not isinstance(data, dict):
+                raise ValueError('Expected response object')
+            self.last_usage = sanitize_usage(data.get('usage'))
+            self.response_model = str(data.get('model') or self.model)[:200]
+            if self.wire_api == 'responses':
+                if data.get('status') != 'completed':
+                    raise ProviderError('模型输出未完整完成，请重试或提高输出预算；已有结果已保留')
+                content = ''.join(block['text'] for output in data['output'] if isinstance(output, dict) and output.get('type') == 'message' for block in output.get('content', []) if isinstance(block, dict) and block.get('type') == 'output_text' and isinstance(block.get('text'), str))
+            else:
+                choice = data['choices'][0]
+                if choice.get('finish_reason') not in {None, 'stop'}:
+                    raise ProviderError('模型输出未完整完成，请重试或提高输出预算；已有结果已保留')
+                content = choice['message']['content']
             if not isinstance(content,str) or not content.strip():
                 raise ValueError('No model content')
             self.response_model = str(data.get('model') or self.model)[:200]
             return content.strip()
-        except (KeyError,IndexError,ValueError,TypeError):
+        except (KeyError,IndexError,ValueError,TypeError,AttributeError):
             raise ProviderError('模型服务返回了无法读取的结果，已有结果已保留') from None
 
     def _json(self, prompt: str, data: dict[str, Any]) -> dict[str, Any]:
-        content = self._complete(prompt, json.dumps(data,ensure_ascii=False), json_output=True)
+        return self.complete_json(prompt, data, max_output_tokens=3000)
+
+    def complete_json(self, system: str, payload: dict, *, max_output_tokens: int, reasoning_effort: str | None = None) -> dict:
+        content = self._complete(system, json.dumps(payload,ensure_ascii=False), json_output=True, max_output_tokens=max_output_tokens, reasoning_effort=reasoning_effort)
         try:
             result = json.loads(content)
             if not isinstance(result,dict):

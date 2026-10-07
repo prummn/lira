@@ -12,8 +12,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .api.routes import router
+from .api.intelligence import router as intelligence_router
+from .api.librarian import router as librarian_router
 from .db import BACKEND_DIR, DATABASE_URL, Database
 from .providers.base import ProviderError
+from .services.intelligence import IntelligenceWorker
 
 
 def create_app(
@@ -22,6 +25,7 @@ def create_app(
     seed_demo: bool = True,
 ) -> FastAPI:
     database = Database(database_url or DATABASE_URL)
+    worker = IntelligenceWorker(database)
     storage = storage_dir or Path(
         os.getenv("PAPER_READER_STORAGE_DIR", str(BACKEND_DIR / "storage"))
     )
@@ -35,13 +39,18 @@ def create_app(
 
             with database.sessions() as session:
                 seed_database(session, storage)
-        yield
-        database.engine.dispose()
+        worker.start()
+        try:
+            yield
+        finally:
+            worker.stop()
+            database.engine.dispose()
 
     application = FastAPI(
         title="Research Intelligence Workspace API", version="0.2.0", lifespan=lifespan
     )
     application.state.database = database
+    application.state.intelligence_worker = worker
     application.state.storage_dir = storage
     application.add_middleware(
         CORSMiddleware,
@@ -55,6 +64,8 @@ def create_app(
         allow_headers=["*"],
     )
     application.include_router(router)
+    application.include_router(intelligence_router, prefix='/api')
+    application.include_router(librarian_router, prefix='/api')
 
     @application.exception_handler(ProviderError)
     async def provider_error(_: Request, error: ProviderError) -> JSONResponse:

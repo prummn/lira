@@ -116,6 +116,35 @@ def test_remote_card_validates_each_field_and_ignores_model_title(client: TestCl
     assert result['evidence'][0]['source_type'] == 'llm_summary'
 
 
+def test_legacy_local_refresh_clears_stale_remote_intelligence_state(client: TestClient) -> None:
+    from datetime import datetime, timezone
+    from app.models import Paper
+    from app.services.intelligence import queue_tasks
+    paper = card_paper(client)
+    with client.app.state.database.sessions() as session:
+        stored = session.get(Paper, paper['id'])
+        stored.analysis.mode = 'remote'
+        stored.analysis.provider = 'RemoteProvider'
+        stored.analysis.card_json = json.dumps({'title': stored.title,
+            'method': {'content': 'Published remote method.', 'evidence_ids': []}})
+        stored.intelligence_status = 'completed'
+        stored.intelligence_report_json = json.dumps({'result_fingerprint': 'stale-remote-fingerprint'})
+        stored.intelligence_analyzed_at = datetime.now(timezone.utc)
+        session.commit()
+    response = client.post(f"/api/papers/{paper['id']}/analyze")
+    assert response.status_code == 200
+    with client.app.state.database.sessions() as session:
+        stored = session.get(Paper, paper['id'])
+        assert stored.analysis.mode == 'extractive'
+        assert stored.intelligence_status == 'unanalyzed'
+        assert stored.intelligence_report_json is None
+        assert stored.intelligence_analyzed_at is None
+        class RemoteProvider:
+            mode, configured, name, model = 'remote', True, 'RemoteProvider', 'remote-model'
+        task = queue_tasks(session, [stored.id], RemoteProvider(), force=False)[0]
+        assert task.status == 'queued'
+
+
 def test_remote_explain_uses_only_selected_chunk_and_style(client: TestClient,monkeypatch: pytest.MonkeyPatch) -> None:
     from test_remote_provider import provider_for
     paper = card_paper(client)

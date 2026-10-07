@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { BookOpen, Check, FileText, Folder, Library, Moon, Network, Plus, Search, Settings, Sun, Users } from 'lucide-react'
+import { BookOpen, Check, FileText, Folder, Library, MessageSquare, Moon, Network, Plus, Search, Settings, Sun, Users } from 'lucide-react'
 import { api, errorMessage } from './lib/api'
 import { UiProvider, useUi } from './lib/i18n'
 import { useWorkspace } from './lib/useWorkspace'
@@ -9,17 +9,22 @@ import { ReaderPage } from './pages/ReaderPage'
 import { KnowledgePage } from './pages/KnowledgePage'
 import { ResearchersPage } from './pages/ResearchersPage'
 import { SettingsPage } from './pages/SettingsPage'
-import type { Page } from './types'
+import { LibrarianPage } from './pages/LibrarianPage'
+import type { LibrarianThread, NotebookTab, Page } from './types'
 import type { PdfLocator } from './components/PdfViewer'
 import './styles.css'
+import './intelligence.css'
 
-const navigation = [ {id:'library',icon:Library}, {id:'reader',icon:BookOpen}, {id:'knowledge',icon:Network}, {id:'researchers',icon:Users}, {id:'settings',icon:Settings} ] as const
+const navigation = [ {id:'library',icon:Library}, {id:'reader',icon:BookOpen}, {id:'librarian',icon:MessageSquare}, {id:'knowledge',icon:Network}, {id:'researchers',icon:Users}, {id:'settings',icon:Settings} ] as const
 function WorkspaceApp() {
   const {t, theme, setTheme} = useUi()
   const workspace = useWorkspace()
   const [page, setPage] = useState<Page>('library')
   const [collectionId, setCollectionId] = useState('')
   const [initialLocator,setInitialLocator] = useState<PdfLocator|null>(null)
+  const [initialNotebookTab,setInitialNotebookTab]=useState<NotebookTab>('overview')
+  const [readerOrigin,setReaderOrigin]=useState<'library'|'librarian'>('library')
+  const [thread,setThread]=useState<LibrarianThread>({scope:'',selectedIds:[],turns:[]})
   const [paperId, setPaperId] = useState(() => localStorage.getItem('riw-last-paper') ?? '')
   const [query, setQuery] = useState('')
   const [creating, setCreating] = useState(false)
@@ -31,7 +36,7 @@ function WorkspaceApp() {
   const toastTimer = useRef<ReturnType<typeof setTimeout>>()
   const searchRef = useRef<HTMLInputElement>(null)
   const notify = (message: string) => { setToast(message); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 4000) }
-  const openPaper = (id: string, locator?:PdfLocator) => { setInitialLocator(locator??null); setPaperId(id); localStorage.setItem('riw-last-paper', id); setPage('reader') }
+  const openPaper = (id: string, locator?:PdfLocator, tab:NotebookTab='overview') => { setReaderOrigin(page==='librarian'?'librarian':'library');setInitialLocator(locator??null);setInitialNotebookTab(tab); setPaperId(id); localStorage.setItem('riw-last-paper', id); setPage('reader') }
   useEffect(() => {
     const handler = (event: KeyboardEvent) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); setPage('library'); searchRef.current?.focus() } }
     window.addEventListener('keydown', handler); return () => { window.removeEventListener('keydown', handler); clearTimeout(toastTimer.current) }
@@ -56,7 +61,8 @@ function WorkspaceApp() {
       <div className={'page-wrap ' + (page === 'reader' ? 'reader-wrap' : '')}>
         {workspace.loading ? <Loading text={t('loading')}/> : workspace.error ? <div className="connect-state"><Empty title={t('connectTitle')} text={t('connectHint')}/><ErrorBanner error={workspace.error} retry={() => void workspace.reload()}/></div> : <>
           {page === 'library' && <LibraryPage workspace={workspace} collectionId={collectionId} query={query} setQuery={setQuery} openPaper={openPaper} newCollection={() => setCreating(true)} notify={notify}/>}
-          {page === 'reader' && (paperId ? <ReaderPage key={paperId} paperId={paperId} initialLocator={initialLocator} collections={workspace.collections} reloadWorkspace={workspace.reload} back={() => setPage('library')} notify={notify}/> : <Empty title={t('noPdf')} text={t('emptyHint')}><button className="btn secondary" onClick={() => setPage('library')}><FileText size={16}/>{t('back')}</button></Empty>)}
+          {page === 'reader' && (paperId ? <ReaderPage key={paperId} paperId={paperId} initialLocator={initialLocator} initialTab={initialNotebookTab} collections={workspace.collections} reloadWorkspace={workspace.reload} workspace={workspace} backLabel={readerOrigin==='librarian'?t('backLibrarian'):t('back')} back={() => setPage(readerOrigin)} notify={notify}/> : <Empty title={t('noPdf')} text={t('emptyHint')}><button className="btn secondary" onClick={() => setPage('library')}><FileText size={16}/>{t('back')}</button></Empty>)}
+          {page === 'librarian' && <LibrarianPage workspace={workspace} collectionId={collectionId} thread={thread} setThread={setThread} openPaper={openPaper}/>}
           {page === 'knowledge' && <KnowledgePage workspace={workspace} collectionId={collectionId} setCollectionId={setCollectionId} openPaper={openPaper}/>}
           {page === 'researchers' && <ResearchersPage workspace={workspace} openPaper={openPaper}/>}
           {page === 'settings' && <SettingsPage workspace={workspace}/>}

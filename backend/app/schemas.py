@@ -11,6 +11,36 @@ from .services.metadata import normalize_doi
 BBox = tuple[float, float, float, float]
 ReadingStatus = Literal["unread", "skimming", "reading", "read", "important"]
 NoteKind = Literal["note", "idea", "question", "todo", "highlight"]
+IntelligenceStatus = Literal['unanalyzed', 'queued', 'running', 'completed', 'partial', 'failed', 'cancelled']
+
+
+class TaskRead(BaseModel):
+    id: str
+    paper_id: str
+    status: Literal['queued', 'running', 'completed', 'partial', 'failed', 'cancelled']
+    phase: str
+    completed_steps: int
+    total_steps: int
+    report: dict = Field(default_factory=dict)
+    error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class IntelligenceTaskCreate(BaseModel):
+    paper_ids: list[str] = Field(min_length=1, max_length=200)
+    force: bool = False
+
+    @field_validator('paper_ids')
+    @classmethod
+    def unique_paper_ids(cls, value: list[str]) -> list[str]:
+        if any(not item.strip() or len(item) > 64 for item in value):
+            raise ValueError('论文 ID 无效')
+        return list(dict.fromkeys(value))
+
+
+class IntelligenceTaskList(BaseModel):
+    tasks: list[TaskRead]
 
 
 class GeometryModel(BaseModel):
@@ -153,6 +183,10 @@ class PaperSummary(BaseModel):
     reading_status: str
     is_favorite: bool
     analysis_status: str
+    intelligence_status: IntelligenceStatus = 'unanalyzed'
+    intelligence_report: dict | None = None
+    intelligence_task: TaskRead | None = None
+    intelligence_analyzed_at: datetime | None = None
     tags: list[str] = Field(default_factory=list)
     authors: list[str] = Field(default_factory=list)
     collection_ids: list[str] = Field(default_factory=list)
@@ -249,6 +283,7 @@ class PaperUpdate(BaseModel):
 
 
 class URLImportRequest(BaseModel):
+    analyze: bool = False
     url: str = Field(min_length=1, max_length=2048)
 
     @field_validator('url')

@@ -1,4 +1,5 @@
-export type Page = 'library' | 'reader' | 'knowledge' | 'researchers' | 'settings'
+export type Page = 'library' | 'reader' | 'knowledge' | 'researchers' | 'settings' | 'librarian'
+export type NotebookTab = 'overview' | 'evidence' | 'ask' | 'notes'
 export type ReadingStatus = 'unread' | 'skimming' | 'reading' | 'read' | 'important'
 export interface Paper {
   id: string; title: string; abstract: string | null; year: number | null; venue: string | null
@@ -6,6 +7,8 @@ export interface Paper {
   analysis_status: string; tags: string[]; authors: string[]; collection_ids: string[]
   page_count: number; is_demo: boolean; pdf_available: boolean; pdf_path?: string | null
   source_url?: string | null; metadata_sources?: Record<string,string>; metadata_warnings?: string[]
+  intelligence_status?: IntelligenceStatus; intelligence_report?: IntelligenceReport | null
+  intelligence_task?: IntelligenceTask | null; intelligence_analyzed_at?: string | null
 }
 export interface PaperMetadataUpdate {
   title?: string; authors?: string[]; year?: number | null; venue?: string | null
@@ -44,4 +47,14 @@ export interface Graph {
   edges: {id: string; source: string; target: string; relation: string; description?: string; relation_source?: string }[]
 }
 export interface SearchHit { paper_id: string; title: string; chunk_id: string; page: number; section: string | null; content: string; match_type: string }
-export interface ModelSettings { provider: string; mode: string; configured: boolean; translation_available: boolean; model?:string|null; configuration_error?:string|null }
+export interface ModelSettings { provider: string; mode: string; configured: boolean; translation_available: boolean; model?:string|null; configuration_error?:string|null; wire_api?:string|null; reasoning_effort?:string|null; intelligence_available?:boolean; quality?:Record<string,unknown> }
+export type IntelligenceStatus = 'unanalyzed'|'queued'|'running'|'completed'|'partial'|'failed'|'cancelled'
+export interface Usage { input_tokens?:number|null; output_tokens?:number|null; total_tokens?:number|null; model_calls?:number; remote_calls?:number; cache_hits?:number;unknown_usage_calls?:number }
+export interface IntelligenceReport { coverage?:Record<string,unknown>; usage?:Usage; [key:string]:unknown }
+export interface IntelligenceTask { id:string;paper_id:string;status:Exclude<IntelligenceStatus,'unanalyzed'>;phase:string;completed_steps:number;total_steps:number;report:IntelligenceReport;error:string|null;created_at?:string;updated_at?:string }
+export interface LibraryCitation { id:string;paper_id:string;title:string;source_id:string;source_text:string;source_type:'paper'|'external_metadata'|'user'|'ai';page?:number|null;section?:string|null;chunk_id?:string|null;bbox?:number[]|null;page_width?:number|null;page_height?:number|null }
+export interface LibraryClaim { content:string;kind:'fact'|'comparison'|'inference'|'user_note'|'metadata';citations:LibraryCitation[] }
+export interface LibraryAnswer { answer:string;items:LibraryClaim[];citations:LibraryCitation[];provider:string;mode:string;model?:string|null;insufficient_evidence:boolean;limitations:string[];retrieved_paper_ids:string[];queries:string[];coverage:Record<string,unknown>;usage:Usage;cached:boolean }
+export interface HistoryItem { role:'user'|'assistant';content:string }
+export interface LibrarianTurn { id:string;question:string;response:LibraryAnswer }
+export interface LibrarianThread { scope:string;selectedIds:string[];turns:LibrarianTurn[] }

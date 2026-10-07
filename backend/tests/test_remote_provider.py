@@ -7,8 +7,236 @@ from app.models import PaperChunk
 from app.providers import get_model_provider
 
 
+def test_model_timeout_defaults_to_600_and_allows_long_synthesis_budget() -> None:
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+
+    default = OpenAICompatibleProvider(api_key='test-secret')
+    extended = OpenAICompatibleProvider(api_key='test-secret', timeout=1800)
+    assert default.timeout == 600
+    assert extended.timeout == 1800
+
+
+@pytest.mark.parametrize('timeout', [0, 1801, float('inf'), float('nan')])
+def test_model_timeout_rejects_values_outside_one_to_1800_seconds(timeout: float) -> None:
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+
+    with pytest.raises(ValueError):
+        OpenAICompatibleProvider(api_key='test-secret', timeout=timeout)
+
+
 def sample_chunk() -> PaperChunk:
     return PaperChunk(id='real-chunk', paper_id='real-paper', page=2, section='3 Results', content='The method retrieves\n71 of 100 correct passages.', bbox_json='[10,20,300,70]', page_width=600, page_height=800)
+
+
+@pytest.mark.parametrize('wire', ['chat_completions', 'responses'])
+def test_default_nonreasoning_profile_omits_stage_reasoning_parameters(wire):
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+
+    def respond(request):
+        payload = json.loads(request.content)
+        assert payload['model'] == 'gpt-4.1-mini'
+        assert 'reasoning_effort' not in payload
+        assert 'reasoning' not in payload
+        if wire == 'responses':
+            return httpx.Response(200, json={'status': 'completed', 'output': [
+                {'type': 'message', 'content': [{'type': 'output_text', 'text': '{"ok":true}'}]}]})
+        return httpx.Response(200, json={'choices': [{'message': {'content': '{"ok":true}'}}]})
+
+    provider = OpenAICompatibleProvider(api_key='test-secret', wire_api=wire, transport=httpx.MockTransport(respond))
+    assert provider.complete_json('JSON', {}, max_output_tokens=300, reasoning_effort='high') == {'ok': True}
+
+
+@pytest.mark.parametrize('wire', ['chat_completions', 'responses'])
+@pytest.mark.parametrize('configured,stage,expected', [('xhigh', None, 'xhigh'), ('xhigh', 'medium', 'medium'), ('none', None, 'none')])
+def test_explicit_reasoning_profiles_preserve_configured_and_stage_efforts(wire, configured, stage, expected):
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+
+    def respond(request):
+        payload = json.loads(request.content)
+        if wire == 'responses':
+            assert payload['reasoning'] == {'effort': expected}
+            return httpx.Response(200, json={'status': 'completed', 'output': [
+                {'type': 'message', 'content': [{'type': 'output_text', 'text': '{"ok":true}'}]}]})
+        assert payload['reasoning_effort'] == expected
+        return httpx.Response(200, json={'choices': [{'message': {'content': '{"ok":true}'}}]})
+
+    provider = OpenAICompatibleProvider(api_key='test-secret', wire_api=wire, reasoning_effort=configured, transport=httpx.MockTransport(respond))
+    assert provider.complete_json('JSON', {}, max_output_tokens=300, reasoning_effort=stage) == {'ok': True}
+
+
+def test_reasoning_disabled_setting_overrides_stages_and_has_a_distinct_cache_key(monkeypatch):
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+    from app.services.model_calls import request_signature
+
+    monkeypatch.setenv('PAPER_READER_MODEL_API_KEY', 'test-secret')
+    monkeypatch.setenv('PAPER_READER_MODEL_REASONING_EFFORT', 'disabled')
+    disabled = get_model_provider()
+    assert disabled.mode == 'remote'
+    enabled = OpenAICompatibleProvider(api_key='test-secret', reasoning_effort='high')
+    assert request_signature(disabled, 'JSON', {}, 'extract', reasoning_effort='medium') != request_signature(enabled, 'JSON', {}, 'extract', reasoning_effort='medium')
+
+
+@pytest.mark.parametrize('wire', ['chat_completions', 'responses'])
+def test_json_trickle_enforces_total_deadline_for_both_protocols(monkeypatch, wire):
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+    from app.providers.base import ProviderError
+
+    now, received = [0.0], []
+    monkeypatch.setattr('app.providers.openai_compatible.time.monotonic', lambda: now[0])
+    data = {'choices': [{'message': {'content': '{"ok":true}'}}]} if wire == 'chat_completions' else {
+        'status': 'completed', 'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': '{"ok":true}'}]}]}
+    body = json.dumps(data).encode()
+    split = len(body) // 3
+    class Stream(httpx.SyncByteStream):
+        def __iter__(self):
+            for part in (body[:split], body[split:split*2], body[split*2:]):
+                received.append(part)
+                now[0] += 0.8
+                yield part
+    provider = OpenAICompatibleProvider(api_key='test-secret', wire_api=wire, timeout=1, transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, headers={'content-type': 'application/json'}, stream=Stream())))
+    with pytest.raises(ProviderError) as error:
+        provider.complete_json('JSON', {}, max_output_tokens=300)
+    assert error.value.status_code == 504
+    assert len(received) == 2
+
+
+@pytest.mark.parametrize('wire', ['chat_completions', 'responses'])
+def test_json_response_size_is_bounded_before_full_body_is_read(wire):
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+    from app.providers.base import ProviderError
+
+    received = []
+    class Stream(httpx.SyncByteStream):
+        def __iter__(self):
+            for index in range(30):
+                received.append(index)
+                yield b' ' * 500000
+    provider = OpenAICompatibleProvider(api_key='test-secret', wire_api=wire, transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, headers={'content-type': 'application/json'}, stream=Stream())))
+    with pytest.raises(ProviderError):
+        provider.complete_json('JSON', {}, max_output_tokens=300)
+    assert len(received) <= 3
+
+
+def test_responses_stream_waits_for_completed_envelope_and_actual_usage():
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+    final = {'status': 'completed', 'model': 'real-model', 'usage': {'input_tokens': 12, 'output_tokens': 34},
+        'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': '{"ok":true}'}]}]}
+    events = [{'type': 'response.created', 'response': {'status': 'in_progress'}},
+              {'type': 'response.output_text.delta', 'delta': '{"wrong":"never parse this partial"}'},
+              {'type': 'response.completed', 'response': final}]
+    def respond(request):
+        assert json.loads(request.content)['stream'] is True
+        return httpx.Response(200, headers={'content-type': 'text/event-stream'},
+            content=''.join('event: ' + e['type'] + '\ndata: ' + json.dumps(e) + '\n\n' for e in events).encode())
+    provider = OpenAICompatibleProvider(api_key='test', base_url='https://example.test', model='model', wire_api='responses',
+        transport=httpx.MockTransport(respond))
+    assert provider.complete_json('JSON', {}, max_output_tokens=300) == {'ok': True}
+    assert provider.last_usage == {'input_tokens': 12, 'output_tokens': 34}
+
+
+def test_responses_stream_protocol_overhead_does_not_limit_small_final_output():
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+    events = [{'type': 'response.output_text.delta', 'delta': 'x' * 1000} for _ in range(1100)]
+    events.append({'type': 'response.completed', 'response': {'status': 'completed', 'output': [
+        {'type': 'message', 'content': [{'type': 'output_text', 'text': '{"ok":true}'}]}]}})
+    content = ''.join('data: '+json.dumps(e)+'\n\n' for e in events).encode()
+    provider = OpenAICompatibleProvider(api_key='test', wire_api='responses', transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, headers={'content-type':'text/event-stream'},content=content)))
+    assert provider.complete_json('JSON', {}, max_output_tokens=6000) == {'ok': True}
+
+
+def test_malformed_stream_event_type_is_a_safe_failure():
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+    from app.providers.base import ProviderError
+    provider = OpenAICompatibleProvider(api_key='test', wire_api='responses', transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, headers={'content-type':'text/event-stream'},
+            content=b'data: {"type": []}\n\n')))
+    with pytest.raises(ProviderError):
+        provider.complete_json('JSON', {}, max_output_tokens=300)
+
+
+@pytest.mark.parametrize('event_type', ['response.failed', 'response.incomplete'])
+def test_failed_stream_event_cannot_masquerade_as_completed(event_type):
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+    from app.providers.base import ProviderError
+    event = {'type': event_type, 'response': {'status': 'completed', 'usage': {'input_tokens': 12, 'output_tokens': 34},
+        'output': [{'type':'message','content':[{'type':'output_text','text':'{"ok":true}'}]}]}}
+    provider=OpenAICompatibleProvider(api_key='test', wire_api='responses', transport=httpx.MockTransport(
+        lambda request:httpx.Response(200,headers={'content-type':'text/event-stream'},content=('data: '+json.dumps(event)+'\n\n').encode())))
+    with pytest.raises(ProviderError):
+        provider.complete_json('JSON',{},max_output_tokens=300)
+    assert provider.last_usage['output_tokens'] == 34
+
+
+def test_newline_free_stream_is_bounded_before_entire_line_is_buffered():
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+    from app.providers.base import ProviderError
+    read = []
+    class Stream(httpx.SyncByteStream):
+        def __iter__(self):
+            for i in range(30):
+                read.append(i)
+                yield b'x' * 500000
+    provider=OpenAICompatibleProvider(api_key='test',wire_api='responses',transport=httpx.MockTransport(
+        lambda request:httpx.Response(200,headers={'content-type':'text/event-stream'},stream=Stream())))
+    with pytest.raises(ProviderError):
+        provider.complete_json('JSON',{},max_output_tokens=300)
+    assert len(read) <= 4
+
+
+def test_stream_deadline_includes_header_wait(monkeypatch):
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+    from app.providers.base import ProviderError
+    now = [0.0]
+    monkeypatch.setattr('app.providers.openai_compatible.time.monotonic',lambda:now[0])
+    class Stream(httpx.SyncByteStream):
+        def __iter__(self):
+            now[0] += 0.8
+            yield b'data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"{}"}]}]}}\n\n'
+    def respond(request):
+        now[0] += 0.8
+        return httpx.Response(200,headers={'content-type':'text/event-stream'},stream=Stream())
+    provider=OpenAICompatibleProvider(api_key='test',wire_api='responses',timeout=1,transport=httpx.MockTransport(respond))
+    with pytest.raises(ProviderError):
+        provider.complete_json('JSON',{},max_output_tokens=300)
+
+
+def test_newline_free_trickle_checks_deadline_for_each_received_chunk(monkeypatch):
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+    from app.providers.base import ProviderError
+    now, read = [0.0], []
+    monkeypatch.setattr('app.providers.openai_compatible.time.monotonic',lambda:now[0])
+    class Stream(httpx.SyncByteStream):
+        def __iter__(self):
+            for i in range(10):
+                read.append(i)
+                now[0] += 0.5
+                yield b'x'
+    provider=OpenAICompatibleProvider(api_key='test',wire_api='responses',timeout=1,transport=httpx.MockTransport(
+        lambda request:httpx.Response(200,headers={'content-type':'text/event-stream'},stream=Stream())))
+    with pytest.raises(ProviderError):
+        provider.complete_json('JSON',{},max_output_tokens=300)
+    assert len(read) <= 3
+
+
+@pytest.mark.parametrize('events', [
+    [{'type':'response.output_text.delta','delta':'{"ok":true}'}],
+    [{'type':'error','error':{'message':'private upstream details'}}],
+    [{'type':'response.incomplete','response':{'status':'incomplete','output':[],'usage':{'input_tokens':12,'output_tokens':99}}}],
+])
+def test_responses_stream_truncation_and_error_are_safe_failures(events):
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+    from app.providers.base import ProviderError
+    provider = OpenAICompatibleProvider(api_key='test', wire_api='responses', transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, headers={'content-type':'text/event-stream'},
+            content=''.join('data: '+json.dumps(e)+'\n\n' for e in events).encode())))
+    with pytest.raises(ProviderError) as error:
+        provider.complete_json('JSON', {}, max_output_tokens=300)
+    assert 'private upstream details' not in str(error.value)
+    if events[0]['type'] == 'response.incomplete':
+        assert provider.last_usage['output_tokens'] == 99
 
 
 def provider_for(content: str | dict):
@@ -19,7 +247,34 @@ def provider_for(content: str | dict):
         assert request.headers['authorization'] == 'Bearer test-secret'
         payload = json.loads(request.content)
         assert payload['model'] == 'test-model'
-        return httpx.Response(200,json={'choices':[{'message':{'content':message}}], 'model':'test-model-2026'})
+        output = message
+        data = json.loads(payload['messages'][-1]['content']) if isinstance(content, dict) else {}
+        def entries(value):
+            if isinstance(value, dict):
+                if isinstance(value.get('content'), str) and isinstance(value.get('citations'), list):
+                    yield value
+                else:
+                    for item in value.values():
+                        yield from entries(item)
+            elif isinstance(value, list):
+                for item in value:
+                    yield from entries(item)
+        if 'chunks' in data and data['chunks'] and 'part_id' in data['chunks'][0]:
+            facts = []
+            for value in entries(content):
+                citations = [{**citation, 'part_id': next((part['part_id'] for part in data['chunks'] if part['chunk_id'] == citation['chunk_id']), data['chunks'][0]['part_id'])} for citation in value['citations']]
+                facts.append({'content': value['content'], 'citations': citations})
+            output = json.dumps({'facts': facts})
+        elif 'facts' in data:
+            enhanced = json.loads(message)
+            from app.providers.validation import canonical_quote
+            for value in entries(enhanced):
+                if 'evidence' in data:
+                    value['citation_ids'] = [next((source['id'] for source in data['evidence'] if source['chunk_id'] == citation['chunk_id'] and canonical_quote(source['source_text'], citation['source_text']) is not None), 'unknown-evidence') for citation in value.pop('citations')]
+                else:
+                    value['citations'] = [next((source for fact in data['facts'] for source in fact['citations'] if source['chunk_id'] == citation['chunk_id'] and canonical_quote(source['source_text'], citation['source_text']) is not None), citation) for citation in value['citations']]
+            output = json.dumps(enhanced)
+        return httpx.Response(200,json={'choices':[{'message':{'content':output}}], 'model':'test-model-2026'})
     return OpenAICompatibleProvider(api_key='test-secret', base_url='https://model.example/v1', model='test-model', transport=httpx.MockTransport(respond))
 
 

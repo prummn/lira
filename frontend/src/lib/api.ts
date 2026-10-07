@@ -1,4 +1,4 @@
-import type { Answer, Collection, ExplainStyle, Graph, ModelSettings, Note, NoteKind, Paper, PaperDetail, PaperMetadataUpdate, ReadingStatus, SearchHit } from '../types'
+import type { Answer, Collection, ExplainStyle, Graph, HistoryItem, IntelligenceTask, LibraryAnswer, ModelSettings, Note, NoteKind, Paper, PaperDetail, PaperMetadataUpdate, ReadingStatus, SearchHit } from '../types'
 
 export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); this.name = 'ApiError' }
@@ -34,8 +34,12 @@ export const api = {
   collections: () => request<{ items: Collection[] }>('/collections'),
   paper: (id: string) => request<PaperDetail>(`/papers/${encodeURIComponent(id)}`),
   update: (id: string, body: PaperMetadataUpdate & { is_favorite?: boolean; reading_status?: ReadingStatus; tags?: string[] }) => request<Paper>(`/papers/${encodeURIComponent(id)}`, { method: 'PATCH', ...json(body) }),
-  import: (file: File) => { const body = new FormData(); body.append('file', file); return request<PaperDetail>('/papers/import', { method: 'POST', body }) },
-  importUrl: (url: string) => request<PaperDetail>('/papers/import-url', { method: 'POST', ...json({url}) }),
+  import: (file: File, analyze=false) => { const body = new FormData(); body.append('file', file); body.append('analyze',String(analyze)); return request<PaperDetail>('/papers/import', { method: 'POST', body }) },
+  importUrl: (url: string, analyze=false) => request<PaperDetail>('/papers/import-url', { method: 'POST', ...json({url,analyze}) }),
+  intelligenceTasks: (paperId:string) => request<{tasks:IntelligenceTask[]}>(`/intelligence/tasks?paper_id=${encodeURIComponent(paperId)}&limit=1`),
+  queueAnalysis: (paper_ids:string[],force=false) => request<{tasks:IntelligenceTask[]}>('/intelligence/tasks',{method:'POST',...json({paper_ids,force})}),
+  cancelAnalysis: (id:string) => request<IntelligenceTask>(`/intelligence/tasks/${encodeURIComponent(id)}/cancel`,{method:'POST'}),
+  librarian: (body:{question:string;collection_id?:string;paper_ids?:string[];history?:HistoryItem[]},signal?:AbortSignal) => request<LibraryAnswer>('/intelligence/ask',{method:'POST',...json(body),signal}),
   refreshMetadata: (id: string) => request<PaperDetail>(`/papers/${encodeURIComponent(id)}/refresh-metadata`, { method: 'POST' }),
   createCollection: (name: string, description: string) => request<Collection>('/collections', { method: 'POST', ...json({ name, description, color: '#536f89' }) }),
   membership: (collectionId: string, paperId: string, add: boolean) => request<unknown>(`/collections/${encodeURIComponent(collectionId)}/papers/${encodeURIComponent(paperId)}`, { method: add ? 'PUT' : 'DELETE' }),

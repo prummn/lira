@@ -4,6 +4,8 @@
 
 用户已授权自主实施整体产品方案，常规架构和样式选择不再逐项确认。
 
+本文件保留最初本地闭环计划。后续智能分析与跨论文文献员采用 [已批准的智能服务计划](superpowers/plans/2026-10-07-intelligence-harness.md)；当前迁移为 `0007_intelligence`，真实模型与缓存验证见 [intelligence-validation.md](intelligence-validation.md)。下方0006版本和远端尚未验收的描述属于此前导入阶段。
+
 ## 实施顺序与边界
 
 1. 后端：临时数据库测试先行；解析与 PDF 文件校验；页码/坐标文本块；证据抽取和拒答；笔记、Collection、FTS；迁移与兼容。
@@ -29,7 +31,7 @@
 
 ## 真实论文导入补齐
 
-本轮增加官方 arXiv abs/pdf 与公开 PDF 直链导入、首页标题／有序作者／原年份识别、arXiv HTML→Atom 和 Crossref DOI 补全、字段来源与手动更正，以及保留现有原文锚点的元数据刷新。当前迁移版本为 `0006_arxiv_revision`，持久保存实际 PDF 版本并绑定对应版本书目。下载逐跳核查公开地址，权威 metadata 绑定官方来源和匹配编号，网络失败保留本地识别。集合归属失败可仅重试 membership，不重下已保存论文。新增 17 篇 GitHub RAG 批次实测、摘要识别和慢速下载修复见 [github-rag-import-validation.md](github-rag-import-validation.md)。
+本阶段增加官方 arXiv abs/pdf 与公开 PDF 直链导入、首页标题／有序作者／原年份识别、arXiv HTML→Atom 和 Crossref DOI 补全、字段来源与手动更正，以及保留现有原文锚点的元数据刷新。当时迁移版本为 `0006_arxiv_revision`，持久保存实际 PDF 版本并绑定对应版本书目。下载逐跳核查公开地址，权威 metadata 绑定官方来源和匹配编号，网络失败保留本地识别。集合归属失败可仅重试 membership，不重下已保存论文。新增 17 篇 GitHub RAG 批次实测、摘要识别和慢速下载修复见 [github-rag-import-validation.md](github-rag-import-validation.md)。
 
 真实输入使用独立官方 Attention、BERT、LoRA PDF/摘要页，来源、哈希、版本年份差异、修复前后结果及浏览器记录见 [real-paper-import-validation.md](real-paper-import-validation.md)。Mock 卡片和问答通过论文已有编号章节恢复父节上下文，保留原文摘录，不编造实验事实。有效模型真实摘要／解释／翻译质量仍未验收；后续优先按 QA 未完成边界补验证，不能以模拟传输或 demo 代替。
 

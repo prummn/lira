@@ -10,9 +10,11 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    Index,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -83,6 +85,9 @@ class Paper(Base, TimestampMixin):
     analysis_status: Mapped[str] = mapped_column(
         String(32), default="ready", nullable=False
     )
+    intelligence_status: Mapped[str] = mapped_column(String(32), default="unanalyzed", nullable=False)
+    intelligence_report_json: Mapped[Optional[str]] = mapped_column(Text)
+    intelligence_analyzed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     tags_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     page_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -110,6 +115,34 @@ class Paper(Base, TimestampMixin):
     translations: Mapped[list[Translation]] = relationship(
         back_populates="paper", cascade="all, delete-orphan", order_by="Translation.created_at"
     )
+    intelligence_tasks: Mapped[list[IntelligenceTask]] = relationship(
+        back_populates="paper", cascade="all, delete-orphan", order_by="IntelligenceTask.created_at"
+    )
+
+
+class IntelligenceTask(Base, TimestampMixin):
+    __tablename__ = "intelligence_tasks"
+    __table_args__ = (Index("uq_intelligence_active_paper", "paper_id", unique=True, sqlite_where=text("status IN ('queued','running')")),)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    paper_id: Mapped[str] = mapped_column(ForeignKey("papers.id", ondelete="CASCADE"), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="queued", nullable=False)
+    phase: Mapped[str] = mapped_column(String(64), default="queued", nullable=False)
+    run_token: Mapped[Optional[str]] = mapped_column(String(32))
+    completed_steps: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_steps: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    report_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    error: Mapped[Optional[str]] = mapped_column(Text)
+    paper: Mapped[Paper] = relationship(back_populates="intelligence_tasks")
+
+
+class ModelCallCache(Base):
+    __tablename__ = "model_call_cache"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    operation: Mapped[str] = mapped_column(String(100), nullable=False)
+    response_json: Mapped[str] = mapped_column(Text, nullable=False)
+    usage_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    model: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
 class CollectionPaper(Base):

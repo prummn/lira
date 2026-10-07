@@ -6,7 +6,7 @@ import hashlib
 import uuid
 from sqlalchemy.orm import Session
 from ..models import Evidence, Paper, PaperAnalysis, PaperChunk
-from ..providers.base import CardEntry, ModelProvider, ProviderError, VerifiedCitation
+from ..providers.base import AnalysisResult, CardEntry, ModelProvider, ProviderError, VerifiedCitation
 from ..schemas import PaperCard
 from ..providers.mock import body
 from ..providers.validation import canonical_quote
@@ -42,13 +42,29 @@ def evidence_for_citation(citation: VerifiedCitation, original: PaperChunk) -> E
 
 
 def analyze_paper(session: Session, paper: Paper, provider: ModelProvider) -> None:
+    replacing_remote = provider.mode != 'remote' and bool(paper.analysis and paper.analysis.mode == 'remote')
     if not paper.chunks:
         paper.analysis = None
         paper.evidence.clear()
         paper.analysis_status = "no_text"
+        if replacing_remote:
+            paper.intelligence_status = 'unanalyzed'
+            paper.intelligence_report_json = None
+            paper.intelligence_analyzed_at = None
         session.flush()
         return
     result = provider.analyze(list(paper.chunks))
+    persist_analysis_result(session, paper, provider, result)
+    if replacing_remote:
+        # The legacy local endpoint replaces the published card, so invalidate
+        # the remote harness report that described the previous card/evidence.
+        paper.intelligence_status = 'unanalyzed'
+        paper.intelligence_report_json = None
+        paper.intelligence_analyzed_at = None
+
+
+def persist_analysis_result(session: Session, paper: Paper, provider: ModelProvider, result: AnalysisResult) -> None:
+    """Validate the complete replacement before mutating the existing ready analysis."""
     chunk_lookup = {chunk.id: chunk for chunk in paper.chunks}
     verified = []
     def materialize(citation: VerifiedCitation) -> Evidence:

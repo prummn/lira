@@ -11,6 +11,7 @@ from fastapi import (
     APIRouter,
     Depends,
     File,
+    Form,
     HTTPException,
     Query,
     Request,
@@ -25,9 +26,9 @@ from sqlalchemy.orm import Session, selectinload
 from starlette.concurrency import run_in_threadpool
 
 from ..db import get_db
-from ..models import Author, Collection, CollectionPaper, Edge, Note, Paper, PaperAuthor, Translation
+from ..models import Author, Collection, CollectionPaper, Edge, IntelligenceTask, Note, Paper, PaperAuthor, Translation
 from ..providers import get_model_provider
-from ..providers.base import VerifiedCitation
+from ..providers.base import ProviderError, VerifiedCitation
 from ..providers.mock import body
 from ..providers.validation import canonical_quote
 from ..schemas import (
@@ -49,6 +50,7 @@ from ..schemas import (
     URLImportRequest,
 )
 from ..services.analysis import analyze_paper, evidence_for, evidence_for_citation
+from ..services.intelligence import queue_tasks
 from ..services.importing import MAX_PDF_BYTES, import_pdf_bytes, metadata_sources, refresh_metadata, replace_authors, sync_card_title
 from ..services.downloads import download_pdf
 from ..services.search import search_chunks
@@ -140,7 +142,7 @@ def list_papers(
 
 @router.post("/papers/import", response_model=PaperDetail, status_code=201)
 async def import_pdf(
-    request: Request, file: UploadFile = File(...), session: Session = Depends(get_db)
+    request: Request, file: UploadFile = File(...), analyze: bool = Form(False), session: Session = Depends(get_db)
 ) -> PaperDetail:
     pieces: list[bytes] = []
     size = 0
@@ -159,6 +161,11 @@ async def import_pdf(
         )
     finally:
         await file.close()
+    if analyze:
+        provider = get_model_provider()
+        if provider.mode == 'remote' and provider.configured:
+            queue_tasks(session, [paper.id], provider)
+            request.app.state.intelligence_worker.wake()
     return paper_detail(require_paper(session, paper.id))
 
 
@@ -166,6 +173,11 @@ async def import_pdf(
 def import_url(payload: URLImportRequest, request: Request, session: Session = Depends(get_db)) -> PaperDetail:
     downloaded = download_pdf(payload.url)
     paper = import_pdf_bytes(session, request.app.state.storage_dir, downloaded.filename, downloaded.data, source_url=downloaded.source_url, source_arxiv_id=downloaded.arxiv_id)
+    if payload.analyze:
+        provider = get_model_provider()
+        if provider.mode == 'remote' and provider.configured:
+            queue_tasks(session, [paper.id], provider)
+            request.app.state.intelligence_worker.wake()
     return paper_detail(require_paper(session, paper.id))
 
 
@@ -269,10 +281,21 @@ def update_paper(
 
 
 @router.post("/papers/{paper_id}/analyze", response_model=PaperDetail)
-def analyze(paper_id: str, session: Session = Depends(get_db)) -> PaperDetail:
+def analyze(paper_id: str, request: Request, session: Session = Depends(get_db)) -> PaperDetail:
     paper = require_paper(session, paper_id)
-    analyze_paper(session, paper, get_model_provider())
-    session.commit()
+    provider = get_model_provider()
+    if provider.mode == 'remote':
+        task = queue_tasks(session, [paper.id], provider, force=True)[0]
+        task_id = task.id
+        # Preserve the synchronous PaperDetail contract while using the single staged worker.
+        session.close()
+        request.app.state.intelligence_worker.process_next(provider, task_id=task_id, wait=True)
+        task = session.get(IntelligenceTask, task_id)
+        if task is None or task.status not in {'completed', 'partial'}:
+            raise ProviderError(task.error if task and task.error else '分析已取消或未完成，已有结果已保留')
+    else:
+        analyze_paper(session, paper, provider)
+        session.commit()
     return paper_detail(require_paper(session, paper_id))
 
 
