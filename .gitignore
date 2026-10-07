@@ -20,3 +20,4 @@ frontend/test-artifacts/
 frontend/test-results/
 frontend/playwright-report/
 .local-runtime/
+.superpowers/
