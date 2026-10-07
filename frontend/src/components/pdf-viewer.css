@@ -1,0 +1,117 @@
+.pdfv-viewer {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  color: var(--text-2, #506074);
+  background: var(--surface-muted, #edf0f4);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 12px;
+}
+
+.pdfv-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  min-height: 46px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border, #e3e7ed);
+  background: var(--surface-subtle, #fafbfc);
+}
+
+.pdfv-toolbar-group { display: flex; align-items: center; gap: 3px; }
+.pdfv-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 27px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text-2, #506074);
+  background: transparent;
+  cursor: pointer;
+}
+.pdfv-icon-button:hover:not(:disabled) { color: var(--text, #1b2637); background: var(--surface-muted, #edf0f4); }
+.pdfv-icon-button.pdfv-active { color: var(--blue, #4c6fff); background: var(--blue-soft, #eef1ff); }
+.pdfv-icon-button:disabled { opacity: .35; cursor: default; }
+.pdfv-icon-button:focus-visible, .pdfv-outline-entry:focus-visible, .pdfv-retry:focus-visible { outline: 2px solid var(--blue, #4c6fff); outline-offset: 2px; }
+.pdfv-divider { width: 1px; height: 16px; margin: 0 4px; background: var(--border, #e3e7ed); }
+.pdfv-page-input { width: 35px; height: 25px; padding: 2px 4px; border: 1px solid var(--border, #e3e7ed); border-radius: 4px; color: var(--text, #1b2637); background: var(--surface, white); text-align: center; font-size: 11px; outline: 0; }
+.pdfv-page-input:focus { border-color: var(--blue, #4c6fff); }
+.pdfv-page-count, .pdfv-scale { color: var(--text-3, #8995a6); font-variant-numeric: tabular-nums; font-size: 11px; white-space: nowrap; }
+.pdfv-scale { min-width: 36px; text-align: center; }
+.pdfv-searchbar { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; min-height: 40px; padding: 5px 12px; border-bottom: 1px solid var(--border, #e3e7ed); background: var(--surface, white); }
+.pdfv-searchbar > svg { flex: 0 0 auto; color: var(--text-3, #8995a6); margin-right: 5px; }
+.pdfv-searchbar input { width: 0; flex: 1; height: 26px; padding: 0; border: 0; outline: none; color: var(--text, #1b2637); background: transparent; font-size: 12px; }
+.pdfv-search-count { color: var(--text-3, #8995a6); font-size: 10px; white-space: nowrap; }
+.pdfv-notice { display: flex; flex: 0 0 auto; align-items: flex-start; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border, #e3e7ed); color: var(--text-2, #506074); background: var(--surface-subtle, #fafbfc); font-size: 11px; line-height: 1.5; }
+.pdfv-notice > svg { flex: 0 0 auto; margin-top: 1px; }
+.pdfv-notice-error { color: #b6594f; }
+.pdfv-body { display: flex; flex: 1; min-width: 0; min-height: 0; position: relative; }
+.pdfv-outline { width: 185px; flex: 0 0 185px; overflow: auto; border-right: 1px solid var(--border, #e3e7ed); background: var(--surface, white); }
+.pdfv-outline-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; position: sticky; top: 0; z-index: 1; padding: 10px 10px 6px 12px; border-bottom: 1px solid var(--border, #e3e7ed); background: var(--surface, white); }
+.pdfv-outline-heading strong { color: var(--text, #1b2637); font-size: 11px; font-weight: 600; }
+.pdfv-outline-message { margin: 14px 12px; color: var(--text-3, #8995a6); font-size: 11px; line-height: 1.7; }
+.pdfv-outline-entry { display: flex; align-items: flex-start; gap: 5px; width: 100%; padding: 8px 10px 8px 12px; border: 0; color: var(--text-2, #506074); background: transparent; text-align: left; font-size: 11px; line-height: 1.45; cursor: pointer; }
+.pdfv-outline-entry > svg { flex: 0 0 auto; margin-top: 2px; color: var(--text-3, #8995a6); }
+.pdfv-outline-entry:hover:not(:disabled) { color: var(--blue, #4c6fff); background: var(--blue-soft, #eef1ff); }
+.pdfv-outline-entry:disabled { opacity: .5; cursor: default; }
+.pdfv-scroll { flex: 1; min-width: 0; min-height: 0; overflow: auto; position: relative; scrollbar-gutter: stable; overscroll-behavior: contain; }
+.pdfv-page-area { display: flex; flex-direction: column; align-items: center; min-width: 100%; width: max-content; min-height: 100%; padding: 20px; }
+.pdfv-hidden { display: none; }
+.pdfv-paper { flex: 0 0 auto; position: relative; background: #fff; box-shadow: 0 2px 10px rgba(23, 37, 60, .14); }
+.pdfv-layers { position: absolute; inset: 0; }
+.pdfv-canvas { display: block; position: absolute; inset: 0; }
+
+/* PDF.js applies viewport geometry directly; keep all text-layer styles scoped. */
+.pdfv-text-layer {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  text-align: initial;
+  -webkit-text-size-adjust: none;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+  z-index: 2;
+}
+.pdfv-text-layer :is(span, br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; }
+.pdfv-text-layer > :not(.markedContent), .pdfv-text-layer .markedContent span:not(.markedContent) { z-index: 1; }
+.pdfv-text-layer span.markedContent { top: 0; height: 0; }
+.pdfv-text-layer[data-main-rotation="90"] { transform: rotate(90deg) translateY(-100%); }
+.pdfv-text-layer[data-main-rotation="180"] { transform: rotate(180deg) translate(-100%, -100%); }
+.pdfv-text-layer[data-main-rotation="270"] { transform: rotate(270deg) translateX(-100%); }
+.pdfv-text-layer span[role="img"] { user-select: none; cursor: default; }
+.pdfv-text-layer ::selection { color: transparent; background: rgba(85, 132, 238, .3); }
+.pdfv-text-layer br::selection { background: transparent; }
+.pdfv-text-layer .pdfv-search-match { background: rgba(250, 191, 55, .32); box-shadow: 0 0 0 1px rgba(213, 160, 42, .32); }
+.pdfv-evidence-overlay { position: absolute; z-index: 3; pointer-events: none; border: 1px solid #c5a754; border-radius: 2px; background: rgba(255, 212, 94, .22); box-shadow: 0 0 0 2px rgba(227, 187, 69, .1); }
+.pdfv-state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 270px; height: 100%; padding: 30px; color: var(--text-3, #8995a6); text-align: center; }
+.pdfv-state > svg { flex: 0 0 auto; }
+.pdfv-state strong { color: var(--text-2, #506074); font-size: 13px; font-weight: 600; }
+.pdfv-state > span, .pdfv-state p { margin: 0; max-width: 360px; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
+.pdfv-error-state > svg { color: #bd7867; }
+.pdfv-retry { display: inline-flex; align-items: center; gap: 6px; padding: 7px 11px; border: 1px solid var(--border-strong, #d5dbe4); border-radius: 5px; color: var(--text-2, #506074); background: var(--surface, white); font-size: 11px; cursor: pointer; }
+.pdfv-retry:hover { color: var(--blue, #4c6fff); border-color: var(--blue, #4c6fff); }
+.pdfv-page-loading { display: flex; align-items: center; justify-content: center; gap: 8px; position: sticky; bottom: 15px; margin: 12px auto 0; padding: 8px 12px; border: 1px solid var(--border, #e3e7ed); border-radius: 5px; color: var(--text-2, #506074); background: var(--surface, white); box-shadow: 0 2px 8px rgba(23, 37, 60, .07); font-size: 11px; z-index: 4; }
+.pdfv-render-error { height: auto; min-height: 170px; }
+.pdfv-footer { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 10px; min-height: 33px; padding: 8px 12px; border-top: 1px solid var(--border, #e3e7ed); color: var(--text-3, #8995a6); background: var(--surface-subtle, #fafbfc); font-size: 10px; }
+.pdfv-footer > span:first-child { display: flex; align-items: center; gap: 6px; }
+.pdfv-footer > span:last-child { white-space: nowrap; }
+.pdfv-evidence-dot { width: 5px; height: 5px; border-radius: 50%; background: #c2a047; }
+.pdfv-spin { animation: pdfv-spin .85s linear infinite; }
+@keyframes pdfv-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .pdfv-spin { animation: none; } }
+@media (max-width: 1100px) { .pdfv-toolbar { padding: 5px 7px; gap: 4px; }.pdfv-toolbar-group { gap: 1px; }.pdfv-icon-button { width: 24px; }.pdfv-outline { width: 160px; flex-basis: 160px; }.pdfv-page-count, .pdfv-scale { font-size: 10px; } }
