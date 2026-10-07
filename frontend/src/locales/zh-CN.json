@@ -395,5 +395,12 @@
   "reportedTokens": "已报告的 token 用量",
   "matchedCitations": "已匹配引文",
   "acceptedFields": "有来源的卡片字段",
-  "missingFields": "尚需补充的字段"
+  "missingFields": "未提供内容的字段",
+  "rejectedEntries": "未通过核验的条目",
+  "rejectionQuote": "原文引句未匹配",
+  "rejectionSource": "引用来源不符合范围",
+  "rejectionSection": "章节标签与证据不符",
+  "rejectionLineage": "事实来源未完整保留",
+  "rejectionBudget": "单条证据超过限制",
+  "rejectionFormat": "条目格式不符合要求"
 }

@@ -51,12 +51,13 @@ class Source:
     bbox: list[float] | None = None
     page_width: float | None = None
     page_height: float | None = None
+    original_id: str | None = None
 
     @property
     def quote_id(self) -> str:
         # Bind the selector to this exact submitted excerpt, not hidden full text.
-        encoded = json.dumps([self.id, self.content], ensure_ascii=False, separators=(',', ':')).encode('utf-8')
-        return 'quote-' + hashlib.sha256(encoded).hexdigest()
+        encoded = json.dumps([self.original_id or self.id, self.content], ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+        return 'quote-' + hashlib.sha256(encoded).hexdigest()[:24]
 
     def payload(self) -> dict:
         return {'source_id': self.id, 'paper_id': self.paper_id, 'title': self.title,
@@ -170,11 +171,11 @@ def _numbered_section(section: str) -> str | None:
 def _topic_sections(chunks: list, queries: list[str], question: str, title: str) -> list[str]:
     request = ' '.join(queries + [question]).casefold()
     families = [
+        (r'method|mechanism|architecture|training|inference|trigger|方法|机制|架构|训练|推理|触发|流程', r'method|mechanism|architecture|approach|overview|inference|trigger|training|方法|机制|架构|训练|推理'),
         (r'future|prospect|outlook|direction|未来|展望', r'future|prospect|outlook|未来|展望'),
         (r'evaluat|metric|benchmark|assess|评估|评价|指标|评测', r'evaluat|metric|benchmark|assess|评估|评价|指标|评测'),
         (r'efficien|computational|latency|scalab|cost|效率|开销|成本', r'efficien|scalab|compress|computational|latency|效率|压缩'),
         (r'limitation|challenge|局限|限制|挑战', r'limitation|challenge|discussion|局限|限制|挑战'),
-        (r'method|mechanism|architecture|方法|机制|架构', r'method|mechanism|architecture|approach|方法|机制|架构'),
     ]
     names = list(dict.fromkeys(chunk.section for chunk in chunks if chunk.section))
     wanted = _terms(queries + [question]) - tokens(title)
@@ -271,6 +272,12 @@ def _ranked_chunks(chunks: list, queries: list[str], question: str, title: str, 
                 - 1 / (1 + by_id.get(c.id, {}).get('query_ranks', {}).get(index, 120)), c.page or 0, c.id))
             add(best)
     sections = _topic_sections(chunks, queries, question, title)
+    # Reserve requested mechanisms before short high-scoring table cells.
+    # Otherwise a comparison can retrieve a method's score but omit its rule.
+    for section in sections:
+        substantive = ordered([c for c in chunks if c.section == section and len(c.content.strip()) >= 80])
+        if substantive:
+            add(substantive[0])
     # Short paragraph labels identify separate definitions even in one long section.
     labels = [c for c in chunks if len(c.content) >= 80 and not re.search(r'references|bibliography|参考文献', c.section or '', re.I)
         and len(c.content.splitlines()[0].split()) <= 4
@@ -495,6 +502,99 @@ def _usage(calls: list) -> dict:
             'cache_hits': sum(call.cached for call in calls)}
 
 
+def unmatched_technical_terms(item: LibraryAnswerItem) -> list[str]:
+    """Flag a narrow observable inconsistency, not a semantic correctness proof."""
+    if item.kind not in {'fact', 'comparison'}:
+        return []
+    # A leading label can identify the cited paper from its title. The title
+    # must never justify a technical identifier in the scientific claim itself.
+    label = re.match(r'^\s*([A-Z][A-Z0-9_]{3,})(?![A-Za-z0-9_])', item.content)
+    paper_titles = '\n'.join(c.title for c in item.citations if c.source_type == 'paper')
+    claim = item.content
+    if label and re.search(r'(?<![A-Za-z0-9_])' + re.escape(label[1]) + r'(?![A-Za-z0-9_])', paper_titles):
+        claim = claim[label.end():]
+    terms = set(re.findall(r'(?<![A-Za-z0-9_])[A-Z][A-Z0-9_]{3,}(?![A-Za-z0-9_])', claim))
+    original = '\n'.join(c.source_text for c in item.citations).casefold()
+    return sorted(term for term in terms if not re.search(
+        r'(?<![a-z0-9_])' + re.escape(term.casefold()) + r'(?![a-z0-9_])', original))
+
+
+def _restore_citation_ids(items: list[LibraryAnswerItem], original_ids: dict[str, str]) -> None:
+    for item in items:
+        item.citations = [citation.model_copy(update={
+            'source_id': original_ids[citation.source_id],
+            'id': 'library-' + hashlib.sha256((original_ids[citation.source_id] + citation.source_text).encode()).hexdigest()[:20]})
+            for citation in item.citations]
+
+
+def review_terminology(database: Database, provider, items: list[LibraryAnswerItem]) -> tuple[list[LibraryAnswerItem], int, list, dict]:
+    flagged, reasons = {}, {}
+    for index, item in enumerate(items):
+        terms = unmatched_technical_terms(item)
+        exclusive = item.kind in {'fact', 'comparison'} and bool(re.search(
+            r'只有|仅(?:当|在)|才(?:会|能|触发|额外|转向|执行|使用)|\bonly\s+(?:when|if|after)\b', item.content, re.I))
+        if terms or exclusive:
+            flagged[index] = terms
+            reasons[index] = (['unmatched_identifier'] if terms else []) + (['exclusive_condition'] if exclusive else [])
+    report = {'flagged_items': len(flagged), 'checked_items': 0, 'rejected_items': 0,
+              'scope': 'unmatched_identifiers_or_exclusive_conditions'}
+    if not flagged:
+        return items, 0, [], report
+    # Only the suspect items' cited originals are supplied. A token occurring in
+    # another retrieved paragraph must not justify a different ablation claim.
+    per_item, originals, original_ids = {}, {}, {}
+    for index in flagged:
+        cited = {}
+        for citation in items[index].citations:
+            source = Source(citation.source_id, citation.paper_id, citation.title, citation.source_text,
+                citation.source_type, citation.page, citation.section, citation.chunk_id,
+                citation.bbox, citation.page_width, citation.page_height)
+            key = (source.id, source.content)
+            # A legacy quotation can select a smaller excerpt from the same
+            # chunk. Keep distinct quoted excerpts distinct in the review.
+            if key not in originals:
+                review_id = f'V{len(originals) + 1:05d}'
+                originals[key] = Source(**{**source.__dict__, 'id': review_id, 'original_id': source.id})
+                original_ids[review_id] = citation.source_id
+            reviewed = originals[key]
+            review_id = reviewed.id
+            cited[review_id] = reviewed
+        per_item[index] = list(cited.values())
+    sources = list({source.id: source for source in originals.values()}.values())
+    payload = {'stage': 'verify_terminology', 'items': [{'index': index, 'kind': items[index].kind,
+        'content': items[index].content, 'unmatched_terms': terms,
+        'review_reasons': reasons[index],
+        'source_ids': [source.id for source in per_item[index]]} for index, terms in flagged.items()],
+        'sources': [source.payload() for source in sources]}
+    if len(json.dumps(payload, ensure_ascii=False)) > SOURCE_BUDGET:
+        report.update(rejected_items=len(flagged), budget_exceeded=True)
+        return [item for index, item in enumerate(items) if index not in flagged], len(flagged), [], report
+    system = (PROMPTS / 'librarian_verify.txt').read_text('utf-8')
+    options = {'operation': 'library_verify_claims_v2', 'max_output_tokens': 6000, 'reasoning_effort': 'high'}
+    response = json_call(database, provider, system, payload, **options)
+    candidates = response.data.get('items')
+    accepted, seen = {}, set()
+    if isinstance(candidates, list):
+        for raw in candidates[:16]:
+            index = raw.get('index') if isinstance(raw, dict) else None
+            if type(index) is not int or index not in flagged:
+                continue
+            if index in seen:
+                accepted.pop(index, None)
+                continue
+            seen.add(index)
+            verified, _ = validate_answer({'insufficient_evidence': False, 'items': [raw]}, per_item[index])
+            if verified and verified[0].kind == items[index].kind and not unmatched_technical_terms(verified[0]):
+                _restore_citation_ids(verified, original_ids)
+                accepted[index] = verified[0]
+    rejected = len(flagged) - len(accepted)
+    if rejected:
+        evict_call(database, provider, system, payload, **options)
+    report.update(checked_items=len(accepted), rejected_items=rejected)
+    return [accepted[index] if index in flagged else item for index, item in enumerate(items)
+        if index not in flagged or index in accepted], rejected, [response], report
+
+
 def answer_library(database: Database, provider, payload: LibraryQuestion) -> LibraryAnswer:
     if not getattr(provider, 'configured', False) or getattr(provider, 'mode', '') != 'remote':
         raise ProviderError('论文管理员需要配置有效的模型服务；本地阅读和搜索仍然可用', 503)
@@ -517,6 +617,9 @@ def answer_library(database: Database, provider, payload: LibraryQuestion) -> Li
         evict_call(database, provider, planner_system, planner_payload, **planner_options)
         raise ProviderError('模型检索计划格式无效，请重试；论文和笔记已保留')
     sources, retrieval = collect_sources(database, records, planner.data, payload.question)
+    original_ids = {f'S{index:05d}': source.id for index, source in enumerate(sources, 1)}
+    sources = [Source(**{**source.__dict__, 'id': alias, 'original_id': source.id})
+               for alias, source in zip(original_ids, sources)]
     coverage.update(retrieval)
     answer_system = (PROMPTS / 'librarian_answer.txt').read_text('utf-8')
     answer_payload = {'question': payload.question, 'history': history, 'catalog': records,
@@ -527,14 +630,18 @@ def answer_library(database: Database, provider, payload: LibraryQuestion) -> Li
         evict_call(database, provider, answer_system, answer_payload, **answer_options)
         raise ProviderError('模型回答格式无效，请重试；论文和笔记已保留')
     items, rejected = validate_answer(answer.data, sources)
+    _restore_citation_ids(items, original_ids)
     if not items and not answer.data['insufficient_evidence']:
         evict_call(database, provider, answer_system, answer_payload, **answer_options)
         raise ProviderError('模型回答没有通过来源核验，请重试或缩小问题范围')
+    items, term_rejected, checks, term_report = review_terminology(database, provider, items)
+    rejected += term_rejected
+    coverage['terminology_review'] = term_report
     limitations = [s[:1000] for s in answer.data.get('limitations', [])[:8]
                    if isinstance(s, str)] if isinstance(answer.data.get('limitations', []), list) else []
     if rejected:
         evict_call(database, provider, answer_system, answer_payload, **answer_options)
-        limitations.append(f'{rejected} 条无法核验来源的模型条目已排除。')
+        limitations.append(f'{rejected} 条未通过来源或论断核验的模型条目已排除。')
     comparison_source_type = 'external_metadata' if planner.data['intent'] == 'metadata' else 'paper'
     cited_papers = {c.paper_id for item in items for c in item.citations if c.source_type == comparison_source_type}
     if planner.data.get('intent') == 'comparison' or re.search(r'比较|区别|差异|compare|comparison|\bvs\b|versus', payload.question, re.I):
@@ -557,4 +664,4 @@ def answer_library(database: Database, provider, payload: LibraryQuestion) -> Li
         items=items, citations=citations, provider=provider.name, mode=provider.mode,
         model=answer.model, insufficient_evidence=not bool(items), limitations=limitations,
         retrieved_paper_ids=retrieval['candidate_paper_ids'], queries=retrieval['queries'],
-        coverage=coverage, usage=_usage([planner, answer]), cached=planner.cached and answer.cached)
+        coverage=coverage, usage=_usage([planner, answer, *checks]), cached=all(call.cached for call in [planner, answer, *checks]))

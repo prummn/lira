@@ -395,5 +395,12 @@
   "reportedTokens": "Reported token subtotal",
   "matchedCitations": "Matched citations",
   "acceptedFields": "Card fields with sources",
-  "missingFields": "Fields still incomplete"
+  "missingFields": "Fields without content",
+  "rejectedEntries": "Entries rejected by verification",
+  "rejectionQuote": "Quote did not match source",
+  "rejectionSource": "Citation outside allowed sources",
+  "rejectionSection": "Section differs from evidence",
+  "rejectionLineage": "Fact provenance is incomplete",
+  "rejectionBudget": "Entry exceeds evidence limit",
+  "rejectionFormat": "Invalid entry format"
 }

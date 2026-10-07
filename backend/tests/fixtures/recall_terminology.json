@@ -1,0 +1,30 @@
+{
+  "origin": "Actual RECALL / CRUD-RAG question, 2026-10-07",
+  "content": "RECALL——反事实知识的构造：作者区分常识知识与科学知识两个领域，并通过编辑答案文本、编辑非答案文本两种方式注入错误。答案编辑中，EventKG 的答案被 ChatGPT 替换为无关值，UJ 的答案文本则通过改变部分词语含义引入反事实信息；非答案编辑是在不包含答案的部分加入事实错误，同时保留该问题答案的正确性。因此，QA-A 与 QA-NA 分别对应“答案相关信息被改错”与“周边信息有错但答案仍正确”，不是同一种干扰条件。",
+  "sources": [
+    {
+      "title": "RECALL: A Benchmark for LLMs Robustness against External Counterfactual Knowledge",
+      "content": "For a comprehensive evaluation, we decided to\nassess models’ robustness against counterfactual\nknowledge in two different domains: common\nsense knowledge and scientific knowledge.",
+      "page": 3,
+      "section": "2.2 Knowledge Domains"
+    },
+    {
+      "title": "RECALL: A Benchmark for LLMs Robustness against External Counterfactual Knowledge",
+      "content": "Editing Answer Texts\nFor EventKG, we ask\nChatGPT to replace the answer with an unrelated\nvalue. For UJ, we demand ChatGPT to change the\nmeanings of some words in the answer texts. In this\nway, the answer-relevant part of the text is directly\naffected and carries counterfactual information.",
+      "page": 4,
+      "section": "2.5 Adding Counterfactual Information"
+    },
+    {
+      "title": "RECALL: A Benchmark for LLMs Robustness against External Counterfactual Knowledge",
+      "content": "4) Edit Non-answer Texts\nFor each paragraph\ngenerated in Step 1, we add counterfactual informa-\ntion to the part without answers, so that the whole\ntext contains factual errors but does not affect the\ncorrectness of the answer to the query.",
+      "page": 3,
+      "section": "2.3 Benchmark Construction Procedures"
+    },
+    {
+      "title": "RECALL: A Benchmark for LLMs Robustness against External Counterfactual Knowledge",
+      "content": "mistake is exactly where the actual answer to the\nquery is, which will directly result in wrong an-\nswers from the models. b) the mistake occurs in\nthe text, but the parts involving the answer to the\nquery remain correct. As a result, we further sep-\narate the QA task into two sub-tasks, QA with\nAnswers changed in contexts (QA-A) and QA with\nNon-Answer texts changed in contexts (QA-NA),\nand we will assess models on these two sub-tasks,\nrespectively.",
+      "page": 3,
+      "section": "2.1 Preliminaries"
+    }
+  ]
+}

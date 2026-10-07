@@ -90,6 +90,13 @@ def test_abstract_excludes_rotated_stamp_footnotes_and_footer(attention: ParsedP
     assert all("31st Conference" not in text for text in abstract)
 
 
+def test_real_rgb_figure_response_is_not_an_alphabetic_appendix_heading(monkeypatch):
+    parsed = replay_layout(monkeypatch, 'rag_rgb_layout.json')
+    replies = [block for block in parsed.blocks if block.content.startswith('I can not answer the question because of the')]
+    assert replies
+    assert all(block.section == 'Introduction' for block in replies)
+
+
 def test_source_text_and_canonical_geometry_are_preserved(attention: ParsedPDF):
     title = next(b for b in attention.blocks if b.content == "Attention Is All You Need")
     assert title.bbox == pytest.approx((211.488007, 148.829880, 399.893494, 166.045273))
@@ -351,6 +358,12 @@ def test_ieee_inline_abstract_preserves_original_text_and_excludes_index_terms(m
     assert "Recent years have witnessed" not in abstract
 
 
+def test_ieee_centered_roman_heading_remains_a_section(monkeypatch):
+    parsed = replay_layout(monkeypatch, 'rag_ieee_layout.json')
+    heading = next(block for block in parsed.blocks if block.content == 'I. INTRODUCTION')
+    assert heading.section == 'I. INTRODUCTION'
+
+
 @pytest.mark.parametrize("fixture,start,end", [
     ("rag_crud_acm_layout.json", "Retrieval-Augmented Generation (RAG) is a technique", "optimizing the RAG technology"),
     ("rag_feb_acm_layout.json", "Federated search systems aggregate", "context of RAG pipelines"),
@@ -381,3 +394,36 @@ def test_crud_wrapped_affiliations_do_not_become_partial_fallback_byline(monkeyp
 def test_publisher_template_instructions_are_not_a_paper_venue(monkeypatch):
     parsed = replay_layout(monkeypatch, 'rag_survey_acm_layout.json')
     assert parsed.venue is None
+
+
+@pytest.mark.parametrize('index,forbidden', [
+    (0, {'Knowledge', 'Correction', 'Generation', 'Generator'}),
+    (1, {'13 end'}),
+])
+def test_crag_diagram_labels_and_algorithm_lines_are_not_sections(index, forbidden):
+    fixture = json.loads((Path(__file__).parent / 'fixtures/crag_headings_layout.json').read_text(encoding='utf-8'))
+    example = fixture['examples'][index]
+    headings = detect_headings(read_lines(example['page'] - 1, example['blocks']), HEADING,
+        example['body_font'], set(), first_page=False)
+    assert forbidden.isdisjoint(headings.values())
+
+
+def test_crag_wrapped_numbered_heading_keeps_the_full_section_title():
+    fixture = json.loads((Path(__file__).parent / 'fixtures/crag_headings_layout.json').read_text(encoding='utf-8'))
+    example = fixture['examples'][2]
+    headings = detect_headings(read_lines(example['page'] - 1, example['blocks']), HEADING,
+        example['body_font'], set(), first_page=False)
+    assert '5.7 Consistent Supplementation of Web Search Knowledge' in headings.values()
+    assert 'Search Knowledge' not in headings.values()
+
+
+@pytest.mark.parametrize('index', [0, 1, 2])
+def test_real_appendix_titles_and_pseudocode_have_distinct_structure(index):
+    fixture = json.loads((Path(__file__).parent / 'fixtures/rag_appendix_headings_layout.json').read_text(encoding='utf-8'))
+    example = fixture['examples'][index]
+    headings = detect_headings(read_lines(example['page'] - 1, example['blocks']), HEADING,
+        example['body_font'], set(), first_page=False)
+    if index == 0:
+        assert 'C Results' in headings.values()
+    else:
+        assert {'end if', 'end for', 'end function'}.isdisjoint(headings.values())

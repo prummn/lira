@@ -123,6 +123,15 @@ def _recovered_section(chunk: PaperChunk, bounds: tuple[float, ...], parsed: Par
                  and block.bbox[2] <= bounds[2] and block.bbox[3] <= bounds[3]
                  and normalized(block.content) in original_text]
     if not fragments or normalized(' '.join(block.content for block in fragments)) != original_text:
+        # A repaired wrapped heading may merge two old chunks into one parsed
+        # block. Recover only a unique containing block at the same location;
+        # preserve the old source text, ID and geometry used by notes/citations.
+        containing = [block for block in parsed.blocks if block.page == chunk.page
+            and block.bbox[0] <= bounds[0] and block.bbox[1] <= bounds[1]
+            and block.bbox[2] >= bounds[2] and block.bbox[3] >= bounds[3]
+            and original_text and original_text in normalized(block.content)]
+        if len(containing) == 1:
+            return True, containing[0].section
         return False, None
     sections = {block.section for block in fragments}
     if len(sections) != 1:

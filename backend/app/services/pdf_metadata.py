@@ -272,14 +272,50 @@ def detect_headings(lines: list[LayoutLine], known: re.Pattern, body_size: float
         # document section. Keep its evidence under the real results heading.
         if re.match(r'^\(\d+\)\s', line.text):
             continue
+        # Algorithm line numbers are typography, not section numbers.
+        if re.fullmatch(r'(?:\d+\s+)?end(?:\s+(?:if|for|while|function))?', line.text, re.I):
+            continue
         if (known.fullmatch(line.text) and line.size >= body_size * .95
                 and len(line.text) <= 100 and len(line.text.split()) <= 12):
             headings[line.key] = line.text
         elif (not first_page or line.bbox[1] > abstract_y) and heading_text(line.text):
-            numbered = NUMBERED.match(line.text)
-            if (numbered and (line.bold or line.size > body_size * 1.05)) or (
-                    line.bold and line.size >= body_size * .95):
+            numbered = NUMBERED.match(line.text) or (line.size >= body_size * .95
+                and re.match(r'^(?:[IVXLCDM]+\.|[A-Z](?:\.\d+)*\.?)\s+\S', line.text))
+            # Isolated diagram labels often use bold heading-sized text. A
+            # generic unnumbered heading needs nearby prose in its column;
+            # captions and other diagram labels do not establish that context.
+            following_prose = any(other.horizontal and not other.bold
+                and not ABSTRACT_CAPTION.match(other.text) and len(other.text) > 25
+                and abs(other.bbox[0] - line.bbox[0]) < body_size * 2
+                and 0 <= other.bbox[1] - line.bbox[3] <= body_size * 2.5
+                for other in lines)
+            if (numbered and (line.bold or line.size > body_size * 1.05
+                or (line.text.isupper() and line.size >= body_size * .95))) or (
+                    line.bold and line.size >= body_size * .95 and following_prose):
                 headings[line.key] = line.text
+    # Wrapped numbered titles remain one section. Do not alter the original
+    # lines: only their shared label is joined, with the first line as anchor.
+    lookup = {line.key: line for line in lines}
+    for key, label in list(headings.items()):
+        if key not in headings or not NUMBERED.match(label):
+            continue
+        anchor = lookup[key]
+        title = next((line for line in lines if line.key in paired
+            and line.key[1] == anchor.key[1] and line.key != key
+            and abs(line.bbox[1] - anchor.bbox[1]) < 2), anchor)
+        previous = title
+        for continuation in sorted((line for line in lines if line.key[1] == anchor.key[1]
+            and line.bbox[1] > title.bbox[1]), key=lambda line: line.bbox[1]):
+            if (not continuation.horizontal or not continuation.bold
+                or abs(continuation.size - title.size) > .5
+                or abs(continuation.bbox[0] - title.bbox[0]) > 2
+                or not 0 <= continuation.bbox[1] - previous.bbox[3] <= title.size
+                or not heading_text(continuation.text)
+                or NUMBERED.match(continuation.text) or known.fullmatch(continuation.text)):
+                break
+            headings[key] += ' ' + continuation.text
+            headings.pop(continuation.key, None)
+            previous = continuation
     return headings
 
 

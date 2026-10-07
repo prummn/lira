@@ -15,12 +15,22 @@ export function CoverageSummary({report}:{report?:IntelligenceReport|null}) {
   const total=coverage.total_windows??coverage.windows_total
   const chars=coverage.processed_characters??coverage.processed_chars
   const charsTotal=coverage.total_characters??coverage.total_chars
+  const reasonKeys={quote_not_found:'rejectionQuote',unknown_source:'rejectionSource',source_mismatch:'rejectionSource',invalid_source_ids:'rejectionSource',invalid_citation_ids:'rejectionSource',quote_outside_evidence:'rejectionSource',section_mismatch:'rejectionSection',incomplete_lineage:'rejectionLineage',missing_parent_citations:'rejectionLineage',invalid_parent_ids:'rejectionLineage',citation_budget:'rejectionBudget'} as const
+  const reasons:Partial<Record<(typeof reasonKeys)[keyof typeof reasonKeys]|'rejectionFormat',number>>={}
+  if(Array.isArray(report?.rejections))for(const item of report.rejections) {
+    if(item&&typeof item==='object'&&typeof item.reason==='string') {
+      const category=reasonKeys[item.reason as keyof typeof reasonKeys]??'rejectionFormat'
+      reasons[category]=(reasons[category]??0)+1
+    }
+  }
   return <div className="coverage-summary">
     {done!=null||total!=null?<span>{t('analysisCoverage')} · {String(done??'—')} / {String(total??'—')}</span>:<span>{t('analysisCoverageMissing')}</span>}
     {chars!=null&&<span>{t('analysisCoverageCharacters')} · {String(chars)}{charsTotal!=null?` / ${String(charsTotal)}`:''}</span>}
     {report?.citation_count!=null&&<span>{t('matchedCitations')} · {String(report.citation_count)}</span>}
     {Array.isArray(report?.accepted_card_fields)&&<span>{t('acceptedFields')} · {report.accepted_card_fields.length}</span>}
     {Array.isArray(report?.missing_fields)&&report.missing_fields.length>0&&<span>{t('missingFields')} · {report.missing_fields.length}</span>}
+    {typeof report?.invalid_entries==='number'&&report.invalid_entries>0&&<span>{t('rejectedEntries')} · {report.invalid_entries}</span>}
+    {Object.entries(reasons).map(([reason,count])=><span key={reason}>{t(reason as keyof typeof reasons)} · {count}</span>)}
     <UsageLine usage={report?.usage}/>
   </div>
 }

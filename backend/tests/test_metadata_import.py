@@ -284,3 +284,28 @@ def test_refresh_keeps_ambiguous_multi_section_chunk_and_warns(client: TestClien
     recovered = next(c for c in after['chunks'] if c['id'] == chunk_id)
     assert recovered['section'] is None
     assert after['metadata_warnings']
+
+@pytest.mark.parametrize('content,bounds', [
+    ('5.7\nConsistent Supplementation of Web', (306.14, 664.72, 497.57, 675.63)),
+    ('Search Knowledge', (330.68, 678.26, 417.35, 689.18)),
+])
+def test_refresh_recovers_old_split_chunks_inside_a_merged_wrapped_heading(content, bounds):
+    from app.models import PaperChunk
+    from app.services.importing import _recovered_section
+    from app.services.pdf import ParsedBlock, ParsedPDF
+    title = '5.7 Consistent Supplementation of Web Search Knowledge'
+    block = ParsedBlock(9, title, '5.7\nConsistent Supplementation of Web\nSearch Knowledge',
+        (306.14, 664.72, 497.57, 689.18), 595.28, 841.89)
+    parsed = ParsedPDF(16, 'Corrective Retrieval Augmented Generation', [block])
+    chunk = PaperChunk(id='existing-source', paper_id='crag', page=9, section='Search Knowledge', content=content)
+    assert _recovered_section(chunk, bounds, parsed) == (True, title)
+    assert chunk.content == content
+
+
+def test_refresh_does_not_relabel_text_matching_only_a_different_location():
+    from app.models import PaperChunk
+    from app.services.importing import _recovered_section
+    from app.services.pdf import ParsedBlock, ParsedPDF
+    block = ParsedBlock(9, 'Other Section', 'Search Knowledge', (10, 10, 100, 30), 595, 842)
+    chunk = PaperChunk(id='old', paper_id='p', page=9, content='Search Knowledge')
+    assert _recovered_section(chunk, (330, 678, 417, 689), ParsedPDF(16, 'Paper', [block])) == (False, None)

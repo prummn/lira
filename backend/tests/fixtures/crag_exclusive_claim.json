@@ -1,0 +1,63 @@
+{
+  "origin": "Actual final RAFT / CRAG / Self-RAG question, 2026-10-08",
+  "content": "CRAG 只有在所有文档低于下阈值、被判为Incorrect时才转向网络搜索。",
+  "sources": [
+    {
+      "bbox": [
+        305.8689880371094,
+        331.8213195800781,
+        526.3174438476562,
+        654.4437255859375
+      ],
+      "id": "library-533901cf5d78722edb0b",
+      "paper_id": "paper-28a294c6782e4258",
+      "title": "Corrective Retrieval Augmented Generation",
+      "source_id": "chunk:chunk-paper-28a294c6782e4258-000041",
+      "source_text": "Figure 2 and Algorithm 1 present an overview\nof CRAG at inference, which designs corrective\nstrategies to improve the robustness of generation.\nGiven an input query and the retrieved documents\nfrom any retriever, a lightweight retrieval evaluator\nis constructed to estimate the relevance score\nof retrieved documents to the input query (Sec-\ntion 4.2). The relevance score is quantified into a\ntotal of three confidence degrees and then triggered\nthe corresponding actions: {Correct, Incorrect,\nAmbiguous} (Section 4.3). If the action Correct\nis triggered, the retrieved documents will be re-\nfined into more precise knowledge strips. This\nrefinement operation involves knowledge decom-\nposition, filter, and recomposition (Section 4.4).\nIf the action Incorrect is triggered, the retrieved\ndocuments will be discarded. Instead, web searches\nare resorted to and regarded as complementary\nknowledge sources for corrections (Section 4.5).\nEventually, when it cannot confidently make a\ncorrect or incorrect judgment, a soft and balanced\naction Ambiguous which combines both of them is\ntriggered. After optimizing the retrieval results, an\narbitrary generative model can be adopted.",
+      "source_type": "paper",
+      "page": 3,
+      "section": "4.1 Overview of Model Inference",
+      "chunk_id": "chunk-paper-28a294c6782e4258-000041",
+      "page_width": 595.2760009765625,
+      "page_height": 841.8900146484375
+    },
+    {
+      "bbox": [
+        70.4729995727539,
+        381.88427734375,
+        291.0458984375,
+        775.4959716796875
+      ],
+      "id": "library-97e50fe782848e4df19b",
+      "paper_id": "paper-28a294c6782e4258",
+      "title": "Corrective Retrieval Augmented Generation",
+      "source_id": "chunk:chunk-paper-28a294c6782e4258-000107",
+      "source_text": "To correct the irrelevant documents and refine the\ntarget documents as needed, actions should be exe-\ncuted discriminately. Based on the aforementioned\nconfidence score for each retrieved document, three\ntypes of actions are designed and triggered accord-\ningly where the upper and lower thresholds are set.\nIf the confidence score is higher than the upper\nthreshold, the retrieved document is identified as\nCorrect, while identified as Incorrect if below\nthe lower threshold. Otherwise, a more soft and\nintermediate action, i.e., Ambiguous is executed.\nEach retrieved document is conducted individually\nand integrated eventually.\nCorrect\nHere, a retrieval is assumed Correct\nwhen the confidence score of at least one retrieved\ndocument is higher than the upper threshold. If\nso, it means that there are relevant documents in\nthe retrieved results, and the knowledge from the\nretrieval results is supposed to be more reliable and\naccurate. However, even if a relevant document can\nbe found, there is inevitably some noisy knowledge\nstrips in this document.\nTo extract the most\ncritical knowledge strips within this document, a\nknowledge refinement method is further designed\nwhich will be elaborated in Section 4.4.\nIncorrect\nBesides,\na\nretrieval\nis\nassumed\nIncorrect when the confidence scores of all\nretrieved documents are below the lower threshold.\nThis indicates that all retrieved documents are",
+      "source_type": "paper",
+      "page": 5,
+      "section": "4.3 Action Trigger",
+      "chunk_id": "chunk-paper-28a294c6782e4258-000107",
+      "page_width": 595.2760009765625,
+      "page_height": 841.8900146484375
+    },
+    {
+      "bbox": [
+        70.4729995727539,
+        425.7483215332031,
+        291.04156494140625,
+        775.4959716796875
+      ],
+      "id": "library-8f94e965699561f9130d",
+      "paper_id": "paper-28a294c6782e4258",
+      "title": "Corrective Retrieval Augmented Generation",
+      "source_id": "chunk:chunk-paper-28a294c6782e4258-000126",
+      "source_text": "It would be more intelligent if a system itself\ncould determine that its existing knowledge corpus\ncould not solve the problem well and turn to\nadditional external knowledge for help. On the\ncontrary, even if a system knows that the existing\nknowledge cannot solve the problem, but still\nsticks to the limited knowledge corpus, it will only\ngive a fabricated fact in the end, which is called\nhallucination.. Therefore, it is extremely important\nto seek complementary external knowledge if\nthe retrieved results are all assumed irrelevant,\nand we consider a system that knows what it\ndoesn’t know and what it cannot answer to be\nmore intelligent than one that clings to limited\nknowledge and is incapable of seeking external\nknowledge. Since retrieval from static and limited\ncorpora can only return sub-optimal documents\nin terms of scope and diversity, large-scale web\nsearches (Piktus et al., 2021; Komeili et al., 2022)\nare integrated as a strategic extension of RAG.\nSpecifically, the inputs are rewritten into queries\ncomposed of keywords by ChatGPT to mimic the\ndaily usage of search engine.\nThe prompt for\nrewriting is shown in Appendix A. In CRAG,\na public and accessible commercial web search\nAPI is adopted to generate a series of URL links",
+      "source_type": "paper",
+      "page": 6,
+      "section": "4.5 Web Search",
+      "chunk_id": "chunk-paper-28a294c6782e4258-000126",
+      "page_width": 595.2760009765625,
+      "page_height": 841.8900146484375
+    }
+  ]
+}

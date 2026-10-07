@@ -153,7 +153,7 @@ test('Notebook keeps PDF and cached card available, reports coverage honestly, a
   const paper=await realPaper(page)
   await settings(page)
   let complete=false
-  const report={coverage:{total_windows:2,processed_windows:2,total_chars:4000,processed_chars:4000,complete:true},usage:{input_tokens:120,output_tokens:35,remote_calls:2,cache_hits:1,unknown_usage_calls:1},citation_count:6,semantic_verification:'not_automatically_proven'}
+  const report={coverage:{total_windows:2,processed_windows:2,total_chars:4000,processed_chars:4000,complete:true},usage:{input_tokens:120,output_tokens:35,remote_calls:2,cache_hits:1,unknown_usage_calls:1},citation_count:6,semantic_verification:'not_automatically_proven',invalid_entries:2,rejections:[{phase:'extract',window_index:0,field:'facts[0]',reason:'quote_not_found'},{phase:'synthesize',field:'section_summaries[2]',reason:'section_mismatch'}]}
   const task=()=>({id:'notebook-task',paper_id:paper.id,status:complete?'completed':'running',phase:complete?'complete':'extracting',completed_steps:complete?3:1,total_steps:3,report:complete?report:{},error:null,updated_at:complete?'finished':'processing'})
   const detail=()=>({...paper,intelligence_status:task().status,intelligence_task:task(),intelligence_report:complete?report:null})
   await page.route('**/api/papers?*',async route=>{const result=await (await route.fetch()).json();result.items=result.items.map((p:any)=>p.id===paper.id?detail():p);await route.fulfill({json:result})})
@@ -174,6 +174,9 @@ test('Notebook keeps PDF and cached card available, reports coverage honestly, a
   await expect(page.locator('.analysis-report')).toContainText('部分调用未返回用量')
   await expect(page.locator('.analysis-report')).toContainText('6')
   await expect(page.locator('.analysis-report')).toContainText('仍需复核')
+  await expect(page.locator('.analysis-report')).toContainText('未通过核验的条目 · 2')
+  await expect(page.locator('.analysis-report')).toContainText('原文引句未匹配 · 1')
+  await expect(page.locator('.analysis-report')).toContainText('章节标签与证据不符 · 1')
   await page.getByRole('button',{name:'问论文',exact:true}).click()
   await page.getByRole('textbox',{name:'问论文',exact:true}).fill('这篇论文如何验证证据？')
   await page.getByRole('button',{name:'提问',exact:true}).click()

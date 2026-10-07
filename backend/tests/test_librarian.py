@@ -717,3 +717,169 @@ def test_cjk_and_short_metric_query_can_reach_paper_outside_fallback_scope(clien
     sources, _ = collect_sources(client.app.state.database, records,
         {'intent': 'research', 'queries': [query], 'paper_ids': []}, query)
     assert any(s.chunk_id == 'target-metric' for s in sources)
+
+@pytest.mark.parametrize('invalid_review', [False, True])
+def test_suspicious_technical_marker_is_reviewed_against_its_own_citations_once(client, invalid_review):
+    from app.models import Paper, PaperChunk
+    from app.library_schemas import LibraryQuestion
+    from app.services.librarian import answer_library
+    with client.app.state.database.sessions() as session:
+        session.add(Paper(id='reflection', title='Self Reflection Ablations'))
+        session.flush()
+        session.add_all([
+            PaperChunk(id='support', paper_id='reflection', page=9, section='Results',
+                content='Removing ISSUP during beam search hurts performance on ASQA.'),
+            PaperChunk(id='utility', paper_id='reflection', page=4, section='Method',
+                content='ISUSE evaluates output utility. This is a different reflection token.'),
+        ])
+        session.commit()
+    class Provider:
+        configured, mode, name, model = True, 'remote', 'Test', 'model'
+        last_usage = {'input_tokens': 10, 'output_tokens': 10}
+        def __init__(self): self.calls = 0
+        def complete_json(self, system, payload, **kwargs):
+            self.calls += 1
+            if 'catalog' in payload and 'sources' not in payload:
+                return {'queries': ['ablation beam search'], 'paper_ids': ['reflection'], 'intent': 'research'}
+            source = next(s for s in payload['sources'] if s['content'].startswith('Removing ISSUP'))
+            citation = {'source_id': source['source_id'], 'quote_id': source['quote_id']}
+            if payload.get('stage') == 'verify_terminology':
+                assert len(payload['items']) == 1
+                assert payload['items'][0]['unmatched_terms'] == ['ISUSE']
+                assert all('ISUSE' not in s['content'] for s in payload['sources'])
+                if invalid_review:
+                    citation['source_id'] = 'chunk:utility'
+                return {'items': [{'index': 0, 'kind': 'fact',
+                    'content': 'Removing ISSUP hurts ASQA performance.', 'citations': [citation]}]}
+            return {'insufficient_evidence': False, 'items': [
+                {'kind': 'fact', 'content': 'Removing ISUSE hurts ASQA performance.', 'citations': [citation]},
+                {'kind': 'fact', 'content': 'The ablation reports worse performance.', 'citations': [citation]},
+            ]}
+    provider = Provider()
+    question = LibraryQuestion(question='解释反思标记的消融结果', paper_ids=['reflection'])
+    result = answer_library(client.app.state.database, provider, question)
+    assert 'Removing ISUSE' not in result.answer
+    assert result.coverage['terminology_review']['flagged_items'] == 1
+    assert provider.calls == 3
+    if invalid_review:
+        assert len(result.items) == 1 and result.coverage['rejected_items'] == 1
+    else:
+        assert 'Removing ISSUP' in result.answer
+        assert result.coverage['rejected_items'] == 0
+        repeat = answer_library(client.app.state.database, provider, question)
+        assert repeat.answer == result.answer and repeat.cached
+        assert repeat.usage['model_calls'] == 0 and provider.calls == 3
+
+def test_real_crag_action_trigger_is_retrieved_before_experiment_table_rows():
+    from pathlib import Path
+    from app.models import PaperChunk
+    from app.services.librarian import _ranked_chunks
+    case = json.loads((Path(__file__).parent / 'fixtures/crag_retrieval.json').read_text(encoding='utf-8'))
+    chunks = [PaperChunk(id=c['id'], paper_id='crag', page=c['page'], section=c['section'],
+        content=c['content'], bbox_json=json.dumps(c['bbox'])) for c in case['chunks']]
+    ranked = _ranked_chunks(chunks, case['queries'], case['question'], case['title'], [], set())
+    # Three compared papers share 72 sources: reserve mechanisms early enough
+    # that table cells and adjacent fragments cannot crowd out the actual rule.
+    assert any(c.section == '4.3 Action Trigger' and 'upper\nthreshold' in c.content for c in ranked[:23])
+
+
+@pytest.mark.parametrize('bad_selector', [None, 'unknown_source', 'wrong_quote'])
+def test_librarian_short_selectors_restore_original_citation_and_stay_strict(client, bad_selector):
+    import re
+    from app.models import Paper, PaperChunk
+    from app.library_schemas import LibraryQuestion
+    from app.services.librarian import answer_library
+    pid = 'paper-68ebaa7216f04a23'
+    cid = 'chunk-paper-68ebaa7216f04a23-000196'
+    with client.app.state.database.sessions() as session:
+        session.add(Paper(id=pid, title='Real benchmark construction'))
+        session.flush()
+        session.add(PaperChunk(id=cid, paper_id=pid, page=10, section='Construction',
+            content='The continuation task splits each article into two halves.',
+            bbox_json='[60, 80, 280, 140]', page_width=600, page_height=800))
+        session.commit()
+    class Provider:
+        configured, mode, name, model = True, 'remote', 'Test', 'model'
+        last_usage = {'input_tokens': 10, 'output_tokens': 10}
+        def __init__(self): self.calls = 0
+        def complete_json(self, system, payload, **kwargs):
+            self.calls += 1
+            if 'sources' not in payload:
+                return {'queries': ['continuation construction'], 'paper_ids': [pid], 'intent': 'research'}
+            assert all(re.fullmatch(r'S\d{5}', s['source_id']) for s in payload['sources'])
+            assert all(len(s['quote_id']) <= 32 for s in payload['sources'])
+            source = next(s for s in payload['sources'] if s['type'] == 'paper')
+            citation = {'source_id': source['source_id'], 'quote_id': source['quote_id']}
+            if bad_selector == 'unknown_source': citation['source_id'] = 'S99999'
+            if bad_selector == 'wrong_quote': citation['quote_id'] = 'quote-stale'
+            return {'insufficient_evidence': False, 'items': [{
+                'kind': 'fact', 'content': 'The task splits each article into two halves.',
+                'citations': [citation]}]}
+    provider = Provider()
+    question = LibraryQuestion(question='How is the continuation task constructed?', paper_ids=[pid])
+    if bad_selector:
+        from app.providers.base import ProviderError
+        with pytest.raises(ProviderError, match='来源核验'):
+            answer_library(client.app.state.database, provider, question)
+        return
+    result = answer_library(client.app.state.database, provider, question)
+    citation = result.citations[0]
+    assert citation.source_id == 'chunk:' + cid and citation.chunk_id == cid
+    assert citation.source_text == 'The continuation task splits each article into two halves.'
+    assert citation.page == 10 and citation.bbox == (60, 80, 280, 140)
+    assert citation.page_width == 600 and citation.page_height == 800
+    repeat = answer_library(client.app.state.database, provider, question)
+    assert repeat.cached and repeat.answer == result.answer
+    assert repeat.usage['model_calls'] == 0 and provider.calls == 2
+
+
+def test_real_recall_paper_label_does_not_trigger_technical_marker_review():
+    from pathlib import Path
+    from app.services.librarian import Source, validate_answer, unmatched_technical_terms
+    case = json.loads((Path(__file__).parent / 'fixtures/recall_terminology.json').read_text(encoding='utf8'))
+    sources = [Source(f'own-{i}', 'recall', s['title'], s['content'], 'paper',
+        page=s['page'], section=s['section']) for i, s in enumerate(case['sources'])]
+    items, rejected = validate_answer({'insufficient_evidence': False, 'items': [{
+        'kind': 'fact', 'content': case['content'],
+        'citations': [{'source_id': s.id, 'quote_id': s.quote_id} for s in sources]}]}, sources)
+    assert rejected == 0
+    assert unmatched_technical_terms(items[0]) == []
+    # Only a leading paper label is exempt; its title must not authenticate a
+    # scientific identifier elsewhere in a claim.
+    unsupported = items[0].model_copy(update={'content': 'The ablation removes RECALL and ISUSE.'})
+    assert unmatched_technical_terms(unsupported) == ['ISUSE', 'RECALL']
+    labelled = items[0].model_copy(update={'content': 'RECALL -- The ablation removes RECALL and ISUSE.'})
+    assert unmatched_technical_terms(labelled) == ['ISUSE', 'RECALL']
+
+
+@pytest.mark.parametrize('invalid_review', [False, True])
+def test_real_crag_exclusive_web_search_claim_is_reviewed_once(client, invalid_review):
+    from pathlib import Path
+    from app.library_schemas import LibraryAnswerItem
+    from app.services.librarian import review_terminology
+    case = json.loads((Path(__file__).parent / 'fixtures/crag_exclusive_claim.json').read_text(encoding='utf8'))
+    item = LibraryAnswerItem(kind='fact', content=case['content'], citations=case['sources'])
+    class Provider:
+        configured, mode, name, model = True, 'remote', 'Test', 'model'
+        last_usage = {'input_tokens': 10, 'output_tokens': 10}
+        def __init__(self): self.calls = 0
+        def complete_json(self, system, payload, **kwargs):
+            self.calls += 1
+            assert len(payload['items']) == 1
+            assert payload['items'][0]['unmatched_terms'] == []
+            assert any('Ambiguous' in s['content'] and 'web searches' in s['content'] for s in payload['sources'])
+            source = next(s for s in payload['sources'] if s['page'] == 3)
+            return {'items': [{'index': 0, 'kind': 'fact',
+                'content': 'CRAG 在 Incorrect 和 Ambiguous 分支都会使用网络搜索所得知识。',
+                'citations': [{'source_id': 'outside-scope' if invalid_review else source['source_id'],
+                               'quote_id': source['quote_id']}]}]}
+    provider = Provider()
+    checked, rejected, calls, report = review_terminology(client.app.state.database, provider, [item])
+    assert provider.calls == 1 and len(calls) == 1
+    if invalid_review:
+        assert not checked and rejected == 1
+    else:
+        assert 'Incorrect 和 Ambiguous' in checked[0].content and rejected == 0
+        assert checked[0].citations[0].source_id in {c.source_id for c in item.citations}
+        repeat = review_terminology(client.app.state.database, provider, [item])
+        assert repeat[0] == checked and repeat[2][0].cached and provider.calls == 1

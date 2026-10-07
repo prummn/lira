@@ -93,7 +93,7 @@ def test_staged_analysis_validates_submitted_slice_and_all_windows(tmp_path):
         if 'chunks' in payload:
             part = payload['chunks'][-1]
             facts = [{'content': 'A supported fact.', 'citations': [{'part_id': part['part_id'], 'chunk_id': part['chunk_id'], 'source_text': part['content'][:45]}]}]
-            if part['chunk_id'] == 'first' and part['start'] > 0:
+            if payload['window_index'] == 1:
                 facts.append({'content': 'Forged out-of-slice claim.', 'citations': [{'part_id': part['part_id'], 'chunk_id': 'first', 'source_text': 'EARLY CLAIM'}]})
             answer = {'facts': facts}
         else:
@@ -107,6 +107,8 @@ def test_staged_analysis_validates_submitted_slice_and_all_windows(tmp_path):
     assert result.analysis.citations[0].chunk.page == 50
     assert result.report['coverage']['processed_chars'] == sum(len(c.content) for c in chunks)
     assert result.report['invalid_entries'] == 1
+    assert result.report['rejections'] == [{'phase': 'extract', 'window_index': 1,
+        'field': 'facts[1]', 'reason': 'quote_not_found'}]
     assert len([payload for payload in requests if 'chunks' in payload]) == 3
     calls = len(requests)
     again = analyze_full_paper(db, provider, chunks)
@@ -114,6 +116,35 @@ def test_staged_analysis_validates_submitted_slice_and_all_windows(tmp_path):
     assert requests[-1]['window_index'] == 1
     assert again.report['usage']['remote_calls'] == 1
     assert again.report['usage']['cache_hits'] == 3
+
+
+def test_extraction_uses_local_source_ids_without_retyping_pdf_words(tmp_path):
+    from app.providers.harness import analyze_full_paper
+    db = database(tmp_path)
+    original = 'We evaluate retrieval-\naugmented generation; accuracy is 71%. '
+    long_text = original + ('Original scientific discussion.\n' * 90)
+    seen = []
+    def respond(request):
+        payload = json.loads(json.loads(request.content)['messages'][-1]['content'])
+        if 'chunks' in payload:
+            seen.extend(payload['chunks'])
+            assert all(len(p['content']) <= 1000 for p in payload['chunks'])
+            source = next(p for p in payload['chunks'] if original in p['content'])
+            answer = {'facts': [
+                {'content': 'Reported accuracy is 71%.', 'source_ids': [source['source_id']]},
+                {'content': 'Forged source must not fall back to quotations.', 'source_ids': ['unknown'],
+                 'citations': [{'part_id': source['part_id'], 'chunk_id': source['chunk_id'], 'source_text': original}]}]}
+        else:
+            assert original in payload['evidence'][0]['source_text']
+            answer = {'main_results': {'content': 'Reported accuracy is 71%.', 'citation_ids': payload['facts'][0]['citation_ids']}}
+        return httpx.Response(200, json={'choices': [{'message': {'content': json.dumps(answer)}}]})
+    provider = OpenAICompatibleProvider(api_key='secret', base_url='https://model.example', transport=httpx.MockTransport(respond))
+    chunk = PaperChunk(id='real-source', paper_id='p', page=5, section='Results', content=long_text)
+    result = analyze_full_paper(db, provider, [chunk])
+    assert ''.join(part['content'] for part in seen) == long_text
+    assert result.analysis.citations[0].source_text == seen[0]['content']
+    assert result.report['invalid_entries'] == 1
+    assert result.report['rejections'][0]['reason'] == 'invalid_source_ids'
 
 
 def test_structure_records_observed_captions_not_invented_chart_values():
@@ -256,9 +287,12 @@ def test_partial_stage_retry_replaces_rejected_output_and_reuses_valid_stages(tm
         content=f'Original method from page {index + 1}. ' + 'x' * 11000) for index in range(2)]
     first = analyze_full_paper(db, provider, chunks)
     assert first.report['partial'] and first.report['invalid_entries'] == 1
+    assert first.report['rejections'][0]['phase'] == bad_stage
+    assert first.report['rejections'][0]['reason'] in {'unknown_source', 'invalid_parent_ids'}
     first_calls = calls.copy()
     retry = analyze_full_paper(db, provider, chunks)
     assert not retry.report['partial'] and retry.report['invalid_entries'] == 0
+    assert retry.report['rejections'] == []
     assert calls[bad_stage] == first_calls[bad_stage] + 1
     assert all(calls[stage] == count for stage, count in first_calls.items() if stage != bad_stage)
     assert retry.report['usage']['remote_calls'] == 1
