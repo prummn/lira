@@ -35,6 +35,53 @@ def test_env_configuration_is_precise_and_settings_never_echo_secret(client: Tes
     assert 'private-key-do-not-echo' not in settings.text
 
 
+def test_generic_host_api_key_does_not_enable_remote_and_ask_stays_local(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv('OPENAI_API_KEY', 'unrelated-host-key-do-not-echo')
+
+    def reject_request(*args, **kwargs):
+        raise AssertionError('A generic host key alone must never enable remote model requests')
+
+    monkeypatch.setattr(httpx.HTTPTransport, 'handle_request', reject_request)
+    settings = client.get('/api/settings')
+    assert settings.status_code == 200
+    assert settings.json()['provider'] == 'MockProvider'
+    assert settings.json()['mode'] == 'extractive'
+    assert settings.json()['configured'] is False
+    assert settings.json()['translation_available'] is False
+    assert 'unrelated-host-key-do-not-echo' not in settings.text
+    paper = import_fixture(client)
+    answer = client.post(f"/api/papers/{paper['id']}/ask", json={'question': 'What are the retrieval results?'})
+    assert answer.status_code == 200
+    assert answer.json()['provider'] == 'MockProvider'
+    assert answer.json()['mode'] == 'extractive'
+    assert answer.json()['citations']
+    assert answer.json()['citations'][0]['source_text'] in paper['chunks'][0]['content']
+
+
+def test_application_specific_key_alone_enables_remote(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv('PAPER_READER_MODEL_API_KEY', 'application-key-do-not-echo')
+    settings = client.get('/api/settings')
+    assert settings.status_code == 200
+    assert settings.json()['provider'] == 'OpenAICompatibleProvider'
+    assert settings.json()['configured'] is True
+    assert settings.json()['mode'] == 'remote'
+    assert settings.json()['model'] == 'gpt-4.1-mini'
+    assert 'application-key-do-not-echo' not in settings.text
+
+
+@pytest.mark.parametrize('setting,value', [('PAPER_READER_MODEL_BASE_URL', 'https://model.example/v1'), ('PAPER_READER_MODEL_NAME', 'explicit-model')])
+def test_generic_key_is_a_fallback_only_with_application_model_configuration(client: TestClient, monkeypatch: pytest.MonkeyPatch, setting: str, value: str) -> None:
+    monkeypatch.setenv('OPENAI_API_KEY', 'generic-fallback-key-do-not-echo')
+    monkeypatch.setenv(setting, value)
+    settings = client.get('/api/settings')
+    assert settings.status_code == 200
+    assert settings.json()['provider'] == 'OpenAICompatibleProvider'
+    assert settings.json()['configured'] is True
+    assert settings.json()['mode'] == 'remote'
+    assert settings.json()['translation_available'] is True
+    assert 'generic-fallback-key-do-not-echo' not in settings.text
+
+
 def test_remote_analysis_uses_real_quote_geometry_and_summary_type() -> None:
     chunk = sample_chunk()
     provider = provider_for({'findings': {'content':'The retrieval evaluation reports 71% correct passages.', 'citations':[{'chunk_id':chunk.id,'source_text':'retrieves 71 of 100 correct passages.','page':999,'bbox':[0,0,1,1]}]}})

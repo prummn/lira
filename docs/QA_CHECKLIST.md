@@ -1,6 +1,6 @@
 # MVP 验收清单与源码审查风险
 
-更新日期：2026-10-07（Asia/Shanghai）。最终后端 55 项、浏览器 10 项通过，strict TypeScript + Vite build exit 0。勾选项只覆盖已有执行证据的范围；多个边界输入或完整人工审计未覆盖的条目保留未勾选。审查只修改 `docs/`，实现由对应功能负责人完成。
+更新日期：2026-10-07（Asia/Shanghai）。最终后端 59 项（11.55 秒）、浏览器 10 项通过，strict TypeScript + Vite build exit 0。勾选项只覆盖已有执行证据的范围；多个边界输入或完整人工审计未覆盖的条目保留未勾选。审查只修改文档，实现由对应功能负责人完成。
 
 ## 1. 优先级与来源规则
 
@@ -67,7 +67,9 @@ P0 表示会破坏证据真实性或用户数据的交付阻塞项；P1 表示�
 - [x] 翻译首次显式生成存SQLite，重建应用后可读缓存；没有模型时缓存可读，force生成失败保留旧结果。
 - [x] 模型地址/prompt/源文本改变时不重用过期缓存；伪造chunk/跨论文访问不能读取其他缓存。
 - [x] 无模型但有缓存的段落视图刷新可读，浏览器断言0次translate调用；新翻译和生成式中英文摘要需要有效模型。
-- [ ] 真实远端摘要/解释/翻译质量：没有live key，本轮未验证。模拟传输通过不替代真实生成质量。
+- [x] 宿主仅有通用OPENAI_API_KEY时默认MockProvider；专用key，或通用key配合显式应用模型地址/名称才启用远端。4项新增回归RED→GREEN，纳入最终59项。
+- [x] 实际重启默认服务后settings显示MockProvider/extractive/configured=false；POST demo/analyze成功，问limitation返回1条原文citation，无出网。
+- [ ] 未完成有效模型的真实推理/翻译质量验收；远端契约使用MockTransport验证，模拟传输通过不替代真实生成质量。
 
 ## 8. P2：界面与可访问性
 
@@ -101,9 +103,9 @@ P0 表示会破坏证据真实性或用户数据的交付阻塞项；P1 表示�
 | 2026-10-07 | npm --prefix frontend run test:e2e（主代理fresh运行） | 临时库，1440×1000 与1080宽度；部分响应fixture | 10 passed，26.2秒 | 原真实闭环及位置恢复、201条分页、Card摘要/引用、真实选区Explain、无模型缓存阅读0请求 | 不证明live生成质量或所有复杂PDF兼容性 |
 | 2026-10-07 | 默认环境安装（主代理分步运行） | 本机创建backend/.venv、requirements安装；Windows npm.cmd调用修复后start -NoBrowser -InstallDependencies | exit0；脚本npm.cmd ci安装77packages | 默认依赖安装与脚本启动路径 | 不代表一次全新无中断安装 |
 | 2026-10-07 | 默认start/stop + health + Vite proxy（主代理fresh运行） | start.ps1 -NoBrowser；stop等待venv子进程释放端口 | smoke exit0；health=ok/papers10；stop后立即8000/5173均未监听 | 默认本地服务启动、访问、停止和端口释放 | 不证明Tauri安装包或live模型质量 |
-| 2026-10-07 | backend/.venv/Scripts/python.exe -m pytest backend/tests -q（主代理fresh运行） | 脚本默认虚拟环境 | 55passed；1条上游warning | 默认Python环境中的后端回归 | 远端仍使用MockTransport |
-| 2026-10-07 | python -m pytest backend/tests -q（主代理fresh运行） | 隔离测试库；远端使用httpx.MockTransport | 55 passed；1条上游Starlette/httpx warning | 当前后端含Card/Explain/search scope/4项翻译缓存测试 | 无live key；真实生成质量未验证 |
+| 2026-10-07 | backend/.venv/Scripts/python.exe -m pytest backend/tests -q（主代理fresh运行） | 默认虚拟环境；隔离测试库；远端用MockTransport | 59 passed，11.55秒；1条上游Starlette/httpx warning | 当前后端含最后4项默认Provider配置回归；含Card/Explain/search scope/翻译缓存 | 未完成有效模型的真实推理/翻译质量验收 |
+| 2026-10-07 | 默认Provider配置RED→GREEN + 实际smoke（主代理运行） | 宿主通用key不作为应用远端opt-in；默认服务重启 | MockProvider/extractive/configured=false；demo/analyze成功；limitation引用1条、无出网 | 默认本地分析与Ask可用且不误开远端 | 不证明已显式配置的远端生成质量 |
 | 2026-10-07 | npm --prefix frontend run build（主代理fresh运行） | 当前工作区 | exit0 | strict TypeScript与Vite打包 | 不单独证明浏览器行为 |
-| 2026-10-07 | legacy迁移回归（55项内） | 隔离旧库，连续两次migrate | 升级到0004_translation_cache并保留notes/analysis | schema升级与历史数据保留 | 不证明生产库备份/恢复 |
+| 2026-10-07 | legacy迁移回归（59项内） | 隔离旧库，连续两次migrate | 升级到0004_translation_cache并保留notes/analysis | schema升级与历史数据保留 | 不证明生产库备份/恢复 |
 
 启动与安装证据是修复后的分步检查；未将其描述为一轮全新、无中断安装。
