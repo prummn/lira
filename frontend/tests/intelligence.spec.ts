@@ -175,6 +175,9 @@ test('Notebook keeps PDF and cached card available, reports coverage honestly, a
   await expect(page.locator('.analysis-report')).toContainText('6')
   await expect(page.locator('.analysis-report')).toContainText('仍需复核')
   await expect(page.locator('.analysis-report')).toContainText('未通过核验的条目 · 2')
+  await expect(page.locator('.analysis-report')).not.toContainText('已纠正的条目')
+  await expect(page.locator('.analysis-report')).not.toContainText('科学复核')
+  await expect(page.locator('.analysis-report')).not.toContainText('本次未复核')
   await expect(page.locator('.analysis-report')).toContainText('原文引句未匹配 · 1')
   await expect(page.locator('.analysis-report')).toContainText('章节标签与证据不符 · 1')
   await page.getByRole('button',{name:'问论文',exact:true}).click()
@@ -184,6 +187,84 @@ test('Notebook keeps PDF and cached card available, reports coverage honestly, a
   expect(requests).toBe(1)
   await expect(page.locator('.pdfv-canvas')).toBeVisible()
   await page.screenshot({path:'test-artifacts/intelligence-notebook-1440.png'})
+})
+
+for(const locale of [
+  {language:'zh-CN',completed:'智能分析完成',partial:'部分完成',repaired:'已纠正的条目',rejected:'未通过核验的条目',format:'条目格式不符合要求',quote:'原文引句未匹配',section:'章节标签与证据不符'},
+  {language:'en-US',completed:'AI analyzed',partial:'Partially analyzed',repaired:'Corrected entries',rejected:'Entries rejected by verification',format:'Invalid entry format',quote:'Quote did not match source',section:'Section differs from evidence'},
+])for(const status of ['completed','partial'] as const)test(`${status} recovery reports only unresolved rejection categories in ${locale.language}`,async({page})=>{
+  const paper=await realPaper(page)
+  await settings(page)
+  await page.addInitScript(language=>localStorage.setItem('riw-language',language),locale.language)
+  const report={coverage:{total_windows:2,processed_windows:2,complete:true},partial:status==='partial',invalid_entries:status==='partial'?1:0,repaired_entries:2,rejections:[
+    {phase:'extract',window_index:0,field:'facts[0]',reason:'quote_not_found',resolved:true},
+    {phase:'synthesize',field:'section_summaries[2]',reason:'section_mismatch',resolved:true},
+    ...(status==='partial'?[{phase:'synthesize',field:'claims[0]',reason:'invalid_entry',resolved:false}]:[]),
+  ]}
+  const task={id:'recovered-task',paper_id:paper.id,status,phase:status==='completed'?'complete':'partial',completed_steps:3,total_steps:3,report,error:null}
+  const detail={...paper,intelligence_status:status,intelligence_task:task,intelligence_report:report}
+  await page.route('**/api/papers?*',async route=>{const json=await (await route.fetch()).json();json.items=json.items.map((p:any)=>p.id===paper.id?detail:p);await route.fulfill({json})})
+  await page.route(`**/api/papers/${paper.id}`,route=>route.fulfill({json:detail}))
+  await page.route('**/api/intelligence/tasks{,?*}',route=>route.fulfill({json:{tasks:[task]}}))
+  await page.goto('/')
+  await page.locator('.paper-row').filter({hasText:paper.title}).locator('.paper-name > button').click()
+  await expect(page.locator('.analysis-control')).toContainText(locale[status])
+  await page.locator('.analysis-report summary').click()
+  const summary=page.locator('.analysis-report .coverage-summary')
+  await expect(summary).toContainText(`${locale.repaired} · 2`)
+  if(status==='partial') {
+    await expect(summary).toContainText(`${locale.rejected} · 1`)
+    await expect(summary).toContainText(`${locale.format} · 1`)
+  }else {
+    await expect(summary).not.toContainText(locale.rejected)
+    await expect(summary).not.toContainText(locale.format)
+  }
+  await expect(summary).not.toContainText(locale.quote)
+  await expect(summary).not.toContainText(locale.section)
+  await expect(summary).not.toContainText(/科学复核|Scientific review/)
+})
+
+for(const locale of [
+  {language:'zh-CN',checked:'科学复核已检查',corrected:'科学复核修正的条目',waiting:'科学复核待复核条目',unreviewed:'本次未复核的卡片条目',limited:'科学复核上下文有限',notProven:'科学复核不构成科学正确性证明。',repaired:'已纠正的条目',support:'论断条件或证据不足',format:'内容复核结果未通过核验',sections:'章节已重新识别',unmatched:'章节归属待核对的原文块',unavailable:'无法核对原 PDF 章节',previous:'现有摘要使用先前章节信息'},
+  {language:'en-US',checked:'Scientific review checked',corrected:'Scientific review corrections',waiting:'Awaiting scientific review',unreviewed:'Card entries not reviewed this time',limited:'Scientific review used limited context',notProven:'Scientific review does not prove scientific correctness.',repaired:'Corrected entries',support:'Claim conditions or evidence are insufficient',format:'Content review result failed validation',sections:'Sections reidentified',unmatched:'Source blocks awaiting section identification',unavailable:'Original PDF sections could not be checked',previous:'Existing card uses previous section information'},
+])for(const failedReview of [false,true])test(`bounded scientific review reports ${failedReview?'failed review pending items':'checked items and deferred review'} in ${locale.language}`,async({page})=>{
+  const paper=await realPaper(page)
+  await settings(page)
+  await page.addInitScript(language=>localStorage.setItem('riw-language',language),locale.language)
+  const scienceReview={checked_items:failedReview?0:24,scheduled_items:24,corrected_items:failedReview?0:3,pending_items:failedReview?24:0,deferred_items:failedReview?0:10,unreviewed_card_entries:failedReview?24:10,context_partial:!failedReview,scientific_correctness_proven:false}
+  const report={coverage:{total_windows:2,processed_windows:2,complete:true},partial:true,invalid_entries:1,repaired_entries:2,science_review:scienceReview,source_structure_stale:failedReview,source_structure:{available:!failedReview,applied:!failedReview,changed_chunks:failedReview?0:2,matched_chunks:8,total_chunks:10,unmatched_chunks:2,complete:false},rejections:[
+    {phase:'science_review',field:'claims[0]',reason:'science_support',resolved:true},
+    ...(!failedReview?[{phase:'science_review',field:'claims[1]',reason:'science_review_format',resolved:true}]:[]),
+    {phase:'science_review',field:'claims[2]',reason:failedReview?'science_review_format':'science_support'},
+  ]}
+  const task={id:'science-review-task',paper_id:paper.id,status:'partial',phase:'partial',completed_steps:3,total_steps:3,report,error:null}
+  const detail={...paper,intelligence_status:'partial',intelligence_task:task,intelligence_report:report}
+  await page.route('**/api/papers?*',async route=>{const json=await (await route.fetch()).json();json.items=json.items.map((p:any)=>p.id===paper.id?detail:p);await route.fulfill({json})})
+  await page.route(`**/api/papers/${paper.id}`,route=>route.fulfill({json:detail}))
+  await page.route('**/api/intelligence/tasks{,?*}',route=>route.fulfill({json:{tasks:[task]}}))
+  await page.goto('/')
+  await page.locator('.paper-row').filter({hasText:paper.title}).locator('.paper-name > button').click()
+  await page.locator('.analysis-report summary').click()
+  const summary=page.locator('.analysis-report .coverage-summary')
+  await expect(summary).toContainText(`${locale.checked} · ${scienceReview.checked_items} / 24`)
+  await expect(summary).toContainText(`${locale.corrected} · ${scienceReview.corrected_items}`)
+  await expect(summary).toContainText(`${locale.repaired} · 2`)
+  await expect(summary).toContainText(`${locale.waiting} · ${failedReview?24:10}`)
+  await expect(summary).toContainText(`${locale.unreviewed} · ${scienceReview.unreviewed_card_entries}`)
+  await expect(summary).toContainText(locale.notProven)
+  if(failedReview) {
+    await expect(summary).toContainText(locale.unavailable)
+    await expect(summary).toContainText(locale.previous)
+    await expect(summary).not.toContainText(locale.sections)
+  } else {
+    await expect(summary).toContainText(`${locale.sections} · 2`)
+    await expect(summary).toContainText(`${locale.unmatched} · 2`)
+  }
+  if(failedReview)await expect(summary).not.toContainText(locale.limited)
+  else await expect(summary).toContainText(locale.limited)
+  await expect(summary).toContainText(`${failedReview?locale.format:locale.support} · 1`)
+  await expect(summary).not.toContainText(failedReview?locale.support:locale.format)
+  await expect(summary).not.toContainText(/复核全部|全部已复核|科学正确性已证明|All entries reviewed|Scientific correctness proven/)
 })
 
 test('librarian discards stale requests after scope change and offers a useful retry',async({page})=>{

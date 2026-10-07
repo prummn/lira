@@ -90,7 +90,9 @@ def test_staged_analysis_validates_submitted_slice_and_all_windows(tmp_path):
     def respond(request):
         payload = json.loads(json.loads(request.content)['messages'][-1]['content'])
         requests.append(payload)
-        if 'chunks' in payload:
+        if payload.get('stage') == 'review_card_science':
+            answer = {'items': [{'field': item['field'], 'decision': 'supported'} for item in payload['items']]}
+        elif 'chunks' in payload:
             part = payload['chunks'][-1]
             facts = [{'content': 'A supported fact.', 'citations': [{'part_id': part['part_id'], 'chunk_id': part['chunk_id'], 'source_text': part['content'][:45]}]}]
             if payload['window_index'] == 1:
@@ -115,7 +117,7 @@ def test_staged_analysis_validates_submitted_slice_and_all_windows(tmp_path):
     assert len(requests) == calls + 1
     assert requests[-1]['window_index'] == 1
     assert again.report['usage']['remote_calls'] == 1
-    assert again.report['usage']['cache_hits'] == 3
+    assert again.report['usage']['cache_hits'] == 4
 
 
 def test_extraction_uses_local_source_ids_without_retyping_pdf_words(tmp_path):
@@ -126,7 +128,9 @@ def test_extraction_uses_local_source_ids_without_retyping_pdf_words(tmp_path):
     seen = []
     def respond(request):
         payload = json.loads(json.loads(request.content)['messages'][-1]['content'])
-        if 'chunks' in payload:
+        if payload.get('stage') == 'review_card_science':
+            answer = {'items': [{'field': item['field'], 'decision': 'supported'} for item in payload['items']]}
+        elif 'chunks' in payload:
             seen.extend(payload['chunks'])
             assert all(len(p['content']) <= 1000 for p in payload['chunks'])
             source = next(p for p in payload['chunks'] if original in p['content'])
@@ -228,7 +232,9 @@ def test_long_paper_reduction_remains_bounded_and_retains_late_evidence(tmp_path
     reductions = []
     def respond(request):
         payload = json.loads(json.loads(request.content)['messages'][-1]['content'])
-        if 'chunks' in payload:
+        if payload.get('stage') == 'review_card_science':
+            answer = {'items': [{'field': item['field'], 'decision': 'supported'} for item in payload['items']]}
+        elif 'chunks' in payload:
             part = payload['chunks'][0]
             citation = {'part_id': part['part_id'], 'chunk_id': part['chunk_id'], 'source_text': part['content'][:120]}
             answer = {'facts': [{'content': f"Fact {index} from {part['chunk_id']}. " + 'd' * 3400, 'citations': [citation]} for index in range(10)]}
@@ -307,7 +313,9 @@ def test_synthesis_resolves_immutable_ids_to_exact_original_quotes(tmp_path):
     quote = 'The system fails on contradictory evidence despite a 71 percent score.'
     def respond(request):
         payload = json.loads(json.loads(request.content)['messages'][-1]['content'])
-        if 'chunks' in payload:
+        if payload.get('stage') == 'review_card_science':
+            answer = {'items': [{'field': item['field'], 'decision': 'supported'} for item in payload['items']]}
+        elif 'chunks' in payload:
             part = payload['chunks'][0]
             answer = {'facts': [{'content': 'The method has a measured weakness.', 'citations': [{'part_id': part['part_id'], 'chunk_id': part['chunk_id'], 'source_text': quote}]}]}
         else:
@@ -356,7 +364,7 @@ def test_fingerprint_uses_prompts_loaded_at_start_even_when_files_change(tmp_pat
     import app.providers.harness as harness
     prompt_dir = tmp_path / 'prompts'
     prompt_dir.mkdir()
-    for name in ('paper_extract.txt', 'paper_reduce.txt', 'paper_synthesize.txt'):
+    for name in harness.PROMPT_NAMES:
         original = harness.PROMPTS_DIR / name
         (prompt_dir / name).write_text(original.read_text(encoding='utf-8-sig') if original.exists() else 'Reduce facts and return JSON.', encoding='utf-8')
     monkeypatch.setattr(harness, 'PROMPTS_DIR', prompt_dir)

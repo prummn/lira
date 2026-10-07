@@ -424,6 +424,7 @@ def test_real_appendix_titles_and_pseudocode_have_distinct_structure(index):
     headings = detect_headings(read_lines(example['page'] - 1, example['blocks']), HEADING,
         example['body_font'], set(), first_page=False)
     if index == 0:
-        assert 'C Results' in headings.values()
+        # This is the appendix table of contents, not the actual C section.
+        assert 'C Results' not in headings.values()
     else:
         assert {'end if', 'end for', 'end function'}.isdisjoint(headings.values())

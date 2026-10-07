@@ -3,13 +3,16 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import hashlib
 import json
+import time
 from collections.abc import Callable
 from ..db import Database
 from ..models import PaperChunk
-from ..services.model_calls import CallResult, evict_call, json_call
+from ..services.model_calls import CallResult, cache_validated_call, cached_call, evict_call, json_call
 from ..services.structure import extract_structure
 from .base import AnalysisResult, CardEntry, ProviderError, VerifiedCitation
-from .cards import CARD_ALIASES, LIST_FIELDS, SINGLE_FIELDS
+from .cards import CARD_ALIASES, CARD_LIMITS, LIST_FIELDS, SINGLE_FIELDS
+from .card_recovery import apply_repairs, preserves_entries, repair_targets, resolved_field
+from .science_review import MAX_BATCHES, MAX_ITEMS, MAX_PAYLOAD_CHARS, run_science_review
 from .openai_compatible import PROMPTS_DIR
 from .validation import canonical_quote
 from .usage import sanitize_usage
@@ -18,8 +21,10 @@ WINDOW_CHARS = 20000
 REDUCE_CHARS = 48000
 MAX_REDUCTION_FACTS = 24
 SOURCE_CHARS = 600
-ALGORITHM_VERSION = 'fullpaper-source-ids-v4'
-PROMPT_NAMES = ('paper_extract.txt', 'paper_reduce.txt', 'paper_synthesize.txt')
+MAX_TRANSPORT_RETRIES = 2
+MAX_RECOVERY_CALLS = 6
+ALGORITHM_VERSION = 'fullpaper-science-review-v8'
+PROMPT_NAMES = ('paper_extract.txt', 'paper_reduce.txt', 'paper_synthesize.txt', 'paper_repair.txt', 'paper_review.txt')
 
 
 def analysis_fingerprint(provider, chunks: list[PaperChunk], *, prompts: dict[str, str] | None = None) -> str:
@@ -30,7 +35,8 @@ def analysis_fingerprint(provider, chunks: list[PaperChunk], *, prompts: dict[st
         'provider': provider.name, 'endpoint': getattr(provider, 'base_url', ''), 'model': getattr(provider, 'model', ''),
         'wire_api': getattr(provider, 'wire_api', ''), 'reasoning_effort': getattr(provider, 'reasoning_effort', 'high'),
         'json_mode': getattr(provider, 'json_mode', ''), 'completion_parameter': getattr(provider, 'completion_parameter', ''),
-        'window_chars': WINDOW_CHARS, 'source_chars': SOURCE_CHARS, 'max_window_parts': 128, 'reduce_chars': REDUCE_CHARS, 'max_reduction_facts': MAX_REDUCTION_FACTS, 'extract_output_tokens': 6000, 'synthesis_output_tokens': 10000}
+        'window_chars': WINDOW_CHARS, 'source_chars': SOURCE_CHARS, 'max_window_parts': 128, 'reduce_chars': REDUCE_CHARS, 'max_reduction_facts': MAX_REDUCTION_FACTS, 'extract_output_tokens': 6000, 'synthesis_output_tokens': 10000, 'transport_retries': MAX_TRANSPORT_RETRIES, 'recovery_calls': MAX_RECOVERY_CALLS,
+        'science_review_batches': MAX_BATCHES, 'science_review_items': MAX_ITEMS, 'science_review_chars': MAX_PAYLOAD_CHARS}
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
@@ -99,7 +105,7 @@ def _verified_citations(raw: object, parts: dict[str, SourcePart], allowed: list
         if reject:
             reject(reason)
         return None
-    if not isinstance(raw, list) or not 1 <= len(raw) <= 10:
+    if not isinstance(raw, list) or not 1 <= len(raw) <= CARD_LIMITS['max_citation_ids']:
         return invalid('invalid_citations')
     result = []
     for citation in raw:
@@ -120,7 +126,7 @@ def _verified_citations(raw: object, parts: dict[str, SourcePart], allowed: list
             return invalid('quote_outside_evidence')
         start = part.start + part.content.index(source)
         result.append({'part_id': part.part_id, 'chunk_id': part.chunk_id, 'source_text': source, 'start': start, 'end': start + len(source)})
-    if sum(len(citation['source_text']) for citation in result) > 8000:
+    if sum(len(citation['source_text']) for citation in result) > CARD_LIMITS['max_citation_chars']:
         return invalid('citation_budget')
     return list({(item['part_id'], item['source_text']): item for item in result}.values())
 
@@ -139,7 +145,7 @@ def _facts(raw: object, parts: dict[str, SourcePart], allowed: list[dict] | None
         raw_citations = entry.get('citations')
         if 'source_ids' in entry:
             ids = entry['source_ids']
-            if (not isinstance(ids, list) or not 1 <= len(ids) <= 10
+            if (not isinstance(ids, list) or not 1 <= len(ids) <= CARD_LIMITS['max_citation_ids']
                 or any(not isinstance(source_id, str) or source_id not in (sources or {}) for source_id in ids)):
                 if reject:
                     reject('invalid_source_ids', f'facts[{index}]')
@@ -217,7 +223,7 @@ def _context_groups(facts: list[dict], pool: dict[str, dict]) -> list[list[dict]
 
 
 def _id_citations(raw: object, pool: dict[str, dict], allowed_ids: set[str]) -> list[dict] | None:
-    if not isinstance(raw, list) or not 1 <= len(raw) <= 10 or any(not isinstance(item, str) or item not in allowed_ids or item not in pool for item in raw):
+    if not isinstance(raw, list) or not 1 <= len(raw) <= CARD_LIMITS['max_citation_ids'] or any(not isinstance(item, str) or item not in allowed_ids or item not in pool for item in raw):
         return None
     return [pool[item] for item in dict.fromkeys(raw)]
 
@@ -265,10 +271,18 @@ def _reduce_facts(raw: object, group: list[dict], pool: dict[str, dict], parts: 
     return list({fact['id']: fact for fact in reduced}.values()), invalid
 
 
-def _card(data: dict, facts: list[dict], parts: dict[str, SourcePart], chunks: list[PaperChunk], model: str, prompt_version: str, pool: dict[str, dict] | None = None, *, reject: Callable[[str, str], None] | None = None) -> tuple[AnalysisResult, int]:
+def _card(data: dict, facts: list[dict], parts: dict[str, SourcePart], chunks: list[PaperChunk], model: str, prompt_version: str, pool: dict[str, dict] | None = None, *, reject: Callable[[str, str], None] | None = None, additional_sources: list[dict] | None = None) -> tuple[AnalysisResult, int]:
     raw = data.get('card') if isinstance(data.get('card'), dict) else data
     allowed = [citation for fact in facts for citation in fact['citations']]
     lookup = {chunk.id: chunk for chunk in chunks}
+    # The reviewer may need a previously uncited table header or comparator
+    # row. Only trusted, unchanged passages from this paper's local catalog
+    # can extend the quote scope; no fabricated parent fact is introduced.
+    for source in additional_sources or []:
+        if isinstance(source, dict) and source.get('chunk_id') in lookup:
+            verified_source = _verified_citations([source], parts)
+            if verified_source:
+                allowed.extend(verified_source)
     result = AnalysisResult(model_version=model, prompt_version=prompt_version)
     invalid = 0
     def entry(value: object, field: str, section_summary: bool = False) -> CardEntry | None:
@@ -276,7 +290,7 @@ def _card(data: dict, facts: list[dict], parts: dict[str, SourcePart], chunks: l
         if value is None:
             return None
         content = value.get('content') if isinstance(value, dict) else None
-        if not isinstance(content, str) or not 1 <= len(content.strip()) <= 8000:
+        if not isinstance(content, str) or not 1 <= len(content.strip()) <= CARD_LIMITS['max_content_chars']:
             if reject:
                 reject('invalid_content', field)
             invalid += 1
@@ -336,7 +350,8 @@ def _card(data: dict, facts: list[dict], parts: dict[str, SourcePart], chunks: l
 
 def _usage(calls: list[CallResult]) -> dict:
     remote = [call for call in calls if not call.cached]
-    unknown = sum(not call.usage for call in remote)
+    unknown = sum(call.usage.get('input_tokens', call.usage.get('prompt_tokens')) is None
+        or call.usage.get('output_tokens', call.usage.get('completion_tokens')) is None for call in remote)
     def total(primary: str, alternate: str) -> int | float | None:
         values = [call.usage.get(primary, call.usage.get(alternate)) for call in remote]
         return None if any(value is None for value in values) else sum(values)
@@ -352,10 +367,10 @@ def analyze_full_paper(database: Database, provider, chunks: list[PaperChunk], *
     catalogs = [source_passages(window) for window in windows]
     parts = {part.part_id: part for sources in catalogs for part in sources.values()}
     prompts = {name: (PROMPTS_DIR / name).read_text(encoding='utf-8-sig') for name in PROMPT_NAMES}
-    extract_prompt, reduce_prompt, synth_prompt = (prompts[name] for name in PROMPT_NAMES)
+    extract_prompt, reduce_prompt, synth_prompt, repair_prompt, review_prompt = (prompts[name] for name in PROMPT_NAMES)
     run_fingerprint = analysis_fingerprint(provider, chunks, prompts=prompts)
     prompt_version = 'staged:' + hashlib.sha256(json.dumps(prompts, sort_keys=True).encode()).hexdigest()[:64]
-    report = {'prompt_version': prompt_version, 'coverage': {'total_chars': sum(len(part.content) for part in parts.values()), 'processed_chars': 0, 'total_windows': len(windows), 'processed_windows': 0, 'complete': False}, 'invalid_entries': 0, 'rejections': [], 'structure': extract_structure(chunks)}
+    report = {'prompt_version': prompt_version, 'coverage': {'total_chars': sum(len(part.content) for part in parts.values()), 'processed_chars': 0, 'total_windows': len(windows), 'processed_windows': 0, 'complete': False}, 'invalid_entries': 0, 'repaired_entries': 0, 'rejections': [], 'recoveries': [], 'structure': extract_structure(chunks)}
     calls: list[CallResult] = []
     descriptors: list[tuple[str, dict, str, int, str]] = []
     facts: list[dict] = []
@@ -364,6 +379,7 @@ def analyze_full_paper(database: Database, provider, chunks: list[PaperChunk], *
         if cancelled and cancelled():
             raise AnalysisCancelled()
     current_phase = 'extract'
+    recovery_calls = 0
     def publish(phase: str):
         nonlocal current_phase
         current_phase = phase
@@ -376,14 +392,34 @@ def analyze_full_paper(database: Database, provider, chunks: list[PaperChunk], *
             if len(report['rejections']) < 100:
                 report['rejections'].append({'phase': phase, **location, 'field': field, 'reason': reason})
         return reject
+    def reserve_recovery() -> bool:
+        nonlocal recovery_calls
+        if recovery_calls >= MAX_RECOVERY_CALLS:
+            return False
+        recovery_calls += 1
+        return True
     def call(system: str, payload: dict, operation: str, effort: str, budget: int = 6000) -> CallResult:
         check()
-        try:
-            response = json_call(database, provider, system, payload, operation, budget, effort)
-        except ProviderError:
-            calls.append(CallResult({}, sanitize_usage(getattr(provider, 'last_usage', {})), False, getattr(provider, 'response_model', None) or getattr(provider, 'model', '')))
-            publish(current_phase)
-            raise
+        for attempt in range(MAX_TRANSPORT_RETRIES + 1):
+            try:
+                response = json_call(database, provider, system, payload, operation, budget, effort)
+                break
+            except ProviderError as error:
+                calls.append(CallResult({}, sanitize_usage(getattr(provider, 'last_usage', {})), False, getattr(provider, 'response_model', None) or getattr(provider, 'model', '')))
+                publish(current_phase)
+                if not getattr(error, 'retryable', False) or attempt == MAX_TRANSPORT_RETRIES or not reserve_recovery():
+                    raise
+                requested = getattr(error, 'retry_after', None)
+                delay = min(30.0, max(0.0, requested if isinstance(requested, (int, float)) else 2 ** attempt))
+                report['recoveries'].append({'phase': current_phase, 'operation': operation,
+                    'kind': 'transport_retry', 'attempt': attempt + 1, 'code': error.code, 'delay_seconds': delay})
+                publish(current_phase)
+                while delay > 0:
+                    check()
+                    step = min(.25, delay)
+                    time.sleep(step)
+                    delay -= step
+                check()
         calls.append(response)
         descriptors.append((system, payload, operation, budget, effort))
         publish(current_phase)
@@ -428,17 +464,61 @@ def analyze_full_paper(database: Database, provider, chunks: list[PaperChunk], *
         total += len(groups)
         reduced = []
         previous_size = _context_size(facts, pool)
+        level_descriptors_start = len(descriptors)
         for group_index, group in enumerate(groups):
             publish('reduce')
             max_facts = max(1, min(12, (len(group) + 1) // 2))
             payload = {**_model_context(group, pool), 'stage': 'reduce', 'level': level, 'max_facts': max_facts, 'target_context_chars': int(_context_size(group, pool) * 0.7)}
-            response = call(reduce_prompt, payload, 'paper_reduce', 'medium')
+            checkpoint = cached_call(database, provider, repair_prompt, payload, 'paper_corrected_reduce_v1', 6000, 'high')
+            if checkpoint:
+                try:
+                    checkpoint_facts, checkpoint_invalid = _reduce_facts(checkpoint.data.get('facts'), group, pool, parts, max_facts=max_facts)
+                    if checkpoint_invalid or _context_size(checkpoint_facts, pool) >= _context_size(group, pool):
+                        raise ProviderError('已缓存归纳仍包含未验证条目')
+                except ProviderError:
+                    evict_call(database, provider, repair_prompt, payload, 'paper_corrected_reduce_v1', 6000, 'high')
+                    checkpoint = None
+            if checkpoint:
+                response = checkpoint
+                calls.append(response)
+                descriptors.append((repair_prompt, payload, 'paper_corrected_reduce_v1', 6000, 'high'))
+                publish('reduce')
+                check()
+            else:
+                response = call(reduce_prompt, payload, 'paper_reduce', 'medium')
+            rejection_start = len(report['rejections'])
             try:
                 verified, invalid = _reduce_facts(response.data.get('facts'), group, pool, parts, max_facts=max_facts, reject=diagnostics('reduce', level=level, group_index=group_index))
             except ProviderError:
                 evict_call(database, provider, *descriptors[-1])
                 publish('reduce')
-                raise
+                if not reserve_recovery():
+                    raise
+                aliases = {f'F{index:05d}': fact['id'] for index, fact in enumerate(group, 1)}
+                correction = {**payload, 'stage': 'repair_reduce', 'validation_errors': [
+                    {'field': item['field'], 'reason': item['reason']} for item in report['rejections'][rejection_start:]]}
+                correction['facts'] = [{**fact, 'id': alias} for alias, fact in zip(aliases, payload['facts'])]
+                response = call(repair_prompt, correction, 'paper_repair_reduce_v1', 'high')
+                entries = response.data.get('facts')
+                if isinstance(entries, list):
+                    entries = [{**entry, 'fact_ids': [aliases.get(parent, 'unknown-parent') for parent in entry['fact_ids']]}
+                        if isinstance(entry, dict) and isinstance(entry.get('fact_ids'), list)
+                        and all(isinstance(parent, str) for parent in entry['fact_ids']) else entry for entry in entries]
+                try:
+                    verified, invalid = _reduce_facts(entries, group, pool, parts, max_facts=max_facts,
+                        reject=diagnostics('repair_reduce', level=level, group_index=group_index))
+                except ProviderError:
+                    evict_call(database, provider, *descriptors[-1])
+                    publish('reduce')
+                    raise
+                for item in report['rejections'][rejection_start:]:
+                    if item['phase'] == 'reduce':
+                        item['resolved'] = True
+                if not invalid and _context_size(verified, pool) < _context_size(group, pool):
+                    cache_validated_call(database, provider, repair_prompt, payload, 'paper_corrected_reduce_v1',
+                        CallResult({'facts': entries}, response.usage, response.cached, response.model), 6000, 'high')
+                report['recoveries'].append({'phase': 'reduce', 'kind': 'group_correction',
+                    'level': level, 'group_index': group_index, 'retained_parents': len(group)})
             if not verified:
                 evict_call(database, provider, *descriptors[-1])
                 raise ProviderError('模型归纳没有可验证的事实，已有结果已保留')
@@ -450,7 +530,7 @@ def analyze_full_paper(database: Database, provider, chunks: list[PaperChunk], *
             publish('reduce')
         facts = list({fact['id']: fact for fact in reduced}.values())
         if _context_size(facts, pool) >= previous_size:
-            for descriptor in descriptors[-len(groups):]:
+            for descriptor in descriptors[level_descriptors_start:]:
                 evict_call(database, provider, *descriptor)
             raise ProviderError('模型归纳未缩减上下文，已有结果已保留')
     if _context_size(facts, pool) > REDUCE_CHARS:
@@ -461,16 +541,77 @@ def analyze_full_paper(database: Database, provider, chunks: list[PaperChunk], *
         raise ProviderError('归纳未保留全部已验证事实的来源，已有结果已保留')
     publish('synthesize')
     response = call(synth_prompt, {**_model_context(facts, pool), 'coverage': report['coverage'], 'fact_coverage': report['fact_coverage']}, 'paper_synthesize', getattr(provider, 'reasoning_effort', 'high'), 10000)
+    synth_descriptor = descriptors[-1]
+    rejection_start = len(report['rejections'])
+    card_error = None
     try:
         analysis, invalid = _card(response.data, facts, parts, chunks, response.model, prompt_version, pool, reject=diagnostics('synthesize'))
-    except ProviderError:
-        evict_call(database, provider, *descriptors[-1])
+    except ProviderError as error:
+        card_error = error
+        analysis, invalid = None, len(report['rejections']) - rejection_start
+    targets = repair_targets(response.data, report['rejections'][rejection_start:])
+    if targets and reserve_recovery():
+        correction = {**_model_context(facts, pool), 'stage': 'repair_card', 'targets': targets}
+        check()
+        try:
+            corrected = call(repair_prompt, correction, 'paper_repair_card_v1', 'high')
+        except ProviderError as error:
+            # Repair is optional when a validated partial card already exists.
+            # An outage must not throw away its accepted entries.
+            report['recoveries'].append({'phase': 'synthesize', 'kind': 'card_correction_failed',
+                'code': error.code, 'requested_fields': [target['field'] for target in targets]})
+        else:
+            validate = lambda data: _card(data, facts, parts, chunks, corrected.model, prompt_version, pool)
+            patched, resolved = apply_repairs(response.data, targets, corrected.data.get('repairs'), validate)
+            if resolved:
+                try:
+                    repaired, remaining = validate(patched)
+                    if not preserves_entries(analysis, repaired):
+                        raise ProviderError('字段纠错不能丢弃已核验的卡片条目')
+                except ProviderError:
+                    resolved = set()
+                else:
+                    analysis, card_error = repaired, None
+                    report['repaired_entries'] += max(0, invalid - remaining)
+                    invalid = remaining
+                    for item in report['rejections'][rejection_start:]:
+                        if resolved_field(item['field'], resolved):
+                            item['resolved'] = True
+            report['recoveries'].append({'phase': 'synthesize', 'kind': 'card_correction',
+                'requested_fields': [target['field'] for target in targets], 'resolved_fields': sorted(resolved)})
+            if invalid or card_error:
+                evict_call(database, provider, *descriptors[-1])
+    if invalid or card_error:
+        evict_call(database, provider, *synth_descriptor)
+    if card_error:
         publish('synthesize')
-        raise
-    if invalid:
-        evict_call(database, provider, *descriptors[-1])
+        raise card_error
     report['invalid_entries'] += invalid
-    report['partial'] = report['invalid_entries'] > 0
+    review_descriptors = []
+    def science_call(payload):
+        nonlocal total, completed
+        total += 1
+        publish('synthesize')
+        reviewed = call(review_prompt, payload, 'paper_science_review_v1', 'high')
+        review_descriptors.append(descriptors[-1])
+        completed += 1
+        publish('synthesize')
+        return reviewed.data
+    science_validate = lambda data, sources: _card(data, facts, parts, chunks,
+        response.model, prompt_version, pool, additional_sources=sources)
+    analysis, science = run_science_review(analysis, parts, science_call, science_validate)
+    report['science_review'] = science
+    for index in science['invalid_response_batches']:
+        evict_call(database, provider, *review_descriptors[index])
+    for outcome in science['results']:
+        for field, reason in outcome['rejection_reasons'].items():
+            if len(report['rejections']) < 100:
+                report['rejections'].append({'phase': 'science_review', 'field': field, 'reason': reason})
+    report['invalid_entries'] += science['rejected_items'] + science['card_invalid_entries']
+    report['partial'] = report['invalid_entries'] > 0 or science['partial']
+    if science.get('no_supported_card'):
+        publish('synthesize')
+        raise ProviderError('科学复核后没有可发布的卡片，已有结果已保留', code='science_support')
     report['accepted_card_fields'] = [field for field, value in analysis.card.items() if value]
     report['missing_fields'] = [field for field, value in analysis.card.items() if not value]
     report['citation_count'] = len(analysis.citations)

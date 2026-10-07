@@ -4,6 +4,7 @@ import json
 import hashlib
 import math
 import time
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 import httpx
@@ -70,16 +71,65 @@ class OpenAICompatibleProvider:
         return None if self.reasoning_effort == 'disabled' else requested or self.reasoning_effort
 
     @staticmethod
+    def _retry_after(response: httpx.Response) -> float | None:
+        value = response.headers.get('retry-after', '').strip()
+        if not value:
+            return None
+        if value.isascii() and value.isdecimal():
+            return min(float(value), 30.0)
+        try:
+            date = parsedate_to_datetime(value)
+            if date.tzinfo is None:
+                return None
+            return min(max(date.timestamp() - time.time(), 0.0), 30.0)
+        except (ValueError, TypeError, OverflowError, OSError):
+            return None
+
+    def _record_response_metadata(self, data: dict) -> None:
+        # A later event without usage must not erase actual earlier usage.
+        if 'usage' in data:
+            self.last_usage = sanitize_usage(data['usage'])
+        if data.get('model'):
+            self.response_model = str(data['model'])[:200]
+
+    @staticmethod
+    def _upstream_failure(error: object) -> ProviderError:
+        # Only documented codes affect recovery; upstream text is never copied.
+        code = error.get('code') if isinstance(error, dict) else None
+        if not isinstance(code, str):
+            code = None
+        if code in {'rate_limit', 'rate_limit_error', 'rate_limit_exceeded'}:
+            return ProviderError('模型服务请求受限，请稍后重试', 503, code='rate_limit', retryable=True)
+        if code == 'server_error':
+            return ProviderError('模型服务暂时失败，请稍后重试；已有结果已保留', code='upstream_error', retryable=True)
+        if code in {'invalid_api_key', 'authentication_error', 'permission_denied'}:
+            return ProviderError('模型服务认证失败，请检查 API key 与账户权限', code='authentication')
+        if code == 'invalid_request_error':
+            return ProviderError('模型服务拒绝请求，请检查模型与接口配置', code='invalid_request')
+        return ProviderError('模型服务请求失败，已有结果已保留', code='upstream_error')
+
+    @classmethod
+    def _response_failure(cls, data: dict) -> ProviderError:
+        if data.get('status') == 'failed':
+            return cls._upstream_failure(data.get('error'))
+        if data.get('status') == 'incomplete':
+            details = data.get('incomplete_details')
+            if isinstance(details, dict) and details.get('reason') == 'max_output_tokens':
+                return ProviderError('模型输出预算不足，请提高输出预算；已有结果已保留', code='output_budget')
+            return ProviderError('模型输出未完整完成，已有结果已保留', code='output_incomplete')
+        return ProviderError('模型服务响应格式无效，已有结果已保留', code='invalid_response')
+
+    @staticmethod
     def _read_json_response(response: httpx.Response, deadline: float) -> bytes:
         content = bytearray()
         for chunk in response.iter_bytes():
             if time.monotonic() > deadline:
-                raise ProviderError('模型服务请求超过时限，请重试；已有结果已保留', 504)
+                raise ProviderError('模型服务请求超过时限，请重试；已有结果已保留', 504, code='transport_timeout', retryable=True)
             if len(content) + len(chunk) > 1000000:
-                raise ProviderError('模型服务响应过大，已拒绝处理')
+                raise ProviderError('模型服务响应过大，已拒绝处理', code='invalid_response')
             content.extend(chunk)
         if time.monotonic() > deadline:
-            raise ProviderError('模型服务请求超过时限，请重试；已有结果已保留', 504)
+            raise ProviderError('模型服务请求超过时限，请重试；已有结果已保留', 504, code='transport_timeout', retryable=True)
         return bytes(content)
 
     def _stream_response(self, response: httpx.Response, deadline: float) -> dict:
@@ -89,9 +139,9 @@ class OpenAICompatibleProvider:
             size += len(chunk)
             # SSE repeats text in delta/done/final events and carries IDs per token.
             if size > 8000000:
-                raise ProviderError('模型服务响应过大，已拒绝处理')
+                raise ProviderError('模型服务响应过大，已拒绝处理', code='invalid_response')
             if time.monotonic() > deadline:
-                raise ProviderError('模型流式请求超过时限，请重试；已有结果已保留', 504)
+                raise ProviderError('模型流式请求超过时限，请重试；已有结果已保留', 504, code='transport_timeout', retryable=True)
             buffer.extend(chunk)
             while (newline := buffer.find(b'\n')) >= 0:
                 line = bytes(buffer[:newline]).rstrip(b'\r')
@@ -100,34 +150,39 @@ class OpenAICompatibleProvider:
                     fields.append(line[5:].lstrip())
                     field_size += len(line)
                     if field_size > 1000000:
-                        raise ProviderError('模型服务响应过大，已拒绝处理')
+                        raise ProviderError('模型服务响应过大，已拒绝处理', code='invalid_response')
                     continue
                 if line or not fields:
                     continue
                 raw, fields, field_size = b'\n'.join(fields), [], 0
                 if raw == b'[DONE]':
-                    raise ProviderError('模型流式连接结束但未完成输出，请重试；已有结果已保留')
+                    raise ProviderError('模型流式连接结束但未完成输出，请重试；已有结果已保留', code='stream_interrupted', retryable=True)
                 try:
                     event = json.loads(raw)
                     if not isinstance(event, dict):
                         raise ValueError()
                 except (ValueError, UnicodeDecodeError):
-                    raise ProviderError('模型流式响应格式无效，已有结果已保留') from None
+                    raise ProviderError('模型流式响应格式无效，已有结果已保留', code='invalid_response') from None
                 event_type = event.get('type')
+                if not isinstance(event_type, str) or not event_type:
+                    raise ProviderError('模型流式响应格式无效，已有结果已保留', code='invalid_response')
+                if isinstance(event.get('response'), dict):
+                    self._record_response_metadata(event['response'])
                 if event_type == 'error':
-                    raise ProviderError('模型流式请求失败，请重试；已有结果已保留')
+                    self._record_response_metadata(event)
+                    raise self._upstream_failure(event.get('error', event))
                 if event_type in ('response.completed', 'response.incomplete', 'response.failed'):
                     if not isinstance(event.get('response'), dict):
-                        raise ProviderError('模型流式响应格式无效，已有结果已保留')
+                        raise ProviderError('模型流式响应格式无效，已有结果已保留', code='invalid_response')
+                    if event['response'].get('status') != event_type.removeprefix('response.'):
+                        raise ProviderError('模型流式响应格式无效，已有结果已保留', code='invalid_response')
                     if event_type != 'response.completed':
-                        self.last_usage = sanitize_usage(event['response'].get('usage'))
-                        self.response_model = str(event['response'].get('model') or self.model)[:200]
-                        raise ProviderError('模型流式输出未完整完成，请重试；已有结果已保留')
+                        raise self._response_failure(event['response'])
                     return event['response']
             # Check incomplete lines before a peer can accumulate unbounded text.
             if len(buffer) > 1000000:
-                raise ProviderError('模型服务响应过大，已拒绝处理')
-        raise ProviderError('模型流式连接结束但未完成输出，请重试；已有结果已保留')
+                raise ProviderError('模型服务响应过大，已拒绝处理', code='invalid_response')
+        raise ProviderError('模型流式连接结束但未完成输出，请重试；已有结果已保留', code='stream_interrupted', retryable=True)
 
     def _complete(self, system: str, user: str, *, json_output: bool, max_output_tokens: int = 3000, reasoning_effort: str | None = None) -> str:
         self.last_usage = {}
@@ -159,38 +214,51 @@ class OpenAICompatibleProvider:
                         else:
                             response_content = self._read_json_response(response, deadline)
         except httpx.TimeoutException:
-            raise ProviderError('模型服务请求超时，请稍后重试；原文和已有结果已保留',504) from None
+            raise ProviderError('模型服务请求超时，请稍后重试；原文和已有结果已保留',504, code='transport_timeout', retryable=True) from None
+        except httpx.RemoteProtocolError:
+            raise ProviderError('模型服务连接中断，请稍后重试；原文和已有结果已保留', code='transport_protocol', retryable=True) from None
+        except httpx.NetworkError:
+            raise ProviderError('无法连接模型服务，请稍后重试；原文已保留', code='transport_connection', retryable=True) from None
+        except (httpx.LocalProtocolError, httpx.UnsupportedProtocol):
+            raise ProviderError('模型请求协议无效，请检查接口配置；原文已保留', code='invalid_request') from None
+        except httpx.DecodingError:
+            raise ProviderError('模型服务响应格式无效，已有结果已保留', code='invalid_response') from None
         except httpx.HTTPError:
             raise ProviderError('无法连接模型服务，请检查模型地址和网络；原文已保留') from None
         if response.status_code in {401,403}:
-            raise ProviderError('模型服务认证失败，请检查 API key 与账户权限')
+            raise ProviderError('模型服务认证失败，请检查 API key 与账户权限', code='authentication')
         if response.status_code == 429:
-            raise ProviderError('模型服务请求受限，请稍后重试',503)
+            raise ProviderError('模型服务请求受限，请稍后重试',503, code='rate_limit', retryable=True, retry_after=self._retry_after(response))
         if response.status_code in {408, 504, 524}:
-            raise ProviderError(f'模型网关等待响应超时（HTTP {response.status_code}），请稍后重试；已有结果已保留', 504)
+            raise ProviderError(f'模型网关等待响应超时（HTTP {response.status_code}），请稍后重试；已有结果已保留', 504, code='upstream_timeout', retryable=True, retry_after=self._retry_after(response))
         if not response.is_success:
-            raise ProviderError('模型服务返回错误，请检查所选模型、接口协议与 JSON 输出配置')
+            retryable = response.status_code in {500, 502, 503}
+            raise ProviderError('模型服务返回错误，请检查所选模型、接口协议与 JSON 输出配置',
+                code='upstream_error' if response.status_code >= 500 else 'invalid_request', retryable=retryable,
+                retry_after=self._retry_after(response) if retryable else None)
         try:
             data = streamed if streamed is not None else json.loads(response_content)
             if not isinstance(data, dict):
                 raise ValueError('Expected response object')
-            self.last_usage = sanitize_usage(data.get('usage'))
+            self._record_response_metadata(data)
             self.response_model = str(data.get('model') or self.model)[:200]
             if self.wire_api == 'responses':
                 if data.get('status') != 'completed':
-                    raise ProviderError('模型输出未完整完成，请重试或提高输出预算；已有结果已保留')
+                    raise self._response_failure(data)
                 content = ''.join(block['text'] for output in data['output'] if isinstance(output, dict) and output.get('type') == 'message' for block in output.get('content', []) if isinstance(block, dict) and block.get('type') == 'output_text' and isinstance(block.get('text'), str))
             else:
                 choice = data['choices'][0]
                 if choice.get('finish_reason') not in {None, 'stop'}:
-                    raise ProviderError('模型输出未完整完成，请重试或提高输出预算；已有结果已保留')
+                    if choice.get('finish_reason') == 'length':
+                        raise ProviderError('模型输出预算不足，请提高输出预算；已有结果已保留', code='output_budget')
+                    raise ProviderError('模型输出未完整完成，已有结果已保留', code='output_incomplete')
                 content = choice['message']['content']
             if not isinstance(content,str) or not content.strip():
                 raise ValueError('No model content')
             self.response_model = str(data.get('model') or self.model)[:200]
             return content.strip()
         except (KeyError,IndexError,ValueError,TypeError,AttributeError):
-            raise ProviderError('模型服务返回了无法读取的结果，已有结果已保留') from None
+            raise ProviderError('模型服务返回了无法读取的结果，已有结果已保留', code='invalid_response') from None
 
     def _json(self, prompt: str, data: dict[str, Any]) -> dict[str, Any]:
         return self.complete_json(prompt, data, max_output_tokens=3000)
@@ -203,7 +271,7 @@ class OpenAICompatibleProvider:
                 raise ValueError('Expected object')
             return result
         except (json.JSONDecodeError,ValueError):
-            raise ProviderError('模型返回的结构化 JSON 无效，已有结果已保留') from None
+            raise ProviderError('模型返回的结构化 JSON 无效，已有结果已保留', code='invalid_response') from None
 
     @staticmethod
     def _context(chunks: list[PaperChunk], *, prioritize_sections: bool = True) -> tuple[list[dict[str, str | None]],dict[str,str]]:

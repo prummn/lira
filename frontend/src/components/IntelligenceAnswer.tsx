@@ -15,10 +15,15 @@ export function CoverageSummary({report}:{report?:IntelligenceReport|null}) {
   const total=coverage.total_windows??coverage.windows_total
   const chars=coverage.processed_characters??coverage.processed_chars
   const charsTotal=coverage.total_characters??coverage.total_chars
-  const reasonKeys={quote_not_found:'rejectionQuote',unknown_source:'rejectionSource',source_mismatch:'rejectionSource',invalid_source_ids:'rejectionSource',invalid_citation_ids:'rejectionSource',quote_outside_evidence:'rejectionSource',section_mismatch:'rejectionSection',incomplete_lineage:'rejectionLineage',missing_parent_citations:'rejectionLineage',invalid_parent_ids:'rejectionLineage',citation_budget:'rejectionBudget'} as const
+  const science=report?.science_review
+  const review=science&&typeof science==='object'&&!Array.isArray(science)?science as Record<string,unknown>:null
+  const structure=report?.source_structure
+  const sourceSections=structure&&typeof structure==='object'&&!Array.isArray(structure)?structure as Record<string,unknown>:null
+  const reviewPending=(typeof review?.pending_items==='number'?review.pending_items:0)+(typeof review?.deferred_items==='number'?review.deferred_items:0)
+  const reasonKeys={quote_not_found:'rejectionQuote',unknown_source:'rejectionSource',source_mismatch:'rejectionSource',invalid_source_ids:'rejectionSource',invalid_citation_ids:'rejectionSource',quote_outside_evidence:'rejectionSource',section_mismatch:'rejectionSection',incomplete_lineage:'rejectionLineage',missing_parent_citations:'rejectionLineage',invalid_parent_ids:'rejectionLineage',citation_budget:'rejectionBudget',science_support:'rejectionScienceSupport',science_review_format:'rejectionScienceReviewFormat'} as const
   const reasons:Partial<Record<(typeof reasonKeys)[keyof typeof reasonKeys]|'rejectionFormat',number>>={}
   if(Array.isArray(report?.rejections))for(const item of report.rejections) {
-    if(item&&typeof item==='object'&&typeof item.reason==='string') {
+    if(item&&typeof item==='object'&&item.resolved!==true&&typeof item.reason==='string') {
       const category=reasonKeys[item.reason as keyof typeof reasonKeys]??'rejectionFormat'
       reasons[category]=(reasons[category]??0)+1
     }
@@ -30,7 +35,22 @@ export function CoverageSummary({report}:{report?:IntelligenceReport|null}) {
     {Array.isArray(report?.accepted_card_fields)&&<span>{t('acceptedFields')} · {report.accepted_card_fields.length}</span>}
     {Array.isArray(report?.missing_fields)&&report.missing_fields.length>0&&<span>{t('missingFields')} · {report.missing_fields.length}</span>}
     {typeof report?.invalid_entries==='number'&&report.invalid_entries>0&&<span>{t('rejectedEntries')} · {report.invalid_entries}</span>}
+    {typeof report?.repaired_entries==='number'&&report.repaired_entries>0&&<span>{t('repairedEntries')} · {report.repaired_entries}</span>}
     {Object.entries(reasons).map(([reason,count])=><span key={reason}>{t(reason as keyof typeof reasons)} · {count}</span>)}
+    {sourceSections&&<>
+      {sourceSections.available===false&&<span>{t('sourceSectionsUnavailable')}</span>}
+      {sourceSections.available===true&&sourceSections.applied===true&&typeof sourceSections.changed_chunks==='number'&&<span>{t('sourceSectionsReidentified')} · {sourceSections.changed_chunks}</span>}
+      {sourceSections.available===true&&typeof sourceSections.unmatched_chunks==='number'&&sourceSections.unmatched_chunks>0&&<span>{t('sourceSectionsUnmatched')} · {sourceSections.unmatched_chunks}</span>}
+    </>}
+    {(report?.source_structure_stale===true||sourceSections?.retained_card_uses_previous_structure===true)&&<span>{t('sourceSectionsPreviousCard')}</span>}
+    {review&&<>
+      {(typeof review.checked_items==='number'||typeof review.scheduled_items==='number')&&<span>{t('scienceReviewChecked')} · {String(review.checked_items??'—')} / {String(review.scheduled_items??'—')}</span>}
+      {typeof review.corrected_items==='number'&&<span>{t('scienceReviewCorrected')} · {review.corrected_items}</span>}
+      {reviewPending>0&&<span>{t('scienceReviewPending')} · {reviewPending}</span>}
+      {typeof review.unreviewed_card_entries==='number'&&<span>{t('scienceReviewUnreviewed')} · {review.unreviewed_card_entries}</span>}
+      {review.context_partial===true&&<span>{t('scienceReviewLimitedContext')}</span>}
+      <span className="source-check-note">{t('scienceReviewNotProven')}</span>
+    </>}
     <UsageLine usage={report?.usage}/>
   </div>
 }

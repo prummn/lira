@@ -14,8 +14,37 @@ from ..providers.base import ProviderError
 from ..providers.harness import AnalysisCancelled, analysis_fingerprint, analyze_full_paper
 from .analysis import persist_analysis_result
 from .serialization import find_paper, json_object
+from .source_sections import prepare_source_sections, source_digest, pdf_matches
 
 ACTIVE_STATUSES = ('queued', 'running')
+
+
+def publish_reviewed_partial(report: dict, analysis) -> bool:
+    """Publish valid scientific corrections/deletions, never an interrupted attempt."""
+    science = report.get('science_review') or {}
+    if (not analysis.citations or not any(analysis.card.values())
+        or report.get('coverage', {}).get('complete') is not True
+        or report.get('fact_coverage', {}).get('complete') is not True
+        or not science.get('scheduled_items')
+        or science.get('checked_items') != science.get('scheduled_items')
+        or science.get('deferred_items') or science.get('pending_items')
+        or science.get('invalid_response_batches') or science.get('no_supported_card')):
+        return False
+    rejected = science.get('rejected_items', 0)
+    cardinality = science.get('card_invalid_entries', 0)
+    drops = science.get('cardinality_drops', [])
+    tldr_rejected = any(path.startswith('tldr[') and reason == 'science_support'
+        for outcome in science.get('results', [])
+        for path, reason in outcome.get('rejection_reasons', {}).items())
+    if cardinality and (cardinality not in (1, 2) or not tldr_rejected
+        or len(drops) != 1 or drops[0].get('field') != 'tldr'
+        or drops[0].get('reason') != 'science_rejection'
+        or drops[0].get('surviving_entries') != cardinality):
+        return False
+    return (rejected > 0 and report.get('invalid_entries') == rejected + cardinality
+        and all(item.get('resolved') is True or
+            (item.get('phase') == 'science_review' and item.get('reason') == 'science_support')
+            for item in report.get('rejections', [])))
 
 
 def queue_tasks(session: Session, paper_ids: list[str], provider, force: bool = False) -> list[IntelligenceTask]:
@@ -147,9 +176,59 @@ class IntelligenceWorker:
                 source_chunks = session.scalars(select(PaperChunk).where(PaperChunk.paper_id == paper_id).order_by(PaperChunk.page, PaperChunk.id)).all()
                 # Detached value snapshots remain usable after the source transaction closes.
                 chunks = [PaperChunk(id=item.id, paper_id=paper_id, page=item.page, section=item.section, content=item.content, bbox_json=item.bbox_json, page_width=item.page_width, page_height=item.page_height) for item in source_chunks]
+                pdf_path, pdf_sha256 = task.paper.pdf_path, task.paper.sha256
+                previous_report = json_object(task.paper.intelligence_report_json)
+                previous_digest = previous_report.get('analyzed_source_digest')
+                previous_stale = previous_report.get('source_structure_stale') is True
                 session.commit()
             try:
-                result = analyze_full_paper(self.database, chosen, chunks, progress=lambda *args: self._progress(task_id, lease, *args), cancelled=lambda: self._cancelled(task_id, lease))
+                section_plan = prepare_source_sections(pdf_path, pdf_sha256, chunks)
+                if self._cancelled(task_id, lease):
+                    return True
+                structure_report = {**section_plan.report, 'planned_changed_chunks': len(section_plan.changes),
+                    'changed_chunks': 0, 'applied': False,
+                    'retained_card_uses_previous_structure': previous_stale or bool(previous_digest and previous_digest != section_plan.source_digest)}
+                self._progress(task_id, lease, 'structure', 0, 0, {'source_structure': structure_report})
+                if section_plan.report.get('failure_code') == 'pdf_changed':
+                    raise ProviderError('原始 PDF 与已存储原文不一致，请重新核对文件；已有结果已保留')
+                with self.database.sessions() as session:
+                    # Acquire a conditional write lease before touching derived source metadata.
+                    eligible = session.execute(update(IntelligenceTask).where(IntelligenceTask.id == task_id,
+                        IntelligenceTask.run_token == lease, IntelligenceTask.status == 'running').values(updated_at=datetime.now(timezone.utc))).rowcount
+                    if not eligible:
+                        return True
+                    paper = find_paper(session, paper_id)
+                    if (paper is None or paper.pdf_path != pdf_path or paper.sha256 != pdf_sha256
+                            or source_digest(paper.chunks) != section_plan.source_digest
+                            or (section_plan.report['available'] and not pdf_matches(pdf_path, pdf_sha256))):
+                        raise ProviderError('论文原文在章节识别期间发生变化，请重试；已有结果已保留')
+                    for chunk in paper.chunks:
+                        if chunk.id in section_plan.changes:
+                            chunk.section = section_plan.changes[chunk.id]
+                    for evidence in paper.evidence:
+                        if evidence.chunk_id in section_plan.changes:
+                            evidence.section = section_plan.changes[evidence.chunk_id]
+                    if section_plan.changes and paper.analysis:
+                        current_previous_report = json_object(paper.intelligence_report_json)
+                        current_previous_report['source_structure_stale'] = True
+                        paper.intelligence_report_json = json.dumps(current_previous_report, ensure_ascii=False)
+                    session.commit()
+                for chunk in chunks:
+                    if chunk.id in section_plan.changes:
+                        chunk.section = section_plan.changes[chunk.id]
+                current_digest = source_digest(chunks)
+                structure_report.update(applied=True, changed_chunks=len(section_plan.changes),
+                    retained_card_uses_previous_structure=previous_stale or bool(section_plan.changes)
+                    or bool(previous_digest and previous_digest != current_digest))
+                self._progress(task_id, lease, 'structure', 0, 0, {'source_structure': structure_report})
+                def progress(phase, completed, total, report):
+                    self._progress(task_id, lease, phase, completed, total,
+                                   {**report, 'source_structure': structure_report})
+                result = analyze_full_paper(self.database, chosen, chunks, progress=progress,
+                    cancelled=lambda: self._cancelled(task_id, lease))
+                result.report['source_structure'] = structure_report
+                result.report['analyzed_source_digest'] = current_digest
+                result.report['source_structure_stale'] = False
                 with self.database.sessions() as session:
                     # Acquire the write lock through a conditional transition before replacing ready data.
                     status = 'partial' if result.report['partial'] else 'completed'
@@ -157,11 +236,14 @@ class IntelligenceWorker:
                     if not changed:
                         return True
                     paper = find_paper(session, paper_id)
-                    if paper is None or analysis_fingerprint(chosen, list(paper.chunks)) != result.report['result_fingerprint']:
+                    if (paper is None or paper.pdf_path != pdf_path or paper.sha256 != pdf_sha256
+                            or analysis_fingerprint(chosen, list(paper.chunks)) != result.report['result_fingerprint']
+                            or (section_plan.report['available'] and not pdf_matches(pdf_path, pdf_sha256))):
                         raise ProviderError('论文原文在分析期间发生变化，请重试；已有结果已保留')
-                    retained = bool(result.report['partial'] and paper.analysis
+                    retained = bool(result.report['partial'] and not publish_reviewed_partial(result.report, result.analysis) and paper.analysis
                         and paper.analysis.mode == 'remote' and paper.analysis_status == 'ready')
                     result.report['retained_previous_card'] = retained
+                    structure_report['retained_card_uses_previous_structure'] = bool(retained and structure_report['retained_card_uses_previous_structure'])
                     session.execute(update(IntelligenceTask).where(IntelligenceTask.id == task_id,
                         IntelligenceTask.run_token == lease).values(report_json=json.dumps(result.report, ensure_ascii=False)))
                     if not retained:

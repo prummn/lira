@@ -222,20 +222,57 @@ def extract_bibliography(metadata: dict, lines: list[LayoutLine], height: float,
     return facts, {l.key for l in title_lines}
 
 
+SECTION_NUMBER = re.compile(r"^(?:\d+(?:\.\d+)*\.?|[A-Z](?:\.\d+)*\.?|[IVXLCDM]+\.)$")
+
+
+def _toc_row_keys(lines: list[LayoutLine]) -> set[tuple[int, int, int]]:
+    """Identify observed leader rows sharing a right-aligned page column.
+
+    A major TOC entry may omit leaders itself. Once two leader rows establish
+    the page-number column, suppress every title row in that same TOC column.
+    Original source lines remain intact; only heading candidates are filtered.
+    """
+    rows = []
+    for counter in lines:
+        if not counter.horizontal or not re.fullmatch(r'[1-9]\d*', counter.text):
+            continue
+        titles = [line for line in lines if line.key != counter.key and line.horizontal
+                  and abs(line.bbox[1] - counter.bbox[1]) < max(2, counter.size * .3)
+                  and line.bbox[2] < counter.bbox[0]]
+        if titles:
+            rows.append((counter, titles))
+    leader = re.compile(r'(?:\.\s*){4,}')
+    excluded = set()
+    for counter, titles in rows:
+        if not any(leader.search(line.text) for line in titles):
+            continue
+        column = [(other, title) for other, title in rows
+                  if abs(other.bbox[2] - counter.bbox[2]) < 2]
+        if len(column) < 3 or sum(any(leader.search(line.text) for line in title)
+                                 for _, title in column) < 2:
+            continue
+        for other, title in column:
+            excluded.add(other.key)
+            excluded.update(line.key for line in title)
+    return excluded
+
+
 def detect_headings(lines: list[LayoutLine], known: re.Pattern, body_size: float,
                     excluded: set[tuple[int, int, int]], first_page: bool) -> dict:
     headings = {}
+    toc_rows = _toc_row_keys(lines)
     abstract_y = min((l.bbox[1] for l in lines if ABSTRACT.fullmatch(l.text)), default=0)
-    by_position = sorted(lines, key=lambda l: (l.bbox[1], l.bbox[0]))
+    by_position = sorted((line for line in lines if line.key not in toc_rows),
+                         key=lambda l: (l.bbox[1], l.bbox[0]))
     paired = set()
     for number in by_position:
-        if not number.horizontal or not NUMBER.fullmatch(number.text):
+        if not number.horizontal or not SECTION_NUMBER.fullmatch(number.text):
             continue
         neighbors = [l for l in by_position if l.key != number.key and l.horizontal
                      and abs(l.bbox[1] - number.bbox[1]) < max(2, number.size * .3)
                      and 0 <= l.bbox[0] - number.bbox[2] <= 40
                      and (known.fullmatch(l.text) or (heading_text(l.text) and
-                          (l.bold or (l.text.isupper() and l.size >= body_size))))]
+                          (l.bold or (l.text.isupper() and l.size >= body_size * .95))))]
         if neighbors:
             title = min(neighbors, key=lambda l: l.bbox[0])
             # Preserve the established chunk split for known headings. Generic
@@ -244,7 +281,7 @@ def detect_headings(lines: list[LayoutLine], known: re.Pattern, body_size: float
             headings[start.key] = f"{number.text} {title.text}"
             paired.update((number.key, title.key))
     for line in lines:
-        if line.key in excluded or line.key in paired or not line.horizontal:
+        if line.key in excluded or line.key in toc_rows or line.key in paired or not line.horizontal:
             continue
         # Explicit abstract labels can be smaller than the main text, inline
         # with their paragraph, or aligned with a figure in the other column.
@@ -256,7 +293,7 @@ def detect_headings(lines: list[LayoutLine], known: re.Pattern, body_size: float
         # Neither is a standalone document heading.
         peers = [other for other in lines if other.key != line.key and other.horizontal
                  and abs(other.bbox[1] - line.bbox[1]) < max(2, line.size * .2)
-                 and not NUMBER.fullmatch(other.text)]
+                 and not SECTION_NUMBER.fullmatch(other.text)]
         if (len(peers) >= 2 or any(other.key[1] == line.key[1] or other.bold
                                   or min(abs(other.bbox[0] - line.bbox[2]),
                                          abs(line.bbox[0] - other.bbox[2])) < 15
@@ -291,7 +328,9 @@ def detect_headings(lines: list[LayoutLine], known: re.Pattern, body_size: float
                 for other in lines)
             if (numbered and (line.bold or line.size > body_size * 1.05
                 or (line.text.isupper() and line.size >= body_size * .95))) or (
-                    line.bold and line.size >= body_size * .95 and following_prose):
+                    (line.bold and line.size >= body_size * .95
+                     or line.text.isupper() and line.size > body_size * 1.05)
+                    and following_prose):
                 headings[line.key] = line.text
     # Wrapped numbered titles remain one section. Do not alter the original
     # lines: only their shared label is joined, with the first line as anchor.

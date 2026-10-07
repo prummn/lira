@@ -134,7 +134,9 @@ def test_legacy_analyze_api_uses_full_paper_stages_and_same_ready_contract(clien
     windows = []
     def respond(request):
         payload = json.loads(json.loads(request.content)['messages'][-1]['content'])
-        if 'chunks' in payload:
+        if payload.get('stage') == 'review_card_science':
+            answer = {'items': [{'field': item['field'], 'decision': 'supported'} for item in payload['items']]}
+        elif 'chunks' in payload:
             windows.append(payload['chunks'])
             part = payload['chunks'][-1]
             answer = {'facts': [{'content': 'A verified result.', 'citations': [{'part_id': part['part_id'], 'chunk_id': part['chunk_id'], 'source_text': part['content'][:60]}]}]}

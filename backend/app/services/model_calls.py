@@ -28,13 +28,32 @@ def request_signature(provider, system: str, payload: dict, operation: str, max_
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
 
 
-def json_call(database: Database, provider, system: str, payload: dict, operation: str, max_output_tokens: int = 6000, reasoning_effort: str | None = None) -> CallResult:
+def cached_call(database: Database, provider, system: str, payload: dict, operation: str, max_output_tokens: int = 6000, reasoning_effort: str | None = None) -> CallResult | None:
     key = request_signature(provider, system, payload, operation, max_output_tokens, reasoning_effort)
     with database.sessions() as session:
         cached = session.get(ModelCallCache, key)
         if cached:
             saved = json.loads(cached.usage_json)
             return CallResult(json.loads(cached.response_json), {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0, 'saved_usage': saved}, True, cached.model)
+
+
+def cache_validated_call(database: Database, provider, system: str, payload: dict, operation: str,
+                        result: CallResult, max_output_tokens: int = 6000, reasoning_effort: str | None = None) -> None:
+    """Save a locally revalidated correction under a distinct pipeline operation."""
+    from datetime import datetime, timezone
+    key = request_signature(provider, system, payload, operation, max_output_tokens, reasoning_effort)
+    with database.sessions() as session:
+        session.execute(insert(ModelCallCache).values(key=key, operation=operation[:100],
+            response_json=json.dumps(result.data, ensure_ascii=False), usage_json=json.dumps(result.usage),
+            model=result.model[:200], created_at=datetime.now(timezone.utc)).on_conflict_do_nothing(index_elements=['key']))
+        session.commit()
+
+
+def json_call(database: Database, provider, system: str, payload: dict, operation: str, max_output_tokens: int = 6000, reasoning_effort: str | None = None) -> CallResult:
+    cached = cached_call(database, provider, system, payload, operation, max_output_tokens, reasoning_effort)
+    if cached:
+        return cached
+    key = request_signature(provider, system, payload, operation, max_output_tokens, reasoning_effort)
     # No ORM transaction or connection is held during the potentially long network call.
     data = provider.complete_json(system, payload, max_output_tokens=max_output_tokens, reasoning_effort=reasoning_effort)
     usage = sanitize_usage(getattr(provider, 'last_usage', {}))

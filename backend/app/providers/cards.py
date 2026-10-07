@@ -8,6 +8,7 @@ from .validation import chunk_body
 SINGLE_FIELDS = ('one_sentence_summary','problem','motivation','background','core_idea','method','main_results','limitations','abstract_zh','abstract_en')
 LIST_FIELDS = ('contributions','datasets','metrics','baselines','ablation_findings','future_work','claims','related_methods','prerequisite_concepts','section_summaries','tldr')
 CARD_ALIASES = {'one_sentence_summary':'one_liner','main_results':'findings'}
+CARD_LIMITS = {'max_citation_ids': 10, 'max_citation_chars': 8000, 'max_content_chars': 8000}
 
 
 def extractive_card(chunks: list[PaperChunk], analysis: AnalysisResult) -> dict[str, CardEntry | list[CardEntry] | None]:

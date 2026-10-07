@@ -7,6 +7,227 @@ from app.models import PaperChunk
 from app.providers import get_model_provider
 
 
+def test_provider_error_metadata_keeps_existing_constructor_compatible():
+    from app.providers.base import ProviderError
+
+    legacy = ProviderError('safe message', 504)
+    assert str(legacy) == 'safe message'
+    assert legacy.status_code == 504
+    assert legacy.code == 'provider_error'
+    assert legacy.retryable is False
+    assert legacy.retry_after is None
+    transient = ProviderError('safe message', code='stream_interrupted', retryable=True, retry_after=3)
+    assert (transient.code, transient.retryable, transient.retry_after) == ('stream_interrupted', True, 3)
+
+
+@pytest.mark.parametrize('failure,code,status,retryable', [
+    (httpx.ConnectTimeout, 'transport_timeout', 504, True),
+    (httpx.ReadTimeout, 'transport_timeout', 504, True),
+    (httpx.WriteTimeout, 'transport_timeout', 504, True),
+    (httpx.PoolTimeout, 'transport_timeout', 504, True),
+    (httpx.ConnectError, 'transport_connection', 502, True),
+    (httpx.ReadError, 'transport_connection', 502, True),
+    (httpx.WriteError, 'transport_connection', 502, True),
+    (httpx.RemoteProtocolError, 'transport_protocol', 502, True),
+    (httpx.LocalProtocolError, 'invalid_request', 502, False),
+    (httpx.DecodingError, 'invalid_response', 502, False),
+])
+@pytest.mark.parametrize('wire', ['chat_completions', 'responses'])
+def test_transport_failure_classification_is_safe_and_never_retries_inside_provider(failure, code, status, retryable, wire):
+    from app.providers.base import ProviderError
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        raise failure('test-secret https://private.example unsafe upstream detail', request=request)
+
+    provider = OpenAICompatibleProvider(api_key='test-secret', wire_api=wire, transport=httpx.MockTransport(respond))
+    provider.last_usage = {'input_tokens': 999}
+    with pytest.raises(ProviderError) as error:
+        provider.complete_json('JSON', {}, max_output_tokens=300)
+    assert (error.value.code, error.value.status_code, error.value.retryable) == (code, status, retryable)
+    assert error.value.retry_after is None
+    assert len(calls) == 1
+    assert provider.last_usage == {}
+    assert not any(private in str(error.value) for private in ('test-secret', 'private.example', 'unsafe upstream'))
+
+
+@pytest.mark.parametrize('status,code,retryable,api_status', [
+    (400, 'invalid_request', False, 502),
+    (401, 'authentication', False, 502),
+    (403, 'authentication', False, 502),
+    (404, 'invalid_request', False, 502),
+    (408, 'upstream_timeout', True, 504),
+    (422, 'invalid_request', False, 502),
+    (429, 'rate_limit', True, 503),
+    (500, 'upstream_error', True, 502),
+    (501, 'upstream_error', False, 502),
+    (502, 'upstream_error', True, 502),
+    (503, 'upstream_error', True, 502),
+    (504, 'upstream_timeout', True, 504),
+    (524, 'upstream_timeout', True, 504),
+])
+def test_http_failure_classification_uses_status_not_private_body(status, code, retryable, api_status):
+    from app.providers.base import ProviderError
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+
+    class PrivateBody(httpx.SyncByteStream):
+        def __iter__(self):
+            raise AssertionError('Error bodies must never be consumed or exposed')
+            yield b''
+
+    provider = OpenAICompatibleProvider(api_key='test-secret', transport=httpx.MockTransport(
+        lambda request: httpx.Response(status, headers={'retry-after': '4'}, stream=PrivateBody())))
+    with pytest.raises(ProviderError) as error:
+        provider.complete_json('JSON', {}, max_output_tokens=300)
+    assert (error.value.code, error.value.retryable, error.value.status_code) == (code, retryable, api_status)
+    assert error.value.retry_after == (4 if retryable else None)
+    assert provider.last_usage == {}
+
+
+@pytest.mark.parametrize('header,delay', [('0', 0), ('5', 5), ('999', 30), ('-1', None), ('NaN', None), ('Inf', None), ('1e3', None), ('private upstream value', None)])
+def test_retry_after_delta_seconds_is_bounded_and_invalid_values_are_ignored(header, delay):
+    from app.providers.base import ProviderError
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+
+    provider = OpenAICompatibleProvider(api_key='test', transport=httpx.MockTransport(
+        lambda request: httpx.Response(429, headers={'retry-after': header})))
+    with pytest.raises(ProviderError) as error:
+        provider.complete_json('JSON', {}, max_output_tokens=300)
+    assert error.value.retry_after == delay
+
+
+@pytest.mark.parametrize('header,delay', [('Thu, 08 Oct 2026 12:00:10 GMT', 10), ('Thu, 08 Oct 2026 12:10:00 GMT', 30), ('Thu, 08 Oct 2026 11:59:50 GMT', 0)])
+def test_retry_after_http_date_uses_current_utc_time_and_is_bounded(monkeypatch, header, delay):
+    from datetime import datetime, timezone
+    from app.providers.base import ProviderError
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+
+    monkeypatch.setattr('app.providers.openai_compatible.time.time', lambda: datetime(2026, 10, 8, 12, tzinfo=timezone.utc).timestamp())
+    provider = OpenAICompatibleProvider(api_key='test', transport=httpx.MockTransport(
+        lambda request: httpx.Response(503, headers={'retry-after': header})))
+    with pytest.raises(ProviderError) as error:
+        provider.complete_json('JSON', {}, max_output_tokens=300)
+    assert error.value.retry_after == delay
+
+
+@pytest.mark.parametrize('ending', [b'', b'data: [DONE]\n\n', 'remote_protocol', 'read_error'])
+def test_interrupted_responses_stream_never_accepts_partial_json_and_preserves_only_reported_usage(ending):
+    from app.providers.base import ProviderError
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+
+    class InterruptedStream(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b'data: {"type":"response.in_progress","response":{"status":"in_progress","usage":{"input_tokens":12,"private":"test-secret"}}}\n\n'
+            yield b'data: {"type":"response.output_text.delta","delta":"{\\"ok\\":true}"}\n\n'
+            if ending == 'remote_protocol':
+                raise httpx.RemoteProtocolError('test-secret private interruption')
+            if ending == 'read_error':
+                raise httpx.ReadError('test-secret private interruption')
+            yield ending
+
+    provider = OpenAICompatibleProvider(api_key='test-secret', wire_api='responses', transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, headers={'content-type': 'text/event-stream'}, stream=InterruptedStream())))
+    with pytest.raises(ProviderError) as error:
+        provider.complete_json('JSON', {}, max_output_tokens=300)
+    expected = {'remote_protocol': 'transport_protocol', 'read_error': 'transport_connection'}.get(ending, 'stream_interrupted')
+    assert error.value.code == expected
+    assert error.value.retryable is True
+    assert provider.last_usage == {'input_tokens': 12}
+    assert 'test-secret' not in str(error.value)
+
+
+@pytest.mark.parametrize('event_type', ['error', 'response.failed'])
+@pytest.mark.parametrize('upstream_code,code,retryable', [
+    ('server_error', 'upstream_error', True),
+    ('rate_limit_exceeded', 'rate_limit', True),
+    ('rate_limit_error', 'rate_limit', True),
+    ('invalid_api_key', 'authentication', False),
+    ('invalid_request_error', 'invalid_request', False),
+    ('private-test-secret-error', 'upstream_error', False),
+])
+def test_responses_stream_failure_classifies_only_known_error_codes(event_type, upstream_code, code, retryable):
+    from app.providers.base import ProviderError
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+
+    failure = {'code': upstream_code, 'message': 'test-secret https://private.example unsafe upstream'}
+    event = {'type': event_type}
+    if event_type == 'error':
+        event.update(failure)
+    else:
+        event['response'] = {'status': 'failed', 'error': failure, 'usage': {'input_tokens': 12, 'output_tokens': 34}}
+    provider = OpenAICompatibleProvider(api_key='test-secret', wire_api='responses', transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, headers={'content-type': 'text/event-stream'}, content=('data: '+json.dumps(event)+'\n\n').encode())))
+    with pytest.raises(ProviderError) as error:
+        provider.complete_json('JSON', {}, max_output_tokens=300)
+    assert (error.value.code, error.value.retryable) == (code, retryable)
+    assert 'test-secret' not in str(error.value)
+    assert 'private.example' not in str(error.value)
+    assert provider.last_usage == ({'input_tokens': 12, 'output_tokens': 34} if event_type == 'response.failed' else {})
+
+
+@pytest.mark.parametrize('wire', ['chat_completions', 'responses', 'responses_stream'])
+def test_output_budget_exhaustion_is_not_a_transport_retry_and_keeps_actual_usage(wire):
+    from app.providers.base import ProviderError
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+
+    usage = {'input_tokens': 12, 'output_tokens': 300, 'output_tokens_details': {'reasoning_tokens': 299}}
+    if wire == 'chat_completions':
+        data = {'choices': [{'finish_reason': 'length', 'message': {'content': '{"ok":true}'}}], 'usage': usage}
+    else:
+        data = {'status': 'incomplete', 'incomplete_details': {'reason': 'max_output_tokens'}, 'usage': usage,
+                'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': '{"ok":true}'}]}]}
+
+    def respond(request):
+        if wire == 'responses_stream':
+            return httpx.Response(200, headers={'content-type': 'text/event-stream'},
+                content=('data: '+json.dumps({'type': 'response.incomplete', 'response': data})+'\n\n').encode())
+        return httpx.Response(200, json=data)
+
+    provider = OpenAICompatibleProvider(api_key='test-secret', wire_api='responses' if wire.startswith('responses') else wire,
+        transport=httpx.MockTransport(respond))
+    with pytest.raises(ProviderError) as error:
+        provider.complete_json('JSON', {}, max_output_tokens=300)
+    assert error.value.code == 'output_budget'
+    assert error.value.retryable is False
+    assert provider.last_usage == usage
+
+
+@pytest.mark.parametrize('data', [
+    {'status': 'failed', 'error': {'code': 'server_error', 'message': 'test-secret'}},
+    {'status': 'failed', 'error': {'code': 'rate_limit_exceeded', 'message': 'test-secret'}},
+])
+def test_nonstream_responses_failure_matches_stream_classification(data):
+    from app.providers.base import ProviderError
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+
+    provider = OpenAICompatibleProvider(api_key='test-secret', wire_api='responses', transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, json=data)))
+    with pytest.raises(ProviderError) as error:
+        provider.complete_json('JSON', {}, max_output_tokens=300)
+    assert error.value.code == ('rate_limit' if data['error']['code'] == 'rate_limit_exceeded' else 'upstream_error')
+    assert error.value.retryable is True
+    assert 'test-secret' not in str(error.value)
+
+
+@pytest.mark.parametrize('event', [
+    {'type': []},
+    {'type': 'response.completed', 'response': {'status': 'in_progress'}},
+    {'type': 'response.failed', 'response': {'status': 'completed', 'error': {'code': 'server_error'}}},
+    {'type': 'response.incomplete', 'response': {'status': 'completed'}},
+])
+def test_malformed_stream_envelopes_are_nonretryable(event):
+    from app.providers.base import ProviderError
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+
+    provider = OpenAICompatibleProvider(api_key='test', wire_api='responses', transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, headers={'content-type': 'text/event-stream'}, content=('data: '+json.dumps(event)+'\n\n').encode())))
+    with pytest.raises(ProviderError) as error:
+        provider.complete_json('JSON', {}, max_output_tokens=300)
+    assert (error.value.code, error.value.retryable) == ('invalid_response', False)
+
+
 def test_model_timeout_defaults_to_600_and_allows_long_synthesis_budget() -> None:
     from app.providers.openai_compatible import OpenAICompatibleProvider
 
@@ -259,7 +480,9 @@ def provider_for(content: str | dict):
             elif isinstance(value, list):
                 for item in value:
                     yield from entries(item)
-        if 'chunks' in data and data['chunks'] and 'part_id' in data['chunks'][0]:
+        if data.get('stage') == 'review_card_science':
+            output = json.dumps({'items': [{'field': item['field'], 'decision': 'supported'} for item in data['items']]})
+        elif 'chunks' in data and data['chunks'] and 'part_id' in data['chunks'][0]:
             facts = []
             for value in entries(content):
                 citations = [{**citation, 'part_id': next((part['part_id'] for part in data['chunks'] if part['chunk_id'] == citation['chunk_id']), data['chunks'][0]['part_id'])} for citation in value['citations']]
