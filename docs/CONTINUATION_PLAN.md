@@ -19,13 +19,19 @@
 - MockProvider 仅抽取原文，不假装生成技术结论或翻译；不足以回答时拒答。
 - 示例论文、作者和关系显式标记为虚构；示例使用真实可渲染 PDF。
 - 笔记与选区来源标记 user；论文事实、AI 推断与用户判断分别显示。
-- 未接入的远程 metadata、semantic search、OCR、云同步保持明确边界。
+- arXiv/Crossref 书目补全和公开 PDF 链接导入已接入；OpenAlex/Semantic Scholar 作者与引用网络、semantic search、OCR、云同步保持后续边界。
 
 ## 核心规格补齐
 
 在真实闭环稳定后补齐统一 Paper Card schema、多层摘要与选区 Explain：结构化条目携带 evidence_ids，未报告的字段保持为空；Mock 仅摘录上下文，远端模型总结显式标记 AI 来源。迁移保留已保存笔记与分析。通过解析引用验证、跨论文引用拒绝与浏览器选区定位验证后再交付。
 
 启动脚本读取 .env 为数据，不执行其中内容；进程记录保存启动时间，停止服务核对本次启动，避免误停其他实例。
+
+## 真实论文导入补齐
+
+本轮增加官方 arXiv abs/pdf 与公开 PDF 直链导入、首页标题／有序作者／原年份识别、arXiv HTML→Atom 和 Crossref DOI 补全、字段来源与手动更正，以及保留现有原文锚点的元数据刷新。迁移版本为 `0005_import_metadata`。下载逐跳核查公开地址，权威 metadata 绑定官方来源和匹配编号，网络失败保留本地识别。集合归属失败可仅重试 membership，不重下已保存论文。
+
+真实输入使用独立官方 Attention、BERT、LoRA PDF/摘要页，来源、哈希、版本年份差异、修复前后结果及浏览器记录见 [real-paper-import-validation.md](real-paper-import-validation.md)。Mock 卡片和问答通过论文已有编号章节恢复父节上下文，保留原文摘录，不编造实验事实。有效模型真实摘要／解释／翻译质量仍未验收；后续优先按 QA 未完成边界补验证，不能以模拟传输或 demo 代替。
 
 ## 验证命令
 

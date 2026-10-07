@@ -2,6 +2,8 @@
 
 > 文档类型：**目标架构**。接口、适配器、目录与运行机制是设计约定；不能用本文证明实现已经存在。当前仓库使用 `frontend/` 与 `backend/`，尚未采用下文的 `apps/web`、`packages/shared` 完整 monorepo 结构。当前实际使用统一 API client、PDF.js、Provider protocol 与 Alembic，但未实现下文所有扩展模块。当前实现与验证情况见 [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)。
 
+当前已交付的导入链路位于 `backend/app/services/{downloads,pdf,pdf_metadata,metadata,importing}.py`：公开 PDF 下载、首页版式识别、arXiv HTML/Atom 与 Crossref DOI 补全、字段来源和手动修正。导入同步完成，前端逐文件调用；下文 jobs 队列、OpenAlex/Semantic Scholar、完整 MetadataProvider protocol 属于目标扩展。默认真实数据库与 PDF 路径是 `backend/paper_reader.db` 和 `backend/storage/`。
+
 ## 1. 总体方案
 
 MVP 采用本地单机、前后端分离的模块化单体：React + TypeScript + Vite 前端，通过 HTTP/JSON 调用 Python FastAPI；FastAPI 使用 SQLAlchemy 访问 SQLite，文件系统保存 PDF 和派生文件。开发时前端与后端分别启动，未来再用 Tauri 2 将两者打包为桌面应用。
@@ -70,6 +72,8 @@ docs/
 | GET/POST | `/api/notes` | 笔记和研究想法 |
 | GET | `/api/search` | metadata/FTS/semantic 统一搜索 |
 
+当前新增可用接口：`POST /api/papers/import-url` 接收 `{url}`；`POST /api/papers/{id}/refresh-metadata` 保留原文锚点刷新书目；`PATCH /api/papers/{id}` 可局部修改标题、作者、年份、venue、DOI 与 arXiv 编号。列表和详情增加 `source_url`、`metadata_sources`、`metadata_warnings`；当前错误响应使用 FastAPI `{detail}`。上传接口一次接收一个文件，前端批量流程逐文件调用。当前集合添加使用 `PUT`，移除使用 `DELETE`。
+
 统一错误格式：`{code, message, details, request_id}`。长任务返回 `job_id`，前端轮询 `/api/jobs/{id}`；MVP 可使用进程内任务队列，接口保持可替换为 Celery/RQ 的形状。所有时间使用 UTC 存储、前端按本地时区展示。
 
 ## 5. 关键服务与适配器
@@ -101,6 +105,12 @@ class MetadataProvider(Protocol):
 
 按 OpenAlex、Semantic Scholar、Crossref 分别实现并记录 provider/source_id；合并逻辑放在 `MetadataResolver`，业务层不直接调用厂商 SDK。网络不可用时导入仍可使用文件名和 PDF 内嵌元数据。
 
+当前实现用 `enrich_metadata` 返回 fields/sources/warnings：arXiv citation HTML 必须匹配论文编号，缺失或无效时尝试 Atom；最终地址须为官方 HTTPS 来源。Crossref 必须返回匹配 DOI，且不能覆盖已取得的 arXiv 标题、作者或首次提交年份。手动字段在合并时优先。公开 HTTP 下载逐重定向检查 DNS 解析结果、拒绝私网地址，连接固定到已检查的 IP，保留 Host/TLS 校验，并限制响应大小、读超时和流式总预算。全文 PDF 保存在本机；元数据查询只发送编号，不调用 LLM。
+
+重新识别不会重建现有 chunks：只在页面、原文和 bbox 可匹配时修正其 section；无法匹配的块保留 ID、内容与定位并提示。保存书目时同步卡片标题，既有分析内容需主动重新分析。Mock 分析和问答从论文已出现的编号章节恢复父节上下文，使 `6.1` 正文可归入 `6 Results` 的摘录候选；引用仍核对真实原文。
+
+解析器在两栏持续正文页面中按 body columns 和 full-width bands 传播 section，以避免右栏标题误标左栏训练段；输出 chunk 仍按既有原始块顺序，保留文本和 bbox。真实 BERT 470 块与 Attention 544 块已逐项验证兼容；此规则仍是局部版式启发式，复杂多栏文档需要另行验收。
+
 ### 检索服务
 
 MVP 使用 SQLite FTS5 对 paper_chunks 建全文索引；`SearchService` 统一 metadata、全文和 semantic 三类结果，并返回 `match_type`、score、chunk_id。Embedding 通过接口隔离，默认 MockProvider，不强制安装向量数据库。
@@ -121,7 +131,7 @@ MVP 使用 SQLite FTS5 对 paper_chunks 建全文索引；`SearchService` 统一
 
 ## 7. 非功能要求
 
-- 本地默认不出网；出网仅在用户主动使用 Metadata Provider 或远程 LLM 时发生。
+- 正文解析、摘录和保存本地完成；用户导入 PDF 或重新识别时，检测到 arXiv/DOI 编号会查询官方书目，链接导入会下载全文。远程 LLM 仅由显式分析、问答、解释、翻译操作触发。
 - API 和数据库操作必须可重复执行，导入以 sha256 去重。
 - 大文件上传使用流式写入；PDF 解析和分析在后台 job 中执行，避免阻塞 HTTP。
 - SQLite 开启 WAL、外键约束和合理索引；写入事务短小明确。

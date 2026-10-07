@@ -1,4 +1,4 @@
-import type { Answer, Collection, ExplainStyle, Graph, ModelSettings, Note, NoteKind, Paper, PaperDetail, ReadingStatus, SearchHit } from '../types'
+import type { Answer, Collection, ExplainStyle, Graph, ModelSettings, Note, NoteKind, Paper, PaperDetail, PaperMetadataUpdate, ReadingStatus, SearchHit } from '../types'
 
 export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); this.name = 'ApiError' }
@@ -33,8 +33,10 @@ export const api = {
   papers: loadPapers,
   collections: () => request<{ items: Collection[] }>('/collections'),
   paper: (id: string) => request<PaperDetail>(`/papers/${encodeURIComponent(id)}`),
-  update: (id: string, body: { is_favorite?: boolean; reading_status?: ReadingStatus; tags?: string[] }) => request<Paper>(`/papers/${encodeURIComponent(id)}`, { method: 'PATCH', ...json(body) }),
+  update: (id: string, body: PaperMetadataUpdate & { is_favorite?: boolean; reading_status?: ReadingStatus; tags?: string[] }) => request<Paper>(`/papers/${encodeURIComponent(id)}`, { method: 'PATCH', ...json(body) }),
   import: (file: File) => { const body = new FormData(); body.append('file', file); return request<PaperDetail>('/papers/import', { method: 'POST', body }) },
+  importUrl: (url: string) => request<PaperDetail>('/papers/import-url', { method: 'POST', ...json({url}) }),
+  refreshMetadata: (id: string) => request<PaperDetail>(`/papers/${encodeURIComponent(id)}/refresh-metadata`, { method: 'POST' }),
   createCollection: (name: string, description: string) => request<Collection>('/collections', { method: 'POST', ...json({ name, description, color: '#536f89' }) }),
   membership: (collectionId: string, paperId: string, add: boolean) => request<unknown>(`/collections/${encodeURIComponent(collectionId)}/papers/${encodeURIComponent(paperId)}`, { method: add ? 'PUT' : 'DELETE' }),
   analyze: (id: string) => request<PaperDetail>(`/papers/${encodeURIComponent(id)}/analyze`, { method: 'POST' }),

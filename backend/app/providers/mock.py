@@ -5,14 +5,15 @@ import re
 from ..models import PaperChunk
 from .base import AnalysisResult, AnswerResult
 from .validation import chunk_body as body
+from .sections import section_contexts
 
 STOPWORDS = set(
     "a an the and or of to in on at for with is are was were be been this that it we our how what which who why does do did has have can from through about paper tell me explain happened".split()
 )
 SECTION_TERMS = {
     "problem": ("problem", "introduction", "background", "引言"),
-    "method": ("method", "approach", "方法"),
-    "findings": ("result", "finding", "evaluation", "结果"),
+    "method": ("method", "architecture", "pre-training", "pretraining", "adaptation", "方法", "approach"),
+    "findings": ("result", "finding", "evaluation", "experiment", "结果"),
     "limitations": ("limitation", "discussion", "局限"),
 }
 SCIENTIFIC_TERMS = (
@@ -48,6 +49,7 @@ class MockProvider:
     translation_available = False
 
     def analyze(self, chunks: list[PaperChunk]) -> AnalysisResult:
+        sections = section_contexts(chunks)
         useful = [chunk for chunk in chunks if body(chunk) and len(body(chunk)) > 30]
         abstract = next(
             (
@@ -63,14 +65,10 @@ class MockProvider:
         )
         chosen = [abstract or useful[0]] if useful else []
         for field, terms in SECTION_TERMS.items():
-            chunk = next(
-                (
-                    c
-                    for c in useful
-                    if any(t in (c.section or "").casefold() for t in terms)
-                ),
-                None,
-            )
+            candidates = [c for c in useful if any(t in sections[c.id] for t in terms)]
+            if field == 'method':
+                candidates = [c for c in candidates if not any(t in sections[c.id] for t in ('related', 'background', 'prior work', 'previous', 'existing', '相关工作'))]
+            chunk = min(candidates, key=lambda c: min(i for i, term in enumerate(terms) if term in sections[c.id]), default=None)
             if chunk:
                 setattr(result, field, body(chunk))
                 chosen.append(chunk)
@@ -87,16 +85,15 @@ class MockProvider:
         return result
 
     def ask(self, question: str, chunks: list[PaperChunk]) -> AnswerResult:
+        sections = section_contexts(chunks)
         query_tokens = tokens(question)
         aliases = {
-            "方法": "method",
-            "结果": "result",
-            "局限": "limitation",
-            "摘要": "abstract",
+            "方法": SECTION_TERMS["method"],
+            "结果": SECTION_TERMS["findings"],
+            "局限": SECTION_TERMS["limitations"],
+            "摘要": ("abstract", "摘要"),
         }
-        mapped_sections = [
-            english for chinese, english in aliases.items() if chinese in question
-        ]
+        mapped_sections = [term for chinese, terms in aliases.items() if chinese in question for term in terms]
         for field, terms in SECTION_TERMS.items():
             if any(term in question.casefold() for term in terms if term.isascii()):
                 mapped_sections.extend(terms)
@@ -106,7 +103,7 @@ class MockProvider:
                 continue
             overlap = query_tokens & tokens(body(chunk))
             section_hit = any(
-                t in (chunk.section or "").lower() for t in mapped_sections
+                t in sections[chunk.id] for t in mapped_sections
             )
             if overlap or section_hit:
                 ranked.append((len(overlap) + (2 if section_hit else 0), chunk))

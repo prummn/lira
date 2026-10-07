@@ -2,11 +2,13 @@
 
 > 文档类型：**实施计划**。下文阶段没有隐含“已完成”状态；每一项只有在 [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) 中附有验证证据后才能标为完成。前轮交付了界面原型和基础 API skeleton，未跑通真实 PDF 阅读端到端流程。
 
+2026-10-07 当前迭代已补齐本地真实阅读闭环，并新增 arXiv/公开 PDF 链接导入、首页版式书目识别、arXiv/Crossref 补全、字段来源、手动修正与保留用户锚点的刷新；数据库版本为 `0005_import_metadata`。Attention/BERT/LoRA 官方来源和真实验证见 [real-paper-import-validation.md](real-paper-import-validation.md)。下文仍保留原始阶段设计，当前已验证功能与后续目标以状态文档区分。
+
 ## 1. 交付目标
 
 第一轮交付是一个可以在本机运行的 React/Vite + FastAPI + SQLite skeleton，并用 8–12 篇高质量 mock AI 论文跑通：导入/解析 → Paper Card → 中英摘要 → PDF 阅读 → Evidence 问答 → Collection → 多论文比较 → Citation Graph → 基础 Method/Concept Graph。
 
-每个阶段结束都必须能启动前端和后端；真实 LLM、真实 metadata API、Tauri 打包都通过适配器预留，不作为 MVP 阻塞条件。
+每个阶段结束都必须能启动前端和后端；真实 LLM 质量验收和 Tauri 打包保持后续范围。arXiv/Crossref 真实书目查询已经实现；OpenAlex/Semantic Scholar 的完整作者与引用网络仍是目标扩展。
 
 ## 2. 阶段划分
 
@@ -79,7 +81,7 @@
 - 前端：路由与主题、Library 过滤、Reader evidence 跳转、Graph 空状态、错误提示。
 - 手工验收：中文长标题、长作者列表、窄屏、深色主题、PDF 无文本层、网络不可用、MockProvider。
 
-建议命令：`backend: pytest`、`backend: ruff check`、`frontend: npm run lint`、`frontend: npm run build`；在 CI 中先迁移再 seed 再运行 smoke。
+当前实际验证命令：`python -m pytest backend/tests -q`、`npm --prefix frontend run build`、`npm --prefix frontend run test:e2e`；真实论文场景需显式设置 `RIW_REAL_PAPER_FIXTURES`。Ruff／独立 npm lint 和完整 CI 是原目标，当前 package.json 没有 npm lint 脚本，不能宣称这些检查已执行。
 
 ## 6. 风险与取舍
 
@@ -91,4 +93,4 @@
 
 ## 7. 后续迭代顺序
 
-完成 MVP 稳定性后，再按价值增加：真实 OpenAlex/Semantic Scholar 元数据、段落级翻译缓存、embedding 语义搜索、用户确认关系、Researcher 外部链接、Tauri 打包与可选同步。每项功能都要回答“是否加快阅读，或让未来更容易找回今天的理解”。
+完成 MVP 稳定性后，再按价值增加：OpenAlex/Semantic Scholar 作者与引用网络、embedding 语义搜索、用户确认关系、Researcher 外部链接、Tauri 打包与可选同步。段落级翻译缓存已落地，缓存契约已验证；有效模型真实翻译质量仍未验收。每项功能都要回答“是否加快阅读，或让未来更容易找回今天的理解”。

@@ -46,9 +46,11 @@ from ..schemas import (
     TranslateRequest,
     TranslationResponse,
     ExplainRequest,
+    URLImportRequest,
 )
 from ..services.analysis import analyze_paper, evidence_for, evidence_for_citation
-from ..services.importing import MAX_PDF_BYTES, import_pdf_bytes
+from ..services.importing import MAX_PDF_BYTES, import_pdf_bytes, metadata_sources, refresh_metadata, replace_authors, sync_card_title
+from ..services.downloads import download_pdf
 from ..services.search import search_chunks
 from ..services.serialization import (
     collection_read,
@@ -160,6 +162,20 @@ async def import_pdf(
     return paper_detail(require_paper(session, paper.id))
 
 
+@router.post('/papers/import-url', response_model=PaperDetail, status_code=201)
+def import_url(payload: URLImportRequest, request: Request, session: Session = Depends(get_db)) -> PaperDetail:
+    downloaded = download_pdf(payload.url)
+    paper = import_pdf_bytes(session, request.app.state.storage_dir, downloaded.filename, downloaded.data, source_url=downloaded.source_url, source_arxiv_id=downloaded.arxiv_id)
+    return paper_detail(require_paper(session, paper.id))
+
+
+@router.post('/papers/{paper_id}/refresh-metadata', response_model=PaperDetail)
+def refresh_paper_metadata(paper_id: str, session: Session = Depends(get_db)) -> PaperDetail:
+    paper = require_paper(session, paper_id)
+    refresh_metadata(session, paper)
+    return paper_detail(require_paper(session, paper.id))
+
+
 @router.get("/papers/{paper_id}", response_model=PaperDetail)
 def get_paper(paper_id: str, session: Session = Depends(get_db)) -> PaperDetail:
     return paper_detail(require_paper(session, paper_id))
@@ -195,6 +211,8 @@ def create_paper(
         tags_json=json.dumps(payload.tags, ensure_ascii=False),
         page_count=0,
         is_demo=False,
+        metadata_sources_json=json.dumps({('authors' if key == 'author_names' else key): 'manual' for key in payload.model_fields_set if key in {'title', 'author_names', 'year', 'venue', 'doi', 'arxiv_id'}}, ensure_ascii=False),
+        metadata_warnings_json='[]',
     )
     session.add(paper)
     seen_names: set[str] = set()
@@ -228,7 +246,23 @@ def update_paper(
         paper.is_favorite = payload.is_favorite
     if payload.tags is not None:
         paper.tags_json = json.dumps(payload.tags, ensure_ascii=False)
-    session.commit()
+    sources = metadata_sources(paper)
+    try:
+        for field in ('title', 'authors', 'year', 'venue', 'doi', 'arxiv_id'):
+            if field not in payload.model_fields_set:
+                continue
+            value = getattr(payload, field)
+            if field == 'authors':
+                replace_authors(session, paper, value)
+            else:
+                setattr(paper, field, value)
+            sources[field] = 'manual'
+        paper.metadata_sources_json = json.dumps(sources, ensure_ascii=False)
+        sync_card_title(paper)
+        session.commit()
+    except IntegrityError as error:
+        session.rollback()
+        raise HTTPException(409, '相同 DOI 的论文已存在，元数据尚未保存') from error
     return paper_summary(paper)
 
 

@@ -38,6 +38,14 @@ def utc(date: datetime) -> datetime:
     return date.replace(tzinfo=timezone.utc) if date.tzinfo is None else date
 
 
+def source_values(raw: str | None) -> dict[str, str]:
+    try:
+        value = json.loads(raw or '{}')
+    except json.JSONDecodeError:
+        return {}
+    return {str(key): item for key, item in value.items() if isinstance(item, str)} if isinstance(value, dict) else {}
+
+
 def load_options():
     return (
         selectinload(Paper.author_links).selectinload(PaperAuthor.author),
@@ -72,6 +80,9 @@ def paper_summary(paper: Paper) -> PaperSummary:
         venue=paper.venue,
         doi=paper.doi,
         arxiv_id=paper.arxiv_id,
+        source_url=paper.source_url,
+        metadata_sources=source_values(paper.metadata_sources_json),
+        metadata_warnings=values(paper.metadata_warnings_json),
         pdf_path=paper.pdf_path,
         reading_status=paper.reading_status,
         is_favorite=paper.is_favorite,

@@ -2,6 +2,8 @@
 
 > 文档类型：**目标数据模型**。本表清单与字段是预期 schema，不能视为当前 SQLite 已有表。前轮仅实现核心 ORM 表的简化字段；本轮已有 Alembic、证据定位与用户笔记字段，完整类型知识实体仍属于后续目标。实际表结构以当前 Alembic migration 与 ORM 模型为准，交付情况见 [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)。
 
+当前已实现的默认存储为 `backend/paper_reader.db` 和 `backend/storage/{paper_id}.pdf`。Alembic 最新版本 `0005_import_metadata` 仅向现有 papers 增加 `source_url VARCHAR(2048)`、`metadata_sources_json TEXT NOT NULL DEFAULT '{}'` 与 `metadata_warnings_json TEXT NOT NULL DEFAULT '[]'`，保留已有论文、分析、笔记与集合；下文的完整目标路径、实体和冲突表尚未全部落地。
+
 ## 1. 目标存储约定
 
 主数据库为 `data/workspace.db`，由 Alembic 管理迁移；原始 PDF 位于 `data/library/{paper_id}/original.pdf`，解析缓存和缩略图位于同目录。所有表使用 UUID 字符串主键、UTC `created_at/updated_at`，软删除字段仅用于用户可恢复的实体。
@@ -15,6 +17,10 @@
 `id, title, abstract, year, venue, doi, arxiv_id, source_url, file_path, file_sha256, page_count, language, reading_status, is_favorite, analysis_status, parse_status, last_read_page, created_at, updated_at`。
 
 `reading_status`：`unread|skimming|reading|read|important`；`analysis_status`：`none|queued|running|ready|failed`；`parse_status` 同理。对 `file_sha256` 建唯一索引，避免重复导入。
+
+当前 ORM 使用 `pdf_path` 和唯一 `sha256` 保存文件路径与内容哈希；书目字段为 `title, year, venue, doi, arxiv_id`，作者按 `paper_authors.order_index` 读取。新增 `source_url` 保存用户输入的下载来源；`metadata_sources_json` 按 title/authors/year/venue/doi/arxiv_id 记录 `pdf_layout`、`pdf_metadata`、`pdf_text`、`arxiv_identifier`、`source_url`、`arxiv`、`crossref`、`filename` 或 `manual`。`metadata_warnings_json` 保存 provider 失败及原文块不能安全匹配等警告。API 将这两项 JSON 解码为 `metadata_sources` 对象和 `metadata_warnings` 数组。
+
+手动 PATCH 只将提交的书目字段标为 `manual`；手动清空 nullable 字段也保留该来源。重新识别跳过 manual 字段，不替换现有 chunk ID、原文、bbox、个人 notes 和 translations。arXiv 权威字段的 year 为首次提交年份，PDF 本地日期另有 `pdf_text` 或 `arxiv_identifier` 来源；当前没有独立 revision_year 字段。
 
 ### authors / paper_authors
 
@@ -88,6 +94,8 @@ Citation Graph 的明确引用边应来自 `metadata` 或 `explicit`；Method Li
 ## 6. 外部元数据、任务和设置
 
 `external_identifiers(id, paper_id, provider, external_id, url, raw_json, fetched_at)` 用于 OpenAlex/Semantic Scholar/Crossref 等来源；`metadata_conflicts` 保存不同 provider 的冲突字段，待用户确认。
+
+上述独立 external_identifiers/metadata_conflicts 表是目标。当前 arXiv/Crossref 查询已经可用，结果保存到 papers 的书目字段、字段来源与警告；不保存完整外部响应，也没有完整冲突历史／作者机构网络数据库。
 
 `jobs(id, type, entity_id, status, progress, error_code, error_message, started_at, finished_at, created_at)` 支持导入、解析、分析、索引和翻译任务。`settings(key, value_json, updated_at)` 保存主题、语言、默认 provider 等非敏感本地设置；密钥使用系统 keychain/环境变量，不写入 SQLite。
 

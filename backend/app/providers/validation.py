@@ -6,8 +6,14 @@ from ..models import PaperChunk
 
 def chunk_body(chunk: PaperChunk) -> str:
     lines = chunk.content.splitlines()
-    if chunk.section and lines and lines[0].strip() == chunk.section:
-        return '\n'.join(lines[1:]).strip()
+    if chunk.section:
+        heading = ' '.join(chunk.section.split())
+        for count in range(1, min(len(lines), 4) + 1):
+            prefix = ' '.join(' '.join(lines[:count]).split())
+            if prefix == heading:
+                return '\n'.join(lines[count:]).strip()
+            if len(prefix) > len(heading):
+                break
     return chunk.content.strip()
 
 

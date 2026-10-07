@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ArrowLeft, Highlighter, MessageSquare, Sparkles, X } from 'lucide-react'
+import { ArrowLeft, Highlighter, Info, MessageSquare, Sparkles, X } from 'lucide-react'
 import type { Collection, PaperDetail } from '../types'
 import { api, errorMessage } from '../lib/api'
 import { useUi } from '../lib/i18n'
@@ -8,6 +8,7 @@ import { PdfViewer } from '../components/PdfViewer'
 import type { PdfLocator, PdfSelection } from '../components/PdfViewer'
 import { Notebook } from '../components/Notebook'
 import { ExplainPanel } from '../components/ExplainPanel'
+import { MetadataDialog } from '../components/MetadataDialog'
 
 const cachedTranslations=(paper:PaperDetail)=>Object.fromEntries((paper.translations??[]).map(item=>[item.chunk_id,item.text]))
 
@@ -25,6 +26,7 @@ export function ReaderPage({paperId,collections,reloadWorkspace,back,notify,init
   const [translations,setTranslations] = useState<Record<string,string>>({})
   const [translating,setTranslating] = useState('')
   const [translationAvailable,setTranslationAvailable] = useState(false)
+  const [metadataOpen,setMetadataOpen] = useState(false)
   const reload = useCallback(async()=>{try{const next=await api.paper(paperId);setPaper(next);setTranslations(cachedTranslations(next));setError('')}catch(e){setError(errorMessage(e))}},[paperId])
   useEffect(()=>{let active=true;api.paper(paperId).then(p=>{if(active){setPaper(p);setTranslations(cachedTranslations(p))}}).catch(e=>{if(active)setError(errorMessage(e))});api.settings().then(s=>{if(active)setTranslationAvailable(s.translation_available)}).catch(e=>{if(active)setError(errorMessage(e))});return()=>{active=false}},[paperId])
   const locate = (next:PdfLocator) => {setMode('original');setLocator({...next,nonce:Date.now()});setSelection(null)}
@@ -37,7 +39,7 @@ export function ReaderPage({paperId,collections,reloadWorkspace,back,notify,init
   const translate = async(id:string)=>{setTranslating(id);setError('');try{const result=await api.translate(paperId,id);setTranslations(current=>({...current,[id]:result.text}))}catch(e){setError(errorMessage(e))}finally{setTranslating('')}}
   const switchMode = (next:typeof mode)=>{if(next!=='original'&&!translationAvailable&&!Object.keys(translations).length){setError(t('translationNeedsModel'));return}setMode(next);setError('')}
   if(!paper)return error?<ErrorBanner error={error} retry={()=>void reload()}/>:<Loading text={t('paperLoading')}/>
-  return <div className="reader-page"><div className="reader-toolbar"><button className="back-btn" onClick={back}><ArrowLeft size={16}/>{t('back')}</button><div className="reader-title" title={paper.title}>{paper.title}</div>{paper.is_demo&&<span className="demo-badge">{t('demo')}</span>}<span className="reader-pages">{paper.page_count} {t('page')}</span></div>
+  return <div className="reader-page"><div className="reader-toolbar"><button className="back-btn" onClick={back}><ArrowLeft size={16}/>{t('back')}</button><div className="reader-title" title={paper.title}>{paper.title}</div>{paper.is_demo&&<span className="demo-badge">{t('demo')}</span>}<button className="btn secondary" onClick={()=>setMetadataOpen(true)}><Info size={14}/>{t('paperMetadata')}</button><span className="reader-pages">{paper.page_count} {t('page')}</span></div>
     {error&&<ErrorBanner error={error}/>}
     <div className="reader-layout"><section className="pdf-panel">
       <div className="reading-modes"><span>{t('readMode')}</span>{(['original','bilingual','chinese'] as const).map(item=><button key={item} className={mode===item?'active':''} onClick={()=>switchMode(item)}>{t(item)}</button>)}</div>
@@ -45,5 +47,6 @@ export function ReaderPage({paperId,collections,reloadWorkspace,back,notify,init
       {paper.pdf_available ? mode==='original'?<PdfViewer key={paper.id} initialPage={page} url={'/api/papers/'+encodeURIComponent(paper.id)+'/pdf'} locator={locator} onSelection={setSelection} onPageChange={rememberPage}/>:<div className="paragraph-reader">{paper.chunks.map(chunk=><article className="paragraph-block" key={chunk.id}><header>{t('page')} {chunk.page} · {chunk.section}<button className="text-btn" onClick={()=>locate({...chunk,source_text:chunk.content})}>{t('viewSource')}</button></header>{mode==='bilingual'&&<p>{chunk.content}</p>}{translations[chunk.id]?<><p className="translated-text">{translations[chunk.id]}</p><small className="provider-line">{t('modelTranslation')}</small></>:translationAvailable?<button className="btn secondary" disabled={!!translating} onClick={()=>void translate(chunk.id)}>{t(translating===chunk.id?'translating':'translate')}</button>:<p className="muted">{t('translationNeedsModel')}</p>}</article>)}</div>:<Empty title={t('noPdf')} text={t('noPdfHint')}/>}
     </section><Notebook paper={paper} setPaper={setPaper} tab={tab} setTab={setTab} selection={selection} clearSelection={()=>setSelection(null)} page={page} locate={locate} reload={reload} notify={notify} collections={collections} reloadWorkspace={reloadWorkspace}/></div>
     {explaining&&selection&&<ExplainPanel paper={paper} selection={selection} close={()=>setExplaining(false)} locate={e=>locate({page:e.page??1,bbox:e.bbox,page_width:e.page_width,page_height:e.page_height,source_text:e.source_text})}/>}
+    {metadataOpen && <MetadataDialog paper={paper} close={()=>setMetadataOpen(false)} saved={async()=>{await reload();await reloadWorkspace()}}/>}
   </div>
 }

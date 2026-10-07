@@ -5,6 +5,8 @@ from datetime import datetime
 from typing import Literal
 import math
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from .services.downloads import normalize_arxiv_id
+from .services.metadata import normalize_doi
 
 BBox = tuple[float, float, float, float]
 ReadingStatus = Literal["unread", "skimming", "reading", "read", "important"]
@@ -143,6 +145,9 @@ class PaperSummary(BaseModel):
     venue: str | None = None
     doi: str | None = None
     arxiv_id: str | None = None
+    source_url: str | None = None
+    metadata_sources: dict[str, str] = Field(default_factory=dict)
+    metadata_warnings: list[str] = Field(default_factory=list)
     pdf_path: str | None = None
     reading_status: str
     is_favorite: bool
@@ -195,6 +200,62 @@ class PaperUpdate(BaseModel):
     reading_status: ReadingStatus | None = None
     is_favorite: bool | None = None
     tags: list[str] | None = None
+    title: str | None = Field(default=None, max_length=500)
+    authors: list[str] | None = Field(default=None, max_length=150)
+    year: int | None = Field(default=None, ge=1900, le=2200)
+    venue: str | None = Field(default=None, max_length=200)
+    doi: str | None = Field(default=None, max_length=200)
+    arxiv_id: str | None = Field(default=None, max_length=100)
+
+    @field_validator('title')
+    @classmethod
+    def nonempty_title(cls, value: str | None) -> str:
+        if value is None or not value.strip():
+            raise ValueError('标题不能为空')
+        return value.strip()
+
+    @field_validator('authors')
+    @classmethod
+    def valid_authors(cls, value: list[str] | None) -> list[str]:
+        if value is None or any(not name.strip() or len(name.strip()) > 200 for name in value):
+            raise ValueError('作者姓名必须为 1 至 200 个字符；无作者时请传空数组')
+        return list(dict.fromkeys(name.strip() for name in value))
+
+    @field_validator('venue')
+    @classmethod
+    def clean_venue(cls, value: str | None) -> str | None:
+        return value.strip() or None if value is not None else None
+
+    @field_validator('doi')
+    @classmethod
+    def valid_doi(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        normalized = normalize_doi(value)
+        if normalized is None:
+            raise ValueError('请输入有效 DOI，例如 10.1234/example')
+        return normalized
+
+    @field_validator('arxiv_id')
+    @classmethod
+    def valid_arxiv(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        normalized = normalize_arxiv_id(value)
+        if normalized is None:
+            raise ValueError('请输入有效 arXiv 编号或 abs/pdf 链接')
+        return normalized
+
+
+class URLImportRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+
+    @field_validator('url')
+    @classmethod
+    def clean_url(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError('请输入论文链接')
+        return value.strip()
 
 
 class CollectionCreate(BaseModel):
