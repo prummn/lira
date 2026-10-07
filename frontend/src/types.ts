@@ -2,7 +2,7 @@ export type Page = 'library' | 'reader' | 'knowledge' | 'researchers' | 'setting
 export type ReadingStatus = 'unread' | 'skimming' | 'reading' | 'read' | 'important'
 export interface Paper {
   id: string; title: string; abstract: string | null; year: number | null; venue: string | null
-  doi: string | null; arxiv_id: string | null; reading_status: ReadingStatus; is_favorite: boolean
+  doi: string | null; arxiv_id: string | null; arxiv_version?: number | null; reading_status: ReadingStatus; is_favorite: boolean
   analysis_status: string; tags: string[]; authors: string[]; collection_ids: string[]
   page_count: number; is_demo: boolean; pdf_available: boolean; pdf_path?: string | null
   source_url?: string | null; metadata_sources?: Record<string,string>; metadata_warnings?: string[]

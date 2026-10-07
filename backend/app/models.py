@@ -71,6 +71,7 @@ class Paper(Base, TimestampMixin):
     venue: Mapped[Optional[str]] = mapped_column(String(200))
     doi: Mapped[Optional[str]] = mapped_column(String(200), unique=True)
     arxiv_id: Mapped[Optional[str]] = mapped_column(String(100))
+    arxiv_version: Mapped[Optional[int]] = mapped_column(Integer)
     source_url: Mapped[Optional[str]] = mapped_column(String(2048))
     metadata_sources_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
     metadata_warnings_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)

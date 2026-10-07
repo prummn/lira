@@ -12,15 +12,18 @@ import re
 from typing import Any
 
 
-ARXIV = re.compile(r"\barxiv\s*:\s*((?:\d{4}\.\d{4,5}|[a-z][a-z.\-]+/\d{7}))(?:v\d+)?", re.I)
+ARXIV = re.compile(r"\barxiv\s*:\s*((?:\d{4}\.\d{4,5}|[a-z][a-z.\-]+/\d{7}))(?:v([1-9]\d*))?", re.I)
 DOI = re.compile(r"(?:\bdoi\s*:\s*|https?://(?:dx\.)?doi\.org/)(10\.\d{4,9}/[^\s<>]+)", re.I)
-ABSTRACT = re.compile(r"^(?:abstract|摘要)\s*[:：]?$", re.I)
+ABSTRACT = re.compile(r"^(?:abstract|摘要)(?:\s*[:：.。—–-]\s*.*)?\s*$", re.I)
+ABSTRACT_END = re.compile(r"^(?:index terms|key\s*words|CCS concepts|additional key words|ACM reference format)\b", re.I)
+ABSTRACT_CAPTION = re.compile(r'^(?:figure|fig\.|table|图|表)\s*\d+\s*[:.：]', re.I)
 NUMBER = re.compile(r"^\d+(?:\.\d+)*\.?$")
 NUMBERED = re.compile(r"^(\d+(?:\.\d+)*\.?)\s+(.+)$")
 LICENSE = re.compile(r"permission|copyright|all rights reserved|provided proper attribution|reproduce the tables|scholarly works|preprint|submitted|accepted|published|version\s*\d", re.I)
-ORGANIZATION = re.compile(r"\b(?:university|institute|department|school|laboratory|labs?|google|microsoft|research|brain|corporation|college|academy|hospital|centre|center|technology|technologies|language|conference|proceedings|journal|workshop)\b", re.I)
+ORGANIZATION = re.compile(r"\b(?:university|institute|department|school|laboratory|labs?|google|microsoft|research|brain|corporation|company|inc|corp|ltd|college|academy|hospital|centre|center|technology|technologies|language|conference|proceedings|journal|workshop)\b", re.I)
 VENUE = re.compile(r"\b(?:conference|proceedings|journal|workshop|transactions|symposium)\b", re.I)
 PUBLICATION_YEAR = re.compile(r"(?:\bpublished(?:\s+online)?\b|\bcopyright\b|©)\D{0,30}\b((?:19|20)\d{2})\b", re.I)
+TEMPLATE = re.compile(r"make sure to enter|your rights confirmation|conference acronym|\b[xn]{4,}\b", re.I)
 
 
 @dataclass(frozen=True)
@@ -117,13 +120,15 @@ def _join_title(lines: list[LayoutLine]) -> str | None:
 
 
 def _names(text: str) -> list[str]:
-    text = re.sub(r"[∗*†‡⁎¹²³⁴⁵⁶⁷⁸⁹\d]+", "", text)
+    text = re.sub(r"[∗*†‡⁎♢¹²³⁴⁵⁶⁷⁸⁹\d]+", "", text)
     text = re.sub(r"\s+", " ", text).strip(" ,;")
     if ORGANIZATION.search(text) or any(c in text for c in "@{}()/:="):
         return []
     names = re.split(r"\s*(?:,|;|\band\b|&)\s*", text)
     result = []
     for name in names:
+        if not name.strip():
+            continue  # Empty affiliation-marker separators, e.g. Smith1,2.
         words = name.split()
         if not 2 <= len(words) <= 5:
             return []
@@ -145,7 +150,7 @@ def extract_bibliography(metadata: dict, lines: list[LayoutLine], height: float,
         embedded_title = ""
     title = embedded_title or layout_title
     facts: dict = {"title": title, "authors": [], "year": None, "venue": None,
-                   "doi": None, "arxiv_id": None, "metadata_sources": {}}
+                   "doi": None, "arxiv_id": None, "arxiv_version": None, "metadata_sources": {}}
     sources = facts["metadata_sources"]
     if title:
         sources["title"] = "pdf_metadata" if embedded_title else "pdf_layout"
@@ -153,9 +158,16 @@ def extract_bibliography(metadata: dict, lines: list[LayoutLine], height: float,
     title_end = max((l.bbox[3] for l in title_lines), default=0)
     name_lines = [l for l in lines if l.horizontal and title_end < l.bbox[1] < abstract_y
                   and l.size <= max((t.size for t in title_lines), default=body_size * 2)
-                  and _names(l.text)]
+                  and _names(l.text)
+                  and not (any(other.key[1] == l.key[1] and ORGANIZATION.search(other.text)
+                               for other in lines)
+                           and any(span['size'] < l.size * .92 and any(c.isalpha() for c in span['text'])
+                                   for span in l.spans))]
     if any(line.bold for line in name_lines):
         name_lines = [line for line in name_lines if line.bold]
+    if name_lines:
+        byline_size = max(line.size for line in name_lines)
+        name_lines = [line for line in name_lines if line.size >= byline_size * .85]
     # Names at almost equal baselines form a visual row, even if PyMuPDF block
     # ordering happens to return the rightmost author first.
     rows: list[list[LayoutLine]] = []
@@ -182,11 +194,14 @@ def extract_bibliography(metadata: dict, lines: list[LayoutLine], height: float,
              (l.bbox[1] > height * .87 and
               (VENUE.search(l.text) or DOI.match(l.text) or PUBLICATION_YEAR.search(l.text)))]
     for line in front:
+        if TEMPLATE.search(line.text):
+            continue
         if not facts["arxiv_id"] and (match := ARXIV.search(line.text)):
             candidate = match.group(1)
             date_code = candidate.split("/")[-1][:4].replace(".", "")
             if 1 <= int(date_code[2:4]) <= 12:
                 facts["arxiv_id"] = candidate
+                facts["arxiv_version"] = int(match.group(2)) if match.group(2) else None
                 sources["arxiv_id"] = "arxiv_identifier"
         if not facts["doi"] and (match := DOI.search(line.text)):
             facts["doi"] = match.group(1).rstrip(".,;)")
@@ -231,6 +246,11 @@ def detect_headings(lines: list[LayoutLine], known: re.Pattern, body_size: float
     for line in lines:
         if line.key in excluded or line.key in paired or not line.horizontal:
             continue
+        # Explicit abstract labels can be smaller than the main text, inline
+        # with their paragraph, or aligned with a figure in the other column.
+        if ABSTRACT.fullmatch(line.text) and line.size >= body_size * .75:
+            headings[line.key] = 'Abstract'
+            continue
         # Table headers and inline labels have neighboring text on the same
         # baseline. A wrapped bold paragraph has several body-sized bold lines.
         # Neither is a standalone document heading.
@@ -247,6 +267,10 @@ def detect_headings(lines: list[LayoutLine], known: re.Pattern, body_size: float
                 and other.bold and abs(other.size - line.size) < .5
                 and (len(line.text) > 45 or len(other.text) > 45)
                 for other in lines):
+            continue
+        # A parenthesized list item whose bold lead wraps into prose is not a
+        # document section. Keep its evidence under the real results heading.
+        if re.match(r'^\(\d+\)\s', line.text):
             continue
         if (known.fullmatch(line.text) and line.size >= body_size * .95
                 and len(line.text) <= 100 and len(line.text.split()) <= 12):
@@ -265,12 +289,52 @@ def abstract_bounds(lines: list[LayoutLine]) -> tuple[float, float, float] | Non
         return None
     center = (heading.bbox[0] + heading.bbox[2]) / 2
     body = [l for l in lines if l.horizontal and l.bbox[1] >= heading.bbox[3]
-            and l.bbox[0] < center < l.bbox[2] and len(l.text) > 15 and not l.bold]
+            and l.bbox[0] < center < l.bbox[2] and len(l.text) > 15]
     if not body:
         return None
     first = min(body, key=lambda l: l.bbox[1])
     same_block = [l for l in body if l.key[1] == first.key[1]]
     return min(l.bbox[0] for l in same_block), max(l.bbox[2] for l in same_block), first.size
+
+
+def acm_abstract_lines(pages: list, title_keys: set, body_size: float) -> set[tuple[int, int, int]]:
+    """Recognize unlabeled ACM abstracts using publisher boundaries and layout.
+
+    Require CCS/keyword/reference front matter on the first two pages. Only
+    sustained, smaller-font prose above that boundary qualifies; bylines,
+    addresses, footnotes and copyright text stay as original unlabelled text.
+    """
+    front = [(index, line) for index, (_, _, _, lines) in enumerate(pages[:2]) for line in lines]
+    if any(ABSTRACT.fullmatch(line.text) for _, line in front):
+        return set()
+    markers = [(index, line.bbox[1]) for index, line in front if ABSTRACT_END.match(line.text)]
+    if not markers:
+        return set()
+    boundary = min(markers)
+    title_end = max((line.bbox[3] for index, line in front if line.key in title_keys), default=0)
+    result = set()
+    boilerplate = re.compile(r"^(?:authors?[’']?\s+(?:addresses|contact)|permission|copyright|©|[∗*†‡]|https?://|ACM\b)", re.I)
+    for page_index, (width, _, blocks, lines) in enumerate(pages[:2]):
+        by_block: dict[int, list[LayoutLine]] = {}
+        for line in lines:
+            if line.horizontal:
+                by_block.setdefault(line.key[1], []).append(line)
+        for block_index, group in by_block.items():
+            first = group[0]
+            if ((page_index, first.bbox[1]) >= boundary
+                    or (page_index == 0 and first.bbox[1] <= title_end)
+                    or any(line.key in title_keys for line in group)):
+                continue
+            text = ' '.join(line.text for line in group)
+            letters = [c for c in first.text if c.isalpha()]
+            typical_size = sorted(line.size for line in group)[len(group) // 2]
+            if (len(group) >= 2 and len(first.text) >= 70 and len(text) >= 150
+                    and sum(c.isupper() for c in letters) < len(letters) * .5
+                    and body_size * .8 <= typical_size <= body_size * 1.02
+                    and blocks[block_index]['bbox'][2] - blocks[block_index]['bbox'][0] >= width * .55
+                    and not boilerplate.match(first.text) and not ABSTRACT_CAPTION.match(first.text)):
+                result.update(line.key for line in group if (page_index, line.bbox[1]) < boundary)
+    return result
 
 
 def section_reading_order(blocks: list[dict], lines: list[LayoutLine], width: float,

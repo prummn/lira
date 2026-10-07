@@ -108,6 +108,80 @@ def test_url_import_uses_validated_download_and_rejects_duplicate(client: TestCl
     assert client.post('/api/papers/import-url', json={'url': link}).status_code == 409
 
 
+def test_explicit_source_revision_is_used_for_import_and_refresh(client: TestClient, monkeypatch) -> None:
+    from app.services.downloads import DownloadedPDF
+    from app.services.metadata import MetadataResult
+    content = pdf_bytes('Versioned source\nAbstract\nAn actual paragraph with verifiable source text.')
+    link = 'https://arxiv.org/abs/2401.17043v2'
+    monkeypatch.setattr('app.api.papers.download_pdf', lambda _: DownloadedPDF(content, '2401.17043v2.pdf', link, link.replace('/abs/', '/pdf/'), '2401.17043'))
+    calls = []
+    def enrich(**kwargs):
+        calls.append(kwargs['arxiv_id'])
+        return MetadataResult({'authors': ['Original Version Author']}, {'authors': 'arxiv'})
+    monkeypatch.setattr('app.services.importing.enrich_metadata', enrich)
+    response = client.post('/api/papers/import-url', json={'url': link})
+    assert response.status_code == 201
+    paper = response.json()
+    assert calls == ['2401.17043v2']
+    assert paper['arxiv_id'] == '2401.17043'
+    assert client.post(f"/api/papers/{paper['id']}/refresh-metadata").status_code == 200
+    assert calls == ['2401.17043v2', '2401.17043v2']
+
+
+def test_observed_revision_survives_refresh_when_original_pdf_is_missing(client, monkeypatch):
+    from pathlib import Path
+    from app.services.downloads import DownloadedPDF
+    from app.services.metadata import MetadataResult
+    data = pdf_bytes('Revision-aware paper\nAbstract\nOriginal verifiable evidence.')
+    parsed = replace(parse_pdf(data), arxiv_id='2401.17043', arxiv_version=2)
+    monkeypatch.setattr('app.services.importing.parse_pdf',lambda _:parsed)
+    source = 'https://arxiv.org/abs/2401.17043'
+    monkeypatch.setattr('app.api.papers.download_pdf',lambda _:DownloadedPDF(data,'paper.pdf',source,source.replace('/abs/','/pdf/'),'2401.17043'))
+    calls = []
+    def enrich(**kwargs):
+        calls.append(kwargs['arxiv_id'])
+        return MetadataResult({'title':'Exact revision' if kwargs['arxiv_id']=='2401.17043v2' else 'Latest revision'},{'title':'arxiv'})
+    monkeypatch.setattr('app.services.importing.enrich_metadata',enrich)
+    paper = client.post('/api/papers/import-url',json={'url':source}).json()
+    Path(paper['pdf_path']).unlink()
+    refreshed = client.post(f"/api/papers/{paper['id']}/refresh-metadata").json()
+    assert calls == ['2401.17043v2','2401.17043v2']
+    assert refreshed['title'] == 'Exact revision'
+    assert refreshed['arxiv_version'] == 2
+
+
+def test_changing_manual_arxiv_identity_clears_stored_revision(client, monkeypatch):
+    paper = imported_paper(client)
+    with client.app.state.database.sessions() as session:
+        stored = session.get(Paper,paper['id'])
+        stored.arxiv_id = '2401.17043'
+        stored.arxiv_version = 2
+        session.commit()
+    patched = client.patch(f"/api/papers/{paper['id']}",json={'arxiv_id':'2309.15217'}).json()
+    assert patched['arxiv_version'] is None
+
+
+def test_refresh_clears_old_derived_template_bibliography_but_preserves_manual_venue(client, monkeypatch):
+    from app.services.metadata import MetadataResult
+    paper = imported_paper(client)
+    monkeypatch.setattr('app.services.importing.enrich_metadata', lambda **_: MetadataResult())
+    with client.app.state.database.sessions() as session:
+        stored = session.get(Paper, paper['id'])
+        stored.doi = '10.1145/nnnnnnn.nnnnnnn'
+        stored.venue = 'Proceedings of Make sure to enter the correct conference title'
+        stored.metadata_sources_json = json.dumps({'doi': 'pdf_text', 'venue': 'pdf_text'})
+        session.commit()
+    path = f"/api/papers/{paper['id']}"
+    refreshed = client.post(path + '/refresh-metadata').json()
+    assert refreshed['doi'] is None
+    assert refreshed['venue'] is None
+    assert 'doi' not in refreshed['metadata_sources']
+    client.patch(path, json={'venue': 'My Conference Acronym'})
+    manual = client.post(path + '/refresh-metadata').json()
+    assert manual['venue'] == 'My Conference Acronym'
+    assert manual['metadata_sources']['venue'] == 'manual'
+
+
 def test_refresh_only_updates_sections_of_matching_original_chunks(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     paper = imported_paper(client)
     path = f"/api/papers/{paper['id']}"

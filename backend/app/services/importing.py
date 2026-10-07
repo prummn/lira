@@ -16,6 +16,7 @@ from .analysis import analyze_paper
 from .pdf import InvalidPDF, ParsedPDF, parse_pdf
 from .metadata import enrich_metadata, normalize_doi
 from .downloads import normalize_arxiv_id
+from .pdf_metadata import TEMPLATE
 
 MAX_PDF_BYTES = 50 * 1024 * 1024
 METADATA_FIELDS = ('title', 'authors', 'year', 'venue', 'doi', 'arxiv_id')
@@ -59,6 +60,12 @@ def replace_authors(session: Session, paper: Paper, names: list[str]) -> None:
 
 def apply_metadata(session: Session, paper: Paper, parsed: ParsedPDF | None, *, source_arxiv_id: str | None = None) -> None:
     sources = metadata_sources(paper)
+    for name in ('doi', 'venue'):
+        existing = getattr(paper, name)
+        if (existing and sources.get(name) != 'manual'
+                and (normalize_doi(existing) is None if name == 'doi' else TEMPLATE.search(existing))):
+            setattr(paper, name, None)
+            sources.pop(name, None)
     fields: dict[str, object] = {}
     parsed_sources = getattr(parsed, 'metadata_sources', {}) if parsed else {}
     if parsed:
@@ -76,6 +83,16 @@ def apply_metadata(session: Session, paper: Paper, parsed: ParsedPDF | None, *, 
     # A cleared manual identifier is intentional and must not be silently restored.
     arxiv_id = paper.arxiv_id if sources.get('arxiv_id') == 'manual' else fields.get('arxiv_id') or paper.arxiv_id or normalize_arxiv_id(paper.source_url)
     doi = paper.doi if sources.get('doi') == 'manual' else fields.get('doi') or paper.doi
+    # The PDF's revision identifies the byline/title actually being read. Keep
+    # the stored ID canonical, but never enrich an older PDF from today's byline.
+    if arxiv_id and parsed and parsed.arxiv_version and parsed.arxiv_id == arxiv_id:
+        paper.arxiv_version = parsed.arxiv_version
+    elif arxiv_id and normalize_arxiv_id(paper.source_url) == arxiv_id:
+        reference = normalize_arxiv_id(paper.source_url, preserve_version=True)
+        if reference != arxiv_id:
+            paper.arxiv_version = int(reference.rsplit('v', 1)[1])
+    if arxiv_id and paper.arxiv_version:
+        arxiv_id = f'{arxiv_id}v{paper.arxiv_version}'
     enriched = enrich_metadata(arxiv_id=arxiv_id, doi=doi)
     incoming_sources = {name: parsed_sources.get(name, 'pdf_text') for name in fields}
     fields.update(enriched.fields)

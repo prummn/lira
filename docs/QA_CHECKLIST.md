@@ -1,6 +1,6 @@
 # MVP 验收清单与源码审查风险
 
-更新日期：2026-10-07（Asia/Shanghai）。冻结源码最终回归为后端 125 项（14.92 秒）、默认浏览器 13 项通过／1 个 opt-in skipped（29.6 秒），strict TypeScript + Vite build exit 0（13.26 秒）。另行启用的真实三篇论文 opt-in 场景 1 passed（测试 32.8 秒／总计 41.0 秒），记录见 [real-paper-import-validation.md](real-paper-import-validation.md)。勾选项只覆盖已有执行证据的范围；多个边界输入或完整人工审计未覆盖的条目保留未勾选。
+更新日期：2026-10-07（Asia/Shanghai）。GitHub RAG 实测修复后的最终回归为后端 153 项（16.95 秒）、默认浏览器 13 项通过／1 个 opt-in skipped（31.3 秒），strict TypeScript + Vite build exit 0（18.02 秒）。个人应用另完成 17 篇真实 RAG 论文的逐篇链接导入及阅读器检查，记录见 [github-rag-import-validation.md](github-rag-import-validation.md)。此前另行启用的真实三篇论文 opt-in 场景 1 passed（测试 32.8 秒／总计 41.0 秒），历史记录见 [real-paper-import-validation.md](real-paper-import-validation.md)。勾选项只覆盖已有执行证据的范围；多个边界输入或完整人工审计未覆盖的条目保留未勾选。
 
 ## 1. 优先级与来源规则
 
@@ -26,7 +26,7 @@ P0 表示会破坏证据真实性或用户数据的交付阻塞项；P1 表示�
 - [x] 用户 note 使用独立 API/表/来源类型，与论文分析分离；保存、删除与 user 来源由后端及浏览器闭环覆盖。
 - [x] API 返回的论文 ID 与前端显示一致，不存在前端 `p1` 与后端 `paper-001` 双重 Library；导入、阅读和笔记使用同一真实 API 数据。
 - [ ] 密钥不会出现在 SQLite、响应 JSON、日志或 version control；Settings 中尚未接入的 provider 选项不能显示为已连接。
-- [x] 新建库与无版本号旧库通过 Alembic 升级到 `0005_import_metadata`；旧 notes/analysis 保留，连续两次 migrate 可执行。
+- [x] 新建库与无版本号旧库通过 Alembic 升级到 `0006_arxiv_revision`；旧 notes/analysis 保留，连续两次 migrate 可执行。
 - [ ] 数据升级不删除用户论文、notes、collections；seed 不能因非空库而部分覆盖用户记录。
 
 ## 4. P1：PDF 导入与处理
@@ -50,6 +50,10 @@ P0 表示会破坏证据真实性或用户数据的交付阻塞项；P1 表示�
 - [x] 编号父节 Results 的子节正文可选入本地卡片／问答；仍需复核启发式章节的语义分类，不把原文一致性当作完整语义证明。
 - [x] 真实 BERT 第5页两栏训练／实验 section 不再串列；独立比较 470 块原文、顺序、bbox 不变，Results 引用真实 11 NLP tasks 段。Attention 全544块连 section 不变，LoRA 631块无 figure/table Method 伪章节；其它复杂版式不据此宣称完整兼容。
 - [x] 个人 Attention 先备份后修复；refresh 保留旧 111 evidence，之后显式本地重分析再生成 106 current evidence。用户数据及原 PDF 哈希不变，个人 Reader PDF／原文 overlay 实际打开。
+- [x] GitHub 三份完整 RAG 清单 17 篇逐篇原始链接导入，17/17 成功、414 页；官方对应版本标题／署名顺序／原年份全部核对。阅读器逐篇渲染并定位首末证据，两次实际重复返回 409，原有 Attention 原字段不变。
+- [x] 真实布局回归覆盖行内 IEEE 摘要、图旁 Abstract、小字号及无标题 ACM 摘要，排除前置信息／图注；下载 PDF 总时限 180 秒、元数据预算不变。
+- [x] 保存观察到的 arXiv 版本，原文件缺失刷新仍使用该版本；手动换编号清除旧版本，指定版本不可用时不采用 Crossref 的出版版本署名。模板 DOI／venue 自动来源清除，手动来源保留。
+- [ ] 本地方法与结果字段的语义质量尚未全面通过；本批方法仅 4/17、主结果 12/17 有摘录，部分实验设置仍被选入主结果。原文匹配与坐标正确不能替代语义核验。
 
 ## 5. P1：Collection、Graph 与 Comparison
 
@@ -113,15 +117,16 @@ P0 表示会破坏证据真实性或用户数据的交付阻塞项；P1 表示�
 | 日期 | 命令或操作 | 输入/环境 | 实际结果 | 证明范围 | 未证明事项 |
 |---|---|---|---|---|---|
 | 2026-10-07 | 直接调用前轮 list_papers，Python -B | 内存 SQLite；3篇×3匹配作者；limit=2 | offset=0/2/4 分别1/2/1条且跨页重复；total=3 | 前轮缺陷可复现；本轮已加入回归修复 | 不代表当前代码仍有该缺陷 |
-| 2026-10-07 | npm --prefix frontend run test:e2e（主代理fresh运行） | 临时库，1440×1000 与1080宽度；部分响应fixture | 13 passed、1 opt-in skipped，29.6秒 | 原闭环及位置恢复、分页、Card/Explain、缓存阅读；新增链接错误、metadata修正、membership重试 | skipped不证明真实下载；不证明live生成质量或所有复杂PDF兼容性 |
+| 2026-10-07 | npx.cmd playwright test（frontend目录，主代理fresh运行） | 临时库，1440×1000 与1080宽度；部分响应fixture | 13 passed、1 opt-in skipped，31.3秒 | 原闭环及位置恢复、分页、Card/Explain、缓存阅读；链接错误、metadata修正、membership重试 | skipped不证明真实下载；不证明live生成质量或所有复杂PDF兼容性 |
 | 2026-10-07 | 默认环境安装（主代理分步运行） | 本机创建backend/.venv、requirements安装；Windows npm.cmd调用修复后start -NoBrowser -InstallDependencies | exit0；脚本npm.cmd ci安装77packages | 默认依赖安装与脚本启动路径 | 不代表一次全新无中断安装 |
 | 2026-10-07 | 默认start/stop + health + Vite proxy（主代理fresh运行） | start.ps1 -NoBrowser；stop等待venv子进程释放端口 | smoke exit0；health=ok/papers10；stop后立即8000/5173均未监听 | 默认本地服务启动、访问、停止和端口释放 | 不证明Tauri安装包或live模型质量 |
-| 2026-10-07 | backend/.venv/Scripts/python.exe -m pytest backend/tests -q（主代理fresh运行） | 默认虚拟环境；隔离测试库；远端用MockTransport | 125 passed，14.92秒；1条上游Starlette/httpx warning | Card/Explain/search scope/翻译缓存；新增下载边界／权威元数据／布局章节／安全刷新／迁移及BERT两栏语义回归 | 未完成有效模型的真实推理/翻译质量验收 |
+| 2026-10-07 | backend/.venv/Scripts/python.exe -m pytest backend/tests -q（主代理fresh运行） | 默认虚拟环境；隔离测试库；远端用MockTransport | 153 passed，16.95秒；1条上游Starlette/httpx warning | Card/Explain/search scope/翻译缓存；下载边界／版本元数据／真实布局摘要／安全刷新／迁移及章节选择回归 | 未完成有效模型的真实推理/翻译质量验收 |
 | 2026-10-07 | 默认Provider配置RED→GREEN + 实际smoke（主代理运行） | 宿主通用key不作为应用远端opt-in；默认服务重启 | MockProvider/extractive/configured=false；demo/analyze成功；limitation引用1条、无出网 | 默认本地分析与Ask可用且不误开远端 | 不证明已显式配置的远端生成质量 |
-| 2026-10-07 | npm --prefix frontend run build（主代理fresh运行） | 冻结源码 | exit0，13.26秒 | strict TypeScript与Vite打包 | 不单独证明浏览器行为 |
-| 2026-10-07 | legacy迁移回归（完整后端测试内） | 隔离旧库，连续两次migrate | 升级到0005_import_metadata并保留notes/analysis | schema升级与历史数据保留 | 不证明完整生产库备份恢复 |
+| 2026-10-07 | npm --prefix frontend run build（主代理fresh运行） | 冻结源码 | exit0，18.02秒 | strict TypeScript与Vite打包 | 不单独证明浏览器行为 |
+| 2026-10-07 | legacy迁移回归（完整后端测试内） | 隔离旧库，连续两次migrate | 升级到0006_arxiv_revision并保留notes/analysis | schema升级与历史数据保留 | 不证明完整生产库备份恢复 |
 | 2026-10-07 | 官方论文独立获取、只读解析、服务边界与UI契约核验 | 三份真实PDF/HTML；MockTransport与Chromium全APIrouting | 正确本地书目／abstract／几何／citation；来源绑定、deadline、空作者、祖先Results及membership恢复复核通过 | 实际文件解析与明确隔离的服务/UI边界 | Mock UI不代替实际URL请求或模型效果 |
 | 2026-10-07 | 个人Attention修复与浏览器检查（主代理） | 先复制DB备份；refresh后显式本地Mock再分析 | 完整title／8作者／2017／NIPS；544chunks+用户数据不变；refresh保留111旧evidence，再分析生成106 current evidence | 用户已有记录可修复并打开原PDF／出处；旧evidence只在refresh阶段保留 | 不证明自动升级全部论文或完整restore演练 |
 | 2026-10-07 | 开启RIW_REAL_PAPER_FIXTURES后运行real-papers.spec.ts（主代理最终复跑） | 三官方PDF/HTML；临时库；实际arXiv下载 | 1 passed，测试32.8秒／总计41.0秒；3篇metadata/abstract/method/results/出处均可用，重复PDF409 | BERT预训练归3.1，Results引文含11 NLP tasks且不含BooksCorpus；真实文件和实际网络导入阅读路径 | 不证明任意publisher PDF兼容／模型效果或全部人工视觉审计 |
+| 2026-10-07 | GitHub RAG 三份清单实际顺序导入与独立审计 | 个人应用；17份官方PDF及对应版本HTML；Chromium逐篇阅读 | 17/17成功、414页、9,136chunks、3,478引用；首末定位均通过，0pageerror，两次重复409，Attention原字段不变 | 该批真实链接、书目、摘要、原文与定位闭环；慢速下载修复后137.2秒成功 | 本批均为arXiv；不证明OCR／任意publisher；本地方法与结果语义仍需复核 |
 
 启动与安装证据是修复后的分步检查；未将其描述为一轮全新、无中断安装。

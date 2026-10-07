@@ -145,6 +145,7 @@ class PaperSummary(BaseModel):
     venue: str | None = None
     doi: str | None = None
     arxiv_id: str | None = None
+    arxiv_version: int | None = None
     source_url: str | None = None
     metadata_sources: dict[str, str] = Field(default_factory=dict)
     metadata_warnings: list[str] = Field(default_factory=list)

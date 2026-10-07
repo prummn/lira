@@ -2,7 +2,7 @@
 
 > 文档类型：**实施计划**。下文阶段没有隐含“已完成”状态；每一项只有在 [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) 中附有验证证据后才能标为完成。前轮交付了界面原型和基础 API skeleton，未跑通真实 PDF 阅读端到端流程。
 
-2026-10-07 当前迭代已补齐本地真实阅读闭环，并新增 arXiv/公开 PDF 链接导入、首页版式书目识别、arXiv/Crossref 补全、字段来源、手动修正与保留用户锚点的刷新；数据库版本为 `0005_import_metadata`。Attention/BERT/LoRA 官方来源和真实验证见 [real-paper-import-validation.md](real-paper-import-validation.md)。下文仍保留原始阶段设计，当前已验证功能与后续目标以状态文档区分。
+2026-10-07 当前迭代已补齐本地真实阅读闭环，并新增 arXiv/公开 PDF 链接导入、首页版式书目识别、arXiv/Crossref 补全、字段来源、手动修正与保留用户锚点的刷新；数据库版本为 `0006_arxiv_revision`，保留实际 PDF 版本。Attention/BERT/LoRA 官方来源和真实验证见 [real-paper-import-validation.md](real-paper-import-validation.md)，新增 17 篇 GitHub RAG 清单实测见 [github-rag-import-validation.md](github-rag-import-validation.md)。下文仍保留原始阶段设计，当前已验证功能与后续目标以状态文档区分。
 
 ## 1. 交付目标
 

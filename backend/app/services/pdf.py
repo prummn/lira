@@ -6,7 +6,7 @@ import re
 import pymupdf as fitz
 
 from .pdf_metadata import (
-    ABSTRACT, LayoutLine, abstract_bounds, body_font, detect_headings,
+    ABSTRACT, ABSTRACT_END, ABSTRACT_CAPTION, LayoutLine, abstract_bounds, acm_abstract_lines, body_font, detect_headings,
     extract_bibliography, read_lines, section_reading_order,
 )
 
@@ -36,6 +36,7 @@ class ParsedPDF:
     doi: str | None = None
     arxiv_id: str | None = None
     metadata_sources: dict[str, str] = field(default_factory=dict)
+    arxiv_version: int | None = None
 
 
 HEADING = re.compile(
@@ -58,10 +59,13 @@ def parse_pdf(data: bytes) -> ParsedPDF:
                 raw_blocks = page.get_text("dict", sort=True)["blocks"]
                 pages.append((float(page.cropbox.width), float(page.cropbox.height),
                               raw_blocks, read_lines(page_index, raw_blocks)))
-            body_size = body_font([line for _, _, _, lines in pages for line in lines])
+            # Long surveys may have more small-font references than main text.
+            # Estimate prose typography from the opening pages, not bibliography.
+            body_size = body_font([line for _, _, _, lines in pages[:5] for line in lines])
             facts, title_keys = extract_bibliography(
                 document.metadata, pages[0][3], pages[0][1], body_size
             )
+            unlabeled_abstract = acm_abstract_lines(pages, title_keys, body_size)
             blocks: list[ParsedBlock] = []
             current_section: str | None = None
             for page_index, (width, height, raw_blocks, lines) in enumerate(pages):
@@ -111,6 +115,10 @@ def parse_pdf(data: bytes) -> ParsedPDF:
                             flush()
                             current_section = headings[key]
                         section = current_section
+                        if key in unlabeled_abstract:
+                            section = 'Abstract'
+                        if section == 'Abstract' and (ABSTRACT_END.match(line.text) or ABSTRACT_CAPTION.match(line.text)):
+                            current_section = section = None
                         if section and ABSTRACT.fullmatch(section) and not ABSTRACT.fullmatch(line.text):
                             if not line.horizontal:
                                 section = None

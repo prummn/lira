@@ -41,10 +41,11 @@ def test_unversioned_legacy_database_upgrades_without_losing_notes(
         ).one() == (0, 0)
         assert (
             connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-            == "0005_import_metadata"
+            == "0006_arxiv_revision"
         )
         assert connection.execute(text("SELECT one_liner,findings,card_json FROM paper_analysis WHERE paper_id='legacy'")).one() == ('Preserve old analysis','Original finding','{}')
         assert connection.execute(text("SELECT source_url,metadata_sources_json,metadata_warnings_json FROM papers WHERE id='legacy'")).one() == (None, '{}', '[]')
+        assert connection.execute(text("SELECT arxiv_version FROM papers WHERE id='legacy'")).scalar() is None
     assert "sha256" in {
         c["name"] for c in inspect(database.engine).get_columns("papers")
     }

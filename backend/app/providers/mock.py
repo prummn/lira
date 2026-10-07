@@ -13,7 +13,7 @@ STOPWORDS = set(
 SECTION_TERMS = {
     "problem": ("problem", "introduction", "background", "引言"),
     "method": ("method", "architecture", "pre-training", "pretraining", "adaptation", "方法", "approach"),
-    "findings": ("result", "finding", "evaluation", "experiment", "结果"),
+    "findings": ("result", "finding", "experiment", "evaluation", "结果"),
     "limitations": ("limitation", "discussion", "局限"),
 }
 SCIENTIFIC_TERMS = (
@@ -66,8 +66,12 @@ class MockProvider:
         chosen = [abstract or useful[0]] if useful else []
         for field, terms in SECTION_TERMS.items():
             candidates = [c for c in useful if any(t in sections[c.id] for t in terms)]
-            if field == 'method':
+            if field in {'method','findings'}:
                 candidates = [c for c in candidates if not any(t in sections[c.id] for t in ('related', 'background', 'prior work', 'previous', 'existing', '相关工作'))]
+            if field == 'findings':
+                candidates = [c for c in candidates
+                              if not body(c).rstrip().endswith(('?','？'))
+                              and not re.fullmatch(r'result|results?:', (c.section or '').strip(), re.I)]
             chunk = min(candidates, key=lambda c: min(i for i, term in enumerate(terms) if term in sections[c.id]), default=None)
             if chunk:
                 setattr(result, field, body(chunk))

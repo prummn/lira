@@ -71,7 +71,7 @@ PAPER_READER_MODEL_API_KEY=your-key
 - `backend/storage/`：原始 PDF。
 - 浏览器 localStorage：语言、主题与阅读位置。
 
-启动时自动执行 Alembic 迁移，当前版本为 `0005_import_metadata`；新增原始链接、字段来源和识别警告。迁移测试覆盖旧数据库分析与笔记保留。备份时先停止服务，再同时复制数据库、同名 `-wal` / `-shm` 文件（若存在）与 PDF 目录；界面 JSON 导出用于查阅元数据或集合，并非完整文件备份。
+启动时自动执行 Alembic 迁移，当前版本为 `0006_arxiv_revision`；保存原始链接、字段来源、识别警告及实际 PDF 的 arXiv 版本，避免旧版论文使用最新版作者名单。迁移测试覆盖旧数据库分析与笔记保留。备份时先停止服务，再同时复制数据库、同名 `-wal` / `-shm` 文件（若存在）与 PDF 目录；界面 JSON 导出用于查阅元数据或集合，并非完整文件备份。
 
 可用 `PAPER_READER_DATABASE_URL`、`PAPER_READER_STORAGE_DIR` 改变存储位置，参考 `.env.example`。配置和本地研究数据均被 Git 忽略。
 
@@ -94,6 +94,8 @@ npm --prefix frontend run test:e2e
 ## 当前范围
 
 已实现实际 PDF 解析与阅读、arXiv/公开 PDF 链接导入、arXiv/Crossref 书目补全与手动修正、可定位证据、完整卡片字段结构、三层摘要视图、源引用问答/选区解释、持久化笔记与高亮、集合、SQLite 全文搜索、基础比较/关系图/作者视图以及可选模型接入。缺少原文根据的字段保持为空，图中只显示已记录关系。真实 Attention、BERT、LoRA 的下载来源与验收记录见 [真实论文验证](docs/real-paper-import-validation.md)。
+
+另从 `awesome-rag/awesome-rag` 的三份完整清单逐篇测试 17 篇 RAG 论文，最终全部通过原始链接导入，共 414 页；标题、有序作者、原年份、阅读器及引用定位均经过实际核验。修复摘要漏识别、版本书目混用、模板占位信息和慢速下载超时，记录见 [GitHub RAG 导入测试](docs/github-rag-import-validation.md)。本地方法与结果摘录仍有缺失或语义分类不准，需要复核原文。
 
 OCR、语义搜索、OpenAlex/Semantic Scholar 作者及引用网络补全、自动解析引用网络、纯 DOI 编号解析下载、Zotero 导入和 Tauri 安装包尚未实现。DOI 元数据查询不等于任意 DOI 均能下载全文。当前比较是已提取字段的对照，尚非自动跨论文综合推理；EmbeddingProvider 仅预留接口。
 

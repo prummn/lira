@@ -275,3 +275,109 @@ def test_parsed_pdf_extension_keeps_original_constructor_compatible():
     assert parsed.authors == []
     assert parsed.year is None
     assert parsed.metadata_sources == {}
+
+
+def test_rgb_abstract_next_to_a_figure_and_bold_findings_remain_prose(monkeypatch):
+    parsed = replay_layout(monkeypatch, "rag_rgb_layout.json")
+    abstract = "\n".join(b.content for b in parsed.blocks if b.section == "Abstract")
+    assert "Retrieval-Augmented Generation (RAG) is a promising" in abstract
+    assert "considerable journey ahead" in abstract
+    assert "Nobel" not in abstract
+    finding = next(b for b in parsed.blocks if b.content.startswith("(2) The increasing noise rate"))
+    assert finding.section == "Results on Noise Robustness"
+
+
+def test_rgb_fallback_byline_does_not_use_figure_labels(monkeypatch):
+    parsed = replay_layout(monkeypatch, 'rag_rgb_layout.json')
+    assert parsed.authors == ['Jiawei Chen', 'Hongyu Lin', 'Xianpei Han', 'Le Sun']
+
+
+def test_acm_publisher_boundary_applies_to_each_line_in_a_shared_block():
+    with fitz.open() as doc:
+        page = doc.new_page(width=600,height=800)
+        page.insert_text((70,90),'A Source Paper',fontsize=18,fontname='hebo')
+        page.insert_textbox(fitz.Rect(70,200,550,400),
+                            'This study investigates retrieval evidence in a scientific research workspace.\n'
+                            'We evaluate retrieval methods using original source passages and annotated data.\n'
+                            'CCS Concepts\n'
+                            'Information systems: Retrieval models; Knowledge management and text analysis.', fontsize=9)
+        parsed = parse_pdf(doc.tobytes())
+    abstract = '\n'.join(b.content for b in parsed.blocks if b.section=='Abstract')
+    assert 'This study investigates' in abstract
+    assert 'Information systems' not in abstract
+
+
+def test_unlabeled_acm_abstract_excludes_all_lines_of_a_wide_caption():
+    with fitz.open() as doc:
+        page = doc.new_page(width=600,height=800)
+        page.insert_text((70,90),'A Source Paper',fontsize=18,fontname='hebo')
+        page.insert_textbox(fitz.Rect(50,150,550,230),
+                            'This study investigates retrieval evidence in a scientific research workspace. '
+                            'We evaluate retrieval methods using original source passages and annotated data.',fontsize=9)
+        page.insert_textbox(fitz.Rect(50,240,550,310),
+                            'Figure 1: A detailed comparison of model architectures used to retrieve documents across the evaluated collection. '
+                            'The first panel describes the source processing stages, and the second panel presents measurement results.',fontsize=9)
+        page.insert_text((50,330),'CCS Concepts: Information systems',fontsize=9)
+        parsed = parse_pdf(doc.tobytes())
+    abstract = '\n'.join(b.content for b in parsed.blocks if b.section=='Abstract')
+    assert 'This study investigates' in abstract
+    assert 'panel' not in abstract
+
+
+def test_inline_abstract_byline_does_not_treat_company_as_an_author():
+    parsed = parse_pdf(synthetic_pdf([
+        ('Evaluation of Scientific Research',90,18,'hebo'),
+        ('Alice Smith1,2, Bob Jones3',145,11,'helv'),
+        ('Tencent Company',170,10,'helv'),
+        ('Abstract. We investigate scientific evidence.',220,10,'helv'),
+    ]))
+    assert parsed.authors == ['Alice Smith','Bob Jones']
+
+
+def test_abstract_does_not_include_a_following_figure_caption(monkeypatch):
+    parsed = replay_layout(monkeypatch,'rag_caption_layout.json')
+    abstract = '\n'.join(b.content for b in parsed.blocks if b.section=='Abstract')
+    assert 'trajectory in the field' in abstract
+    assert 'Figure 1:' not in abstract
+    assert any(b.content.startswith('Figure 1:') for b in parsed.blocks)
+
+
+def test_ieee_inline_abstract_preserves_original_text_and_excludes_index_terms(monkeypatch):
+    parsed = replay_layout(monkeypatch, "rag_ieee_layout.json")
+    abstract = "\n".join(b.content for b in parsed.blocks if b.section == "Abstract")
+    assert abstract.startswith("Abstract—Advancements")
+    assert "suggest potential directions for future research" in abstract
+    assert "Index Terms" not in abstract
+    assert "Recent years have witnessed" not in abstract
+
+
+@pytest.mark.parametrize("fixture,start,end", [
+    ("rag_crud_acm_layout.json", "Retrieval-Augmented Generation (RAG) is a technique", "optimizing the RAG technology"),
+    ("rag_feb_acm_layout.json", "Federated search systems aggregate", "context of RAG pipelines"),
+    ("rag_survey_acm_layout.json", "Retrieval-Augmented Generation (RAG) merges", "applications of LLMs"),
+])
+def test_unlabeled_acm_abstract_is_bounded_by_publisher_front_matter(monkeypatch, fixture, start, end):
+    parsed = replay_layout(monkeypatch, fixture)
+    abstract = "\n".join(b.content for b in parsed.blocks if b.section == "Abstract")
+    assert abstract.startswith(start)
+    assert end in abstract
+    assert "CCS Concepts" not in abstract
+    assert "Permission to make" not in abstract
+    assert "Authors’ addresses" not in abstract
+    assert "ACM Reference Format" not in abstract
+
+
+def test_arxiv_revision_is_retained_separately_from_canonical_identifier(monkeypatch):
+    parsed = replay_layout(monkeypatch, "rag_crud_acm_layout.json")
+    assert parsed.arxiv_id == "2401.17043"
+    assert parsed.arxiv_version == 2
+
+
+def test_crud_wrapped_affiliations_do_not_become_partial_fallback_byline(monkeypatch):
+    parsed = replay_layout(monkeypatch, 'rag_crud_acm_layout.json')
+    assert parsed.authors == []
+
+
+def test_publisher_template_instructions_are_not_a_paper_venue(monkeypatch):
+    parsed = replay_layout(monkeypatch, 'rag_survey_acm_layout.json')
+    assert parsed.venue is None

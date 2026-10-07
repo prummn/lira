@@ -56,3 +56,27 @@ def test_split_section_headers_are_not_selected_as_scientific_evidence():
     assert result.method == 'We train the model with masked token prediction and a sentence relationship objective.'
     assert all(c.id != header.id for c in result.evidence_chunks)
     assert result.card['method'].citations[0].chunk.id == method.id
+
+
+def test_prior_evaluation_work_is_not_selected_as_the_papers_main_results():
+    prior_heading = PaperChunk(id='prior-heading',paper_id='rag',page=2,section='2 Related Work',content='2 Related Work')
+    prior = PaperChunk(id='prior',paper_id='rag',page=2,section='2.2 Evaluation Benchmarks',content='Prior systems compare alternative datasets and publish their earlier evaluation scores.')
+    results = PaperChunk(id='own-results',paper_id='rag',page=5,section='4 Experiments',content='Our evaluation shows that retrieval improves the measured accuracy on the held-out tasks.')
+    analysis = MockProvider().analyze([prior_heading,prior,results])
+    assert analysis.findings == results.content
+
+
+def test_experiments_have_priority_over_generic_evaluation_strategies():
+    overview = PaperChunk(id='overview',paper_id='rag',page=2,section='Automated evaluation of text generation systems',content='Earlier evaluation strategies ask language models to score fluency and factuality.')
+    results = PaperChunk(id='own-results',paper_id='rag',page=5,section='5 Experiments',content='Our experiment shows agreement between the evaluated metrics and the human judgments.')
+    assert MockProvider().analyze([overview,results]).findings == results.content
+
+
+def test_a_question_under_a_diagram_result_label_is_not_a_main_result():
+    question = PaperChunk(id='diagram',paper_id='rag',page=3,section='Result',content='when was penicillin first introduced to the public?')
+    assert MockProvider().analyze([question]).findings is None
+
+
+def test_an_example_answer_under_a_bare_result_label_is_not_a_main_result():
+    answer = PaperChunk(id='example-answer',paper_id='rag',page=3,section='Result',content='Penicillin was first introduced to the public in 1942 for clinical trials.')
+    assert MockProvider().analyze([answer]).findings is None

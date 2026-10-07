@@ -28,6 +28,9 @@ def normalize_doi(value: str | None) -> str | None:
     if not value:
         return None
     value = re.sub(r'^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)', '', value.strip(), flags=re.I)
+    # Common ACM/LaTeX template suffixes are not registered paper identities.
+    if re.search(r'(?:^|[/._-])(?:x{4,}|n{4,})(?:$|[._-])', value, re.I):
+        return None
     return value.lower() if len(value) <= 200 and DOI.fullmatch(value) else None
 
 
@@ -91,7 +94,7 @@ def _arxiv_html(data: bytes, identifier: str) -> dict[str, object]:
     return fields
 
 
-def _arxiv_atom(data: bytes, identifier: str) -> dict[str, object]:
+def _arxiv_atom(data: bytes, identifier: str, reference: str | None = None) -> dict[str, object]:
     if b'<!DOCTYPE' in data.upper() or b'<!ENTITY' in data.upper():
         return {}
     try:
@@ -101,6 +104,8 @@ def _arxiv_atom(data: bytes, identifier: str) -> dict[str, object]:
     ns = {'a': 'http://www.w3.org/2005/Atom', 'arxiv': 'http://arxiv.org/schemas/atom'}
     for entry in root.findall('a:entry', ns):
         if normalize_arxiv_id(entry.findtext('a:id', namespaces=ns)) != identifier:
+            continue
+        if reference and reference != identifier and normalize_arxiv_id(entry.findtext('a:id', namespaces=ns), preserve_version=True) != reference:
             continue
         title = entry.findtext('a:title', namespaces=ns)
         authors = [_clean(author.findtext('a:name', default='', namespaces=ns), 200) for author in entry.findall('a:author', ns)]
@@ -152,19 +157,23 @@ def _crossref(data: bytes, doi: str) -> dict[str, object]:
 def enrich_metadata(*, arxiv_id: str | None = None, doi: str | None = None, transport: httpx.BaseTransport | None = None, resolver: Resolver | None = None) -> MetadataResult:
     result = MetadataResult()
     identifier = normalize_arxiv_id(arxiv_id)
+    reference = normalize_arxiv_id(arxiv_id, preserve_version=True)
     normalized_doi = normalize_doi(doi)
     if identifier:
         fields = {}
         try:
-            response = fetch_public('https://arxiv.org/abs/' + identifier, max_bytes=METADATA_LIMIT, timeout=8.0, deadline=12.0, transport=transport, resolver=resolver)
-            if _trusted_origin(response.url, {'arxiv.org', 'www.arxiv.org', 'export.arxiv.org'}):
+            response = fetch_public('https://arxiv.org/abs/' + reference, max_bytes=METADATA_LIMIT, timeout=8.0, deadline=12.0, transport=transport, resolver=resolver)
+            actual_reference = normalize_arxiv_id(response.url, preserve_version=True)
+            if (_trusted_origin(response.url, {'arxiv.org', 'www.arxiv.org', 'export.arxiv.org'})
+                    and normalize_arxiv_id(response.url) == identifier
+                    and (reference == identifier or actual_reference == reference)):
                 fields = _arxiv_html(response.data, identifier)
         except HTTPException:
             pass
         if not fields or not fields.get('year'):
             try:
-                response = fetch_public('https://export.arxiv.org/api/query?id_list=' + quote(identifier, safe=''), max_bytes=METADATA_LIMIT, timeout=8.0, deadline=12.0, transport=transport, resolver=resolver)
-                atom = _arxiv_atom(response.data, identifier) if _trusted_origin(response.url, {'arxiv.org', 'www.arxiv.org', 'export.arxiv.org'}) else {}
+                response = fetch_public('https://export.arxiv.org/api/query?id_list=' + quote(reference, safe=''), max_bytes=METADATA_LIMIT, timeout=8.0, deadline=12.0, transport=transport, resolver=resolver)
+                atom = _arxiv_atom(response.data, identifier, reference) if _trusted_origin(response.url, {'arxiv.org', 'www.arxiv.org', 'export.arxiv.org'}) else {}
                 fields = {**fields, **atom}
             except HTTPException:
                 pass
@@ -185,6 +194,8 @@ def enrich_metadata(*, arxiv_id: str | None = None, doi: str | None = None, tran
         if fields:
             # Keep first-submission year/title/authors for arXiv; Crossref can fill venue/DOI.
             for name, value in fields.items():
+                if reference and reference != identifier and not result.fields.get('arxiv_id') and name in {'title', 'authors', 'year'}:
+                    continue
                 if name not in result.fields:
                     result.fields[name] = value
                     result.sources[name] = 'crossref'

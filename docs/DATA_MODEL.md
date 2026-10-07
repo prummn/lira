@@ -2,7 +2,7 @@
 
 > 文档类型：**目标数据模型**。本表清单与字段是预期 schema，不能视为当前 SQLite 已有表。前轮仅实现核心 ORM 表的简化字段；本轮已有 Alembic、证据定位与用户笔记字段，完整类型知识实体仍属于后续目标。实际表结构以当前 Alembic migration 与 ORM 模型为准，交付情况见 [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)。
 
-当前已实现的默认存储为 `backend/paper_reader.db` 和 `backend/storage/{paper_id}.pdf`。Alembic 最新版本 `0005_import_metadata` 仅向现有 papers 增加 `source_url VARCHAR(2048)`、`metadata_sources_json TEXT NOT NULL DEFAULT '{}'` 与 `metadata_warnings_json TEXT NOT NULL DEFAULT '[]'`，保留已有论文、分析、笔记与集合；下文的完整目标路径、实体和冲突表尚未全部落地。
+当前已实现的默认存储为 `backend/paper_reader.db` 和 `backend/storage/{paper_id}.pdf`。Alembic 最新版本 `0006_arxiv_revision` 在 `0005_import_metadata` 的 `source_url VARCHAR(2048)`、`metadata_sources_json TEXT NOT NULL DEFAULT '{}'` 与 `metadata_warnings_json TEXT NOT NULL DEFAULT '[]'` 之上，增加 nullable `arxiv_version INTEGER`，记录实际 PDF 修订版，保留已有论文、分析、笔记与集合；下文的完整目标路径、实体和冲突表尚未全部落地。
 
 ## 1. 目标存储约定
 

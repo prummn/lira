@@ -26,6 +26,26 @@ def test_arxiv_abs_version_normalizes_to_pdf_download() -> None:
     assert result.data == content
 
 
+@pytest.mark.parametrize('duration,allowed',[(70,True),(181,False)])
+def test_slow_realistic_pdf_transfer_has_a_bounded_three_minute_deadline(monkeypatch,duration,allowed):
+    from app.services.downloads import download_pdf
+    content = pdf_bytes('Original PDF with a slow public transfer')
+    elapsed = [0.0]
+    class SlowPDF(httpx.SyncByteStream):
+        def __iter__(self):
+            yield content[:10]
+            elapsed[0] = duration
+            yield content[10:]
+    monkeypatch.setattr('app.services.downloads.time.monotonic',lambda:elapsed[0])
+    transport = httpx.MockTransport(lambda _:httpx.Response(200,stream=SlowPDF()))
+    if allowed:
+        assert download_pdf('https://papers.example/real.pdf',transport=transport,resolver=public_resolver).data == content
+    else:
+        with pytest.raises(HTTPException) as failure:
+            download_pdf('https://papers.example/real.pdf',transport=transport,resolver=public_resolver)
+        assert failure.value.status_code == 504
+
+
 def test_public_redirect_pdf_is_allowed_and_each_target_is_checked() -> None:
     from app.services.downloads import download_pdf
 
@@ -131,6 +151,48 @@ def test_arxiv_citation_metadata_uses_original_year_and_author_order() -> None:
     assert result.fields['arxiv_id'] == '1706.03762'
     assert result.sources['year'] == 'arxiv'
     assert result.warnings == []
+
+
+def test_arxiv_metadata_fetches_requested_revision_instead_of_latest() -> None:
+    from app.services.metadata import enrich_metadata
+    calls = []
+    def respond(request):
+        calls.append(str(request.url))
+        authors = ['First, Alice', 'Original, Bob'] if request.url.path.endswith('v2') else ['First, Alice']
+        page = '<meta name="citation_title" content="Versioned Paper"><meta name="citation_date" content="2024/01/30"><meta name="citation_arxiv_id" content="2401.17043">'
+        page += ''.join(f'<meta name="citation_author" content="{name}">' for name in authors)
+        return httpx.Response(200, text=page)
+    result = enrich_metadata(arxiv_id='2401.17043v2', transport=httpx.MockTransport(respond), resolver=public_resolver)
+    assert calls == ['https://arxiv.org/abs/2401.17043v2']
+    assert result.fields['authors'] == ['Alice First', 'Bob Original']
+    assert result.fields['arxiv_id'] == '2401.17043'
+
+
+def test_versioned_metadata_does_not_silently_accept_latest_atom_entry() -> None:
+    from app.services.metadata import enrich_metadata
+    feed = '<feed xmlns="http://www.w3.org/2005/Atom"><entry><id>http://arxiv.org/abs/2401.17043v6</id><title>Latest</title><published>2024-01-30</published><author><name>Different Author</name></author></entry></feed>'
+    def respond(request):
+        return httpx.Response(503) if request.url.host == 'arxiv.org' else httpx.Response(200, text=feed)
+    result = enrich_metadata(arxiv_id='2401.17043v2', transport=httpx.MockTransport(respond), resolver=public_resolver)
+    assert result.fields == {}
+    assert result.warnings
+
+
+def test_crossref_does_not_replace_unavailable_exact_revision_byline() -> None:
+    from app.services.metadata import enrich_metadata
+    def respond(request):
+        if request.url.host == 'api.crossref.org':
+            return httpx.Response(200, json={'message': {'DOI': '10.1234/registered', 'title': ['Published version'], 'author': [{'given': 'Different', 'family': 'Author'}], 'container-title': ['Verified Journal'], 'published': {'date-parts': [[2025]]}}})
+        return httpx.Response(503)
+    result = enrich_metadata(arxiv_id='2401.17043v2', doi='10.1234/registered', transport=httpx.MockTransport(respond), resolver=public_resolver)
+    assert result.fields == {'doi': '10.1234/registered', 'venue': 'Verified Journal'}
+    assert result.warnings
+
+
+@pytest.mark.parametrize('value', ['10.1145/nnnnnnn.nnnnnnn', '10.1234/XXXXXXX.XXXXXXX'])
+def test_template_placeholder_dois_are_unknown(value) -> None:
+    from app.services.metadata import normalize_doi
+    assert normalize_doi(value) is None
 
 
 def test_arxiv_atom_fallback_uses_published_not_updated() -> None:

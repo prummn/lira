@@ -80,6 +80,7 @@ def paper_summary(paper: Paper) -> PaperSummary:
         venue=paper.venue,
         doi=paper.doi,
         arxiv_id=paper.arxiv_id,
+        arxiv_version=paper.arxiv_version,
         source_url=paper.source_url,
         metadata_sources=source_values(paper.metadata_sources_json),
         metadata_warnings=values(paper.metadata_warnings_json),

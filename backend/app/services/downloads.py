@@ -15,6 +15,7 @@ import httpx
 
 MAX_PDF_BYTES = 50 * 1024 * 1024
 MAX_REDIRECTS = 5
+PDF_DOWNLOAD_DEADLINE = 180.0
 ARXIV_ID = re.compile(r'(?P<base>(?:\d{4}\.\d{4,5}|[a-z][a-z.\-]+/\d{7}))(?P<version>v[1-9]\d*)?', re.I)
 ARXIV_HOSTS = {'arxiv.org', 'www.arxiv.org', 'export.arxiv.org'}
 Resolver = Callable[[str, int], list[str]]
@@ -36,7 +37,7 @@ class PublicResponse:
     content_type: str
 
 
-def normalize_arxiv_id(value: str | None) -> str | None:
+def normalize_arxiv_id(value: str | None, *, preserve_version: bool = False) -> str | None:
     if not value:
         return None
     candidate = value.strip()
@@ -56,7 +57,7 @@ def normalize_arxiv_id(value: str | None) -> str | None:
     if candidate.lower().endswith('.pdf'):
         candidate = candidate[:-4]
     match = ARXIV_ID.fullmatch(candidate)
-    return match.group('base').lower() if match else None
+    return (match.group('base') + (match.group('version') or '' if preserve_version else '')).lower() if match else None
 
 
 def resolve_addresses(host: str, port: int) -> list[str]:
@@ -171,7 +172,7 @@ def download_pdf(value: str, *, transport: httpx.BaseTransport | None = None, re
     if arxiv_id and url.host in ARXIV_HOSTS:
         identifier = re.sub(r'^/(?:abs|pdf|html)/', '', url.path).removesuffix('.pdf').rstrip('/')
         download_url = 'https://arxiv.org/pdf/' + identifier
-    result = fetch_public(download_url, max_bytes=MAX_PDF_BYTES, transport=transport, resolver=resolver)
+    result = fetch_public(download_url, max_bytes=MAX_PDF_BYTES, deadline=PDF_DOWNLOAD_DEADLINE, transport=transport, resolver=resolver)
     if not result.data.startswith(b'%PDF-'):
         raise HTTPException(415, '链接返回的内容不是 PDF；请提供 arXiv abs/pdf 链接或公开 PDF 直链')
     name = PurePosixPath(httpx.URL(result.url).path).name or 'linked-paper.pdf'

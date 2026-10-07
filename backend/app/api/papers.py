@@ -255,6 +255,8 @@ def update_paper(
             if field == 'authors':
                 replace_authors(session, paper, value)
             else:
+                if field == 'arxiv_id' and value != paper.arxiv_id:
+                    paper.arxiv_version = None
                 setattr(paper, field, value)
             sources[field] = 'manual'
         paper.metadata_sources_json = json.dumps(sources, ensure_ascii=False)
