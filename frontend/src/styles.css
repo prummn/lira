@@ -454,3 +454,33 @@ body { background: var(--bg); }
 .source-badge { border-radius:2px; }
 .graph-view, .comparison-view, .concept-view, .researcher-list, .researcher-detail, .settings-card { border-radius:6px; box-shadow:0 4px 12px rgba(61,42,26,.025); }
 .graph-caption, .field-toolbar { background:var(--surface); }
+.reader-toolbar { background:var(--surface); border-bottom-color:var(--border); }
+.reader-title { font-weight:600; letter-spacing:-.015em; }
+.back-btn { color:var(--accent); transition:color var(--motion-fast) ease, transform var(--motion-fast) ease; }
+.back-btn:hover { color:#814627; }
+.back-btn:active { transform:translateX(-2px); }
+.reader-research-panel { min-width:0; display:block; }
+.reader-research-panel > .notebook-panel { height:100%; }
+.reading-modes { background:var(--surface); border-bottom-color:var(--border); }
+.reading-modes button.active { color:var(--accent); border-color:var(--accent); }
+.selection-actions { border-color:#e1b79a; background:#fff8f1; }
+.analysis-control { border-color:var(--border); background:var(--surface-subtle); box-shadow:none; }
+.analysis-control header > strong { letter-spacing:.01em; }
+.analysis-progress progress { accent-color:var(--accent); }
+.field-toolbar { border-bottom-color:var(--border); }
+.field-tabs button { border-radius:4px; }
+.field-tabs button.active { color:var(--accent); border-color:var(--accent); }
+.timeline-card { box-shadow:none; }
+.timeline-node { background:var(--accent); box-shadow:0 0 0 4px var(--accent-soft); }
+.timeline-card .paper-link { color:var(--text); }
+.comparison-table th button, .paper-link { color:var(--accent); }
+.researcher-row.active { box-shadow:inset 3px 0 var(--accent); }
+.segmented-control button.active { color:var(--accent); }
+.settings-section h2 { letter-spacing:-.01em; }
+@media (max-width: 650px) {
+  .library-selection-detail { align-items:flex-start; flex-direction:column; }
+  .selection-detail-actions { justify-content:flex-start; }
+  .library-facts { gap:6px 14px; }
+  .reader-toolbar { flex-wrap:wrap; height:auto; min-height:48px; padding-block:9px; }
+  .reader-pages { margin-left:auto; }
+}
