@@ -531,6 +531,19 @@ def test_responses_stream_truncation_and_error_are_safe_failures(events):
         assert provider.last_usage['output_tokens'] == 99
 
 
+def test_unknown_sse_error_from_successful_stream_is_retryable():
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+    from app.providers.base import ProviderError
+    event = {'type': 'error', 'error': {'message': 'temporary upstream failure'}}
+    provider = OpenAICompatibleProvider(api_key='test', wire_api='responses', transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, headers={'content-type': 'text/event-stream'},
+            content=('data: ' + json.dumps(event) + '\n\n').encode())))
+    with pytest.raises(ProviderError) as error:
+        provider.complete_json('JSON', {}, max_output_tokens=300)
+    assert error.value.code == 'upstream_error'
+    assert error.value.retryable is True
+
+
 def provider_for(content: str | dict):
     from app.providers.openai_compatible import OpenAICompatibleProvider
     message = content if isinstance(content,str) else json.dumps(content)

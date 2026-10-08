@@ -180,6 +180,44 @@ def test_corrected_tldr_keeps_condition_and_both_rows_without_touching_other_slo
     assert not report['rejected_fields']
 
 
+def test_corrected_section_summary_can_infer_unique_source_section(review):
+    card, parts = example()
+    batch = next(batch for batch in review.prepare_reviews(card, parts)[0]
+                 if any(item['field'] == 'section_summaries[0]' for item in batch.payload['items']))
+    raw = review.serialize_card(card, parts)
+    section_item = next(item for item in batch.payload['items']
+                        if item['field'] == 'section_summaries[0]')
+    source_id = section_item['citation_ids'][0]
+    response = responses(batch, {'section_summaries[0]': {
+        'field': 'section_summaries[0]', 'decision': 'corrected',
+        'value': {'content': 'GPT-3.5的F1结果需要单独比较。', 'citation_ids': [source_id]},
+    }})
+    patched, result = review.apply_review(raw, batch, response,
+        lambda field, value, sources: True)
+    assert result['corrected_fields'] == ['section_summaries[0]']
+    assert patched['card']['section_summaries'][0]['section'] == 'Appendix'
+
+
+def test_corrected_section_summary_does_not_infer_across_sections(review):
+    card, parts = example()
+    batch = next(batch for batch in review.prepare_reviews(card, parts)[0]
+                 if any(item['field'] == 'section_summaries[0]' for item in batch.payload['items']))
+    raw = review.serialize_card(card, parts)
+    section_item = next(item for item in batch.payload['items']
+                        if item['field'] == 'section_summaries[0]')
+    source_ids = [source['id'] for source in batch.payload['sources']
+                  if source['section'] in {'Appendix', 'Results'}]
+    response = responses(batch, {'section_summaries[0]': {
+        'field': 'section_summaries[0]', 'decision': 'corrected',
+        'value': {'content': '跨章节证据不足。', 'citation_ids': source_ids[:2]},
+    }})
+    patched, result = review.apply_review(raw, batch, response,
+        lambda field, value, sources: True)
+    assert result['rejected_fields'] == ['section_summaries[0]']
+    assert result['rejection_reasons']['section_summaries[0]'] == 'science_review_format'
+    assert patched['card']['section_summaries'][0] is None
+
+
 @pytest.mark.parametrize('decision', ['missing', 'duplicate', 'foreign', 'empty', 'wrong_type', 'bad_section', 'validator_reject'])
 def test_invalid_review_cannot_preserve_a_suspect_claim_or_edit_another_slot(review, decision):
     card, parts = example()

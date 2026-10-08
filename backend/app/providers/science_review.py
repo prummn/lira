@@ -324,8 +324,17 @@ def apply_review(raw, batch, response, validate):
             mapped = {'content': content.strip(), 'citations': [
                 {key: source[key] for key in ('part_id', 'chunk_id', 'source_text')} for source in sources]}
             if path.startswith('section_summaries['):
-                mapped['section'] = value.get('section')
-                valid = isinstance(mapped['section'], str) and all(source['section'] == mapped['section'] for source in sources)
+                if 'section' in value:
+                    mapped['section'] = value['section']
+                else:
+                    source_sections = [source.get('section') for source in sources]
+                    unique_sections = set(source_sections)
+                    if (source_sections and all(isinstance(section, str) and section.strip()
+                                                for section in source_sections)
+                            and len(unique_sections) == 1):
+                        mapped['section'] = source_sections[0]
+                valid = (isinstance(mapped.get('section'), str)
+                         and all(source['section'] == mapped['section'] for source in sources))
             if valid:
                 try:
                     valid = validate(path, mapped, sources)

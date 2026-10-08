@@ -204,7 +204,19 @@ class OpenAICompatibleProvider:
                     self._record_response_metadata(event['response'])
                 if event_type == 'error':
                     self._record_response_metadata(event)
-                    raise self._upstream_failure(event.get('error', event))
+                    failure = self._upstream_failure(event.get('error', event))
+                    # Some Responses gateways emit a 200 SSE envelope with an
+                    # error event whose code/type is absent or provider-specific.
+                    # The request was accepted and the stream failed upstream,
+                    # so retry this narrow case through the bounded caller
+                    # recovery path. Explicit HTTP/auth/request failures still
+                    # remain non-retryable.
+                    if (response.status_code == 200 and isinstance(event.get('error'), dict)
+                            and failure.code == 'upstream_error'
+                            and failure.diagnostics.get('upstream_code') in {'unknown', 'missing'}
+                            and failure.diagnostics.get('upstream_type') in {'unknown', 'missing'}):
+                        failure.retryable = True
+                    raise failure
                 if event_type in ('response.completed', 'response.incomplete', 'response.failed'):
                     if not isinstance(event.get('response'), dict):
                         raise ProviderError('模型流式响应格式无效，已有结果已保留', code='invalid_response')
