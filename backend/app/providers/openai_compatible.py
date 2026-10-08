@@ -4,6 +4,7 @@ import json
 import hashlib
 import math
 import time
+import ssl
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,30 @@ class OpenAICompatibleProvider:
         self.json_mode = json_mode
         self.response_model: str | None = None
         self.last_usage: dict = {}
+        self.last_http_status: int | None = None
+
+    def _http_diagnostics(self) -> dict:
+        return {'http_status': self.last_http_status} if self.last_http_status is not None else {}
+
+    def _transport_diagnostics(self, error: Exception) -> dict:
+        known = {'ConnectError', 'ReadError', 'WriteError', 'CloseError', 'ConnectTimeout',
+                 'ReadTimeout', 'WriteTimeout', 'PoolTimeout', 'RemoteProtocolError'}
+        return {**self._http_diagnostics(), 'transport_type':
+                type(error).__name__ if type(error).__name__ in known else 'unknown'}
+
+    @staticmethod
+    def _certificate_error(error: Exception) -> ssl.SSLCertVerificationError | None:
+        pending, seen = [error], set()
+        while pending and len(seen) < 12:
+            current = pending.pop()
+            if id(current) in seen:
+                continue
+            seen.add(id(current))
+            if isinstance(current, ssl.SSLCertVerificationError):
+                return current
+            pending.extend(value for value in (current.__cause__, current.__context__, *current.args)
+                           if isinstance(value, BaseException))
+        return None
 
     @staticmethod
     def _prompt(name: str) -> str:
@@ -94,19 +119,28 @@ class OpenAICompatibleProvider:
 
     @staticmethod
     def _upstream_failure(error: object) -> ProviderError:
-        # Only documented codes affect recovery; upstream text is never copied.
-        code = error.get('code') if isinstance(error, dict) else None
-        if not isinstance(code, str):
-            code = None
+        # Error envelopes may carry a type with code=null. An explicit unknown
+        # code remains authoritative: don't turn arbitrary provider errors into
+        # paid retries based on a broad type or untrusted message.
+        public = {'rate_limit', 'rate_limit_error', 'rate_limit_exceeded', 'server_error',
+            'api_error', 'overloaded_error', 'invalid_api_key', 'authentication_error',
+            'permission_denied', 'invalid_request_error'}
+        raw_code = error.get('code') if isinstance(error, dict) else None
+        error_type = error.get('type') if isinstance(error, dict) else None
+        def category(value):
+            return value if isinstance(value, str) and value in public else 'missing' if value is None else 'unknown'
+        diagnostics = {'upstream_code': category(raw_code), 'upstream_type': category(error_type)}
+        code = raw_code if raw_code is not None else error_type
+        code = code if isinstance(code, str) else None
         if code in {'rate_limit', 'rate_limit_error', 'rate_limit_exceeded'}:
-            return ProviderError('模型服务请求受限，请稍后重试', 503, code='rate_limit', retryable=True)
-        if code == 'server_error':
-            return ProviderError('模型服务暂时失败，请稍后重试；已有结果已保留', code='upstream_error', retryable=True)
+            return ProviderError('模型服务请求受限，请稍后重试', 503, code='rate_limit', retryable=True, diagnostics=diagnostics)
+        if code in {'server_error', 'api_error', 'overloaded_error'}:
+            return ProviderError('模型服务暂时失败，请稍后重试；已有结果已保留', code='upstream_error', retryable=True, diagnostics=diagnostics)
         if code in {'invalid_api_key', 'authentication_error', 'permission_denied'}:
-            return ProviderError('模型服务认证失败，请检查 API key 与账户权限', code='authentication')
+            return ProviderError('模型服务认证失败，请检查 API key 与账户权限', code='authentication', diagnostics=diagnostics)
         if code == 'invalid_request_error':
-            return ProviderError('模型服务拒绝请求，请检查模型与接口配置', code='invalid_request')
-        return ProviderError('模型服务请求失败，已有结果已保留', code='upstream_error')
+            return ProviderError('模型服务拒绝请求，请检查模型与接口配置', code='invalid_request', diagnostics=diagnostics)
+        return ProviderError('模型服务请求失败（服务端未提供可识别的错误分类），已有结果已保留', code='upstream_error', diagnostics=diagnostics)
 
     @classmethod
     def _response_failure(cls, data: dict) -> ProviderError:
@@ -187,6 +221,7 @@ class OpenAICompatibleProvider:
     def _complete(self, system: str, user: str, *, json_output: bool, max_output_tokens: int = 3000, reasoning_effort: str | None = None) -> str:
         self.last_usage = {}
         self.response_model = None
+        self.last_http_status = None
         effort = self.effective_reasoning_effort(reasoning_effort)
         if self.wire_api == 'responses':
             payload: dict[str, Any] = {'model': self.model, 'instructions': system, 'input': [{'role': 'user', 'content': [{'type': 'input_text', 'text': ('Return JSON for this data:\n' if json_output else '') + user}]}], 'max_output_tokens': max_output_tokens, 'store': False, 'stream': True}
@@ -204,38 +239,51 @@ class OpenAICompatibleProvider:
             endpoint = '/chat/completions'
         try:
             streamed = None
+            response = None
             response_content = b''
             deadline = time.monotonic() + self.timeout
             with httpx.Client(transport=self._transport, timeout=self.timeout, follow_redirects=False, headers={'Authorization':f'Bearer {self._api_key}', 'Accept-Encoding':'identity'}) as client:
                 with client.stream('POST', self.base_url + endpoint, json=payload) as response:
+                    self.last_http_status = response.status_code
                     if response.is_success:
                         if self.wire_api == 'responses' and 'text/event-stream' in response.headers.get('content-type', ''):
                             streamed = self._stream_response(response, deadline)
                         else:
                             response_content = self._read_json_response(response, deadline)
-        except httpx.TimeoutException:
-            raise ProviderError('模型服务请求超时，请稍后重试；原文和已有结果已保留',504, code='transport_timeout', retryable=True) from None
-        except httpx.RemoteProtocolError:
-            raise ProviderError('模型服务连接中断，请稍后重试；原文和已有结果已保留', code='transport_protocol', retryable=True) from None
-        except httpx.NetworkError:
-            raise ProviderError('无法连接模型服务，请稍后重试；原文已保留', code='transport_connection', retryable=True) from None
+        except ProviderError as error:
+            if response is not None:
+                error.diagnostics = {**error.diagnostics, 'http_status': response.status_code}
+            raise
+        except httpx.TimeoutException as error:
+            raise ProviderError('模型服务请求超时，请稍后重试；原文和已有结果已保留',504, code='transport_timeout', retryable=True, diagnostics=self._transport_diagnostics(error)) from None
+        except httpx.RemoteProtocolError as error:
+            raise ProviderError('模型服务连接中断，请稍后重试；原文和已有结果已保留', code='transport_protocol', retryable=True, diagnostics=self._transport_diagnostics(error)) from None
+        except httpx.NetworkError as error:
+            diagnostics = self._transport_diagnostics(error)
+            certificate = self._certificate_error(error)
+            if certificate is not None:
+                verify_code = getattr(certificate, 'verify_code', None)
+                if isinstance(verify_code, int) and 0 <= verify_code <= 1000:
+                    diagnostics['tls_verify_code'] = verify_code
+                raise ProviderError('模型服务证书验证失败，请检查服务证书与受信任 CA 配置；已有结果已保留', code='tls_certificate', diagnostics=diagnostics) from None
+            raise ProviderError('无法连接模型服务，请稍后重试；原文已保留', code='transport_connection', retryable=True, diagnostics=diagnostics) from None
         except (httpx.LocalProtocolError, httpx.UnsupportedProtocol):
             raise ProviderError('模型请求协议无效，请检查接口配置；原文已保留', code='invalid_request') from None
         except httpx.DecodingError:
-            raise ProviderError('模型服务响应格式无效，已有结果已保留', code='invalid_response') from None
+            raise ProviderError('模型服务响应格式无效，已有结果已保留', code='invalid_response', diagnostics=self._http_diagnostics()) from None
         except httpx.HTTPError:
             raise ProviderError('无法连接模型服务，请检查模型地址和网络；原文已保留') from None
         if response.status_code in {401,403}:
-            raise ProviderError('模型服务认证失败，请检查 API key 与账户权限', code='authentication')
+            raise ProviderError('模型服务认证失败，请检查 API key 与账户权限', code='authentication', diagnostics={'http_status': response.status_code})
         if response.status_code == 429:
-            raise ProviderError('模型服务请求受限，请稍后重试',503, code='rate_limit', retryable=True, retry_after=self._retry_after(response))
+            raise ProviderError('模型服务请求受限，请稍后重试',503, code='rate_limit', retryable=True, retry_after=self._retry_after(response), diagnostics={'http_status': response.status_code})
         if response.status_code in {408, 504, 524}:
-            raise ProviderError(f'模型网关等待响应超时（HTTP {response.status_code}），请稍后重试；已有结果已保留', 504, code='upstream_timeout', retryable=True, retry_after=self._retry_after(response))
+            raise ProviderError(f'模型网关等待响应超时（HTTP {response.status_code}），请稍后重试；已有结果已保留', 504, code='upstream_timeout', retryable=True, retry_after=self._retry_after(response), diagnostics={'http_status': response.status_code})
         if not response.is_success:
             retryable = response.status_code in {500, 502, 503}
             raise ProviderError('模型服务返回错误，请检查所选模型、接口协议与 JSON 输出配置',
                 code='upstream_error' if response.status_code >= 500 else 'invalid_request', retryable=retryable,
-                retry_after=self._retry_after(response) if retryable else None)
+                retry_after=self._retry_after(response) if retryable else None, diagnostics={'http_status': response.status_code})
         try:
             data = streamed if streamed is not None else json.loads(response_content)
             if not isinstance(data, dict):
@@ -257,8 +305,11 @@ class OpenAICompatibleProvider:
                 raise ValueError('No model content')
             self.response_model = str(data.get('model') or self.model)[:200]
             return content.strip()
+        except ProviderError as error:
+            error.diagnostics = {**error.diagnostics, 'http_status': response.status_code}
+            raise
         except (KeyError,IndexError,ValueError,TypeError,AttributeError):
-            raise ProviderError('模型服务返回了无法读取的结果，已有结果已保留', code='invalid_response') from None
+            raise ProviderError('模型服务返回了无法读取的结果，已有结果已保留', code='invalid_response', diagnostics=self._http_diagnostics()) from None
 
     def _json(self, prompt: str, data: dict[str, Any]) -> dict[str, Any]:
         return self.complete_json(prompt, data, max_output_tokens=3000)
@@ -271,7 +322,7 @@ class OpenAICompatibleProvider:
                 raise ValueError('Expected object')
             return result
         except (json.JSONDecodeError,ValueError):
-            raise ProviderError('模型返回的结构化 JSON 无效，已有结果已保留', code='invalid_response') from None
+            raise ProviderError('模型返回的结构化 JSON 无效，已有结果已保留', code='invalid_response', diagnostics=self._http_diagnostics()) from None
 
     @staticmethod
     def _context(chunks: list[PaperChunk], *, prioritize_sections: bool = True) -> tuple[list[dict[str, str | None]],dict[str,str]]:

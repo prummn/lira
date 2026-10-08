@@ -10,7 +10,7 @@ from ..models import PaperChunk
 from ..services.model_calls import CallResult, cache_validated_call, cached_call, evict_call, json_call
 from ..services.structure import extract_structure
 from .base import AnalysisResult, CardEntry, ProviderError, VerifiedCitation
-from .cards import CARD_ALIASES, CARD_LIMITS, LIST_FIELDS, SINGLE_FIELDS
+from .cards import CARD_ALIASES, CARD_LIMITS, LIST_FIELDS, SINGLE_FIELDS, card_schema
 from .card_recovery import apply_repairs, preserves_entries, repair_targets, resolved_field
 from .science_review import MAX_BATCHES, MAX_ITEMS, MAX_PAYLOAD_CHARS, run_science_review
 from .openai_compatible import PROMPTS_DIR
@@ -23,7 +23,7 @@ MAX_REDUCTION_FACTS = 24
 SOURCE_CHARS = 600
 MAX_TRANSPORT_RETRIES = 2
 MAX_RECOVERY_CALLS = 6
-ALGORITHM_VERSION = 'fullpaper-science-review-v8'
+ALGORITHM_VERSION = 'fullpaper-science-review-v11'
 PROMPT_NAMES = ('paper_extract.txt', 'paper_reduce.txt', 'paper_synthesize.txt', 'paper_repair.txt', 'paper_review.txt')
 
 
@@ -406,6 +406,9 @@ def analyze_full_paper(database: Database, provider, chunks: list[PaperChunk], *
                 break
             except ProviderError as error:
                 calls.append(CallResult({}, sanitize_usage(getattr(provider, 'last_usage', {})), False, getattr(provider, 'response_model', None) or getattr(provider, 'model', '')))
+                report.setdefault('failures', []).append({'phase': current_phase, 'operation': operation,
+                    'attempt': attempt + 1, 'code': error.code, 'retryable': error.retryable,
+                    'diagnostics': getattr(error, 'diagnostics', {})})
                 publish(current_phase)
                 if not getattr(error, 'retryable', False) or attempt == MAX_TRANSPORT_RETRIES or not reserve_recovery():
                     raise
@@ -540,7 +543,7 @@ def analyze_full_paper(database: Database, provider, chunks: list[PaperChunk], *
     if retained != source_fact_ids:
         raise ProviderError('归纳未保留全部已验证事实的来源，已有结果已保留')
     publish('synthesize')
-    response = call(synth_prompt, {**_model_context(facts, pool), 'coverage': report['coverage'], 'fact_coverage': report['fact_coverage']}, 'paper_synthesize', getattr(provider, 'reasoning_effort', 'high'), 10000)
+    response = call(synth_prompt, {**_model_context(facts, pool), 'card_schema': card_schema(), 'limits': dict(CARD_LIMITS), 'coverage': report['coverage'], 'fact_coverage': report['fact_coverage']}, 'paper_synthesize', getattr(provider, 'reasoning_effort', 'high'), 10000)
     synth_descriptor = descriptors[-1]
     rejection_start = len(report['rejections'])
     card_error = None

@@ -1,0 +1,2982 @@
+{
+  "provenance": "CodeRAG arXiv:2406.14497; original PDF extraction and real v8 review request, 2026-10-08",
+  "chunks": [
+    {
+      "id": "chunk-paper-f77503c596c24013-000000",
+      "page": 1,
+      "section": "1 Introduction",
+      "content": "CODERAG-BENCH:\nCan Retrieval Augment Code Generation?"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000001",
+      "page": 1,
+      "section": "1 Introduction",
+      "content": "Zora Zhiruo Wang♠*\nAkari Asai♢∗"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000002",
+      "page": 1,
+      "section": "1 Introduction",
+      "content": "Xinyan Velocity Yu♡\nFrank F. Xu ♠\nYiqing Xie ♠"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000003",
+      "page": 1,
+      "section": "1 Introduction",
+      "content": "Graham Neubig ♠\nDaniel Fried ♠"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000004",
+      "page": 1,
+      "section": "1 Introduction",
+      "content": "♠Carnegie Mellon University\n♢University of Washington\n♡University of Southern California\nhttps://code-rag-bench.github.io/"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000005",
+      "page": 1,
+      "section": "Abstract",
+      "content": "Abstract"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000006",
+      "page": 1,
+      "section": "1 Introduction",
+      "content": "Retrieval-augmented generation (RAG; Lewis\net al. 2020; Guu et al. 2020) addresses this by re-\ntrieving relevant documents at inference time, re-\nducing reliance on model parameters (Asai et al.,\n2024) and improving accuracy across tasks (Izac-\nard et al., 2022b). Despite success in text-based\ntasks, its application to diverse coding problems\nand retrieval sources remains under-explored (Zhou\net al., 2023; Su et al., 2024)."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000007",
+      "page": 1,
+      "section": "1 Introduction",
+      "content": "We present CODERAG-BENCH, a holistic\nbenchmark designed to advance research in\nretrieval-augmented code generation (RACG; §2).\nCODERAG-BENCH (as in Figure 1) covers six pro-\ngramming tasks across four categories: basic pro-\ngramming, open-domain coding, repository-level,\nand code retrieval tasks. For each task, we man-\nually annotate canonical documents as references\nfor evaluating RACG systems. We also compile\na diverse corpus of documents from five sources:\nprogramming solutions, online tutorials, Python\nlibrary documentation, StackOverflow posts, and\nGitHub files. In total, CODERAG-BENCH has 9k\ncoding tasks and 25 million retrieval documents,\nproviding a robust foundation for reproducible and\nreliable evaluations in retrieval and RACG."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000008",
+      "page": 1,
+      "section": "Abstract",
+      "content": "While language models (LMs) excel at generat-\ning code, many programs are difficult to gener-\nate using only parametric knowledge. Despite\nthe success of retrieval-augmented generation\n(RAG) in text-centric tasks, its potential for\ncode generation remains under-explored. This\nwork introduces CODERAG-BENCH, a holis-\ntic retrieval-augmented code generation bench-\nmark covering tasks like basic programming,\nopen-domain, and repository-level problems\nand provide reproducible evaluations on both\nretrieval and end-to-end code generation perfor-\nmance. We further create a diverse, open datas-\ntore for code retrieval, aggregating sources such\nas competition solutions, tutorials, library doc-\numentation, StackOverflow posts, and GitHub\nrepositories. Based on CODERAG-BENCH, we\nconduct large-scale evaluations of 10 retrievers\nand 10 LMs and systematically analyze when\nretrieval can benefit code generation models\nand identify remaining challenges. We find that\nwhile retrieving high-quality contexts improves\ncode generation, retrievers often struggle to\nfetch useful contexts, and generators face limi-\ntations in using those contexts effectively. We\nhope CODERAG-BENCH encourages further\ndevelopment in code-oriented RAG methods."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000009",
+      "page": 1,
+      "section": "1 Introduction",
+      "content": "1"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000010",
+      "page": 1,
+      "section": "1 Introduction",
+      "content": "Introduction"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000011",
+      "page": 1,
+      "section": null,
+      "content": "arXiv:2406.14497v2  [cs.SE]  26 Feb 2025"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000012",
+      "page": 1,
+      "section": "1 Introduction",
+      "content": "Generating code from natural language has rapidly\nadvanced with language models (LMs; Chen et al.\n2021; Li et al. 2022, 2023; Roziere et al. 2023).\nHowever, most models follow an NL (Natural\nLanguage)-to-code approach without integrating\nexternal context, which is crucial in complex sce-\nnarios like using unfamiliar libraries (Zhou et al.,\n2023; Jimenez et al., 2024). Relying solely on para-\nmetric knowledge also limits adaptation to new\ndata distributions at test time, such as evolving pub-\nlic libraries or private code bases not seen during\ntraining (Zhang et al., 2023; Jimenez et al., 2024)."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000013",
+      "page": 1,
+      "section": "1 Introduction",
+      "content": "*Equal contribution."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000014",
+      "page": 1,
+      "section": "1 Introduction",
+      "content": "We conduct holistic evaluations in retrieval, gen-\neration, and RACG (§3). Code generation mod-\nels significantly benefit from access to canonical\ndocuments (i.e., from the canonical retrieval cor-\npus) in various scenarios. For example, GPT-4o\nachieves a 27.4% gain on SWE-Bench and a 6.9%\ngain on the harder ODEX subset when canonical\ndocuments are provided. In RACG settings, where\nmodels retrieve top relevant documents, some even\nsurpass their performance when using gold docu-\nments, highlighting the strong potential of retrieval-\naugmented approaches for enhancing code genera-\ntion. However, current retrieval models face chal-\nlenges in selecting useful documents, particularly\nfor open-domain and repository-level tasks. Ad-\nditionally, generation models with limited context"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000015",
+      "page": 2,
+      "section": "8 Coding Tasks for Code RAG",
+      "content": "8 Coding Tasks for Code RAG"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000016",
+      "page": 2,
+      "section": "2 The CODERAG-BENCH",
+      "content": "Code Retrieval x 1"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000017",
+      "page": 2,
+      "section": "8 Coding Tasks for Code RAG",
+      "content": "Basic Programming x 3\nRepository-Level x 2"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000018",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "Open-Domain x 2"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000019",
+      "page": 2,
+      "section": "2 The CODERAG-BENCH",
+      "content": "run_colmap("
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000020",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "def has_close_elements("
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000021",
+      "page": 2,
+      "section": "2 The CODERAG-BENCH",
+      "content": "image_path, ...)"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000022",
+      "page": 2,
+      "section": "2 The CODERAG-BENCH",
+      "content": "Q: Print a log message to\nstandard error."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000023",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "import\nnumpy as\nnp"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000024",
+      "page": 2,
+      "section": "2 The CODERAG-BENCH",
+      "content": "def downscale("
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000025",
+      "page": 2,
+      "section": "2 The CODERAG-BENCH",
+      "content": "def print_log(text, *colors):"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000026",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "import\npandas"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000027",
+      "page": 2,
+      "section": "2 The CODERAG-BENCH",
+      "content": "def main():\nutils.copy_img(data, img_dir)\nutils.downscale(img_dir, conﬁg)\n# call COLMAP executable\n>> __________________"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000028",
+      "page": 2,
+      "section": "2 The CODERAG-BENCH",
+      "content": "sys.stderr.write(\nsprint(text, *colors))"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000029",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "df.columns = np.concatenate(\n[df.iloc[0, :2], df.columns[2:]])\ndf =\ndf.iloc[1:].reset_index(drop=True)\nreturn df"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000030",
+      "page": 2,
+      "section": "2 The CODERAG-BENCH",
+      "content": "img_dir, conﬁg):\n... ...\nreturn img"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000031",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "numbers: List[ﬂoat], threshold: ﬂoat)\n-> bool:\n\"\"\" Check if in given list of numbers,\nare any two numbers closer to each\nother than given threshold.\n\"\"\""
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000032",
+      "page": 2,
+      "section": "2 The CODERAG-BENCH",
+      "content": "Reproducible retrieval and end-to-end evaluation"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000033",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "5 Document Sources for Retrieval"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000034",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "Programming Solutions"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000035",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "Library Documentation"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000036",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "def truncate_number(number) -> ﬂoat:\n\"\"\"Return the decimal part. \"\"\"\nreturn number % 1.0"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000037",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "numpy.dot(a, b, out=None)"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000038",
+      "page": 2,
+      "section": "2 The CODERAG-BENCH",
+      "content": "Models"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000039",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "Dot product of two arrays."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000040",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "Online Tutorials"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000041",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "●If both a and b are 1-D arrays …"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000042",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "Example #1: Using shutil.move() to\nmove ﬁle from source to destination"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000043",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "oneuser/codemodels"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000044",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "… import shutil\ndst = shutil.move(src, dst_path) …"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000045",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "preprocess"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000046",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "StackOverﬂow Posts"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000047",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "evaluate_execution.py"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000048",
+      "page": 2,
+      "section": "2 The CODERAG-BENCH",
+      "content": "Datastore"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000049",
+      "page": 2,
+      "section": "2 The CODERAG-BENCH",
+      "content": "Retriever\nLM"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000050",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "Pandas map multiple columns based\non speciﬁc conditions"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000051",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "GitHub Repositories"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000052",
+      "page": 2,
+      "section": "2 The CODERAG-BENCH",
+      "content": "Evaluation"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000053",
+      "page": 2,
+      "section": "2 The CODERAG-BENCH",
+      "content": "✓Evaluation against\ncanonical docs"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000054",
+      "page": 2,
+      "section": "2 The CODERAG-BENCH",
+      "content": "✓Execution-based\nend-to-end evaluation"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000055",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "# ﬁll NaN values with old values\nout[\"nid\"] = out[\"nid\"].ﬁllna(out[\"id\"])"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000056",
+      "page": 2,
+      "section": "8 Coding Tasks for Code RAG",
+      "content": "Figure 1: Overview of CODERAG-BENCH."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000057",
+      "page": 2,
+      "section": "2.1 Programming Problems",
+      "content": "2.1\nProgramming Problems"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000058",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "windows exhibit smaller improvements, suggesting\nconsiderable room for future advancements."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000059",
+      "page": 2,
+      "section": "2.1 Programming Problems",
+      "content": "We categorize existing Python-based coding"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000060",
+      "page": 2,
+      "section": "1 Introduction",
+      "content": "Beyond canonical retrieval, we also explore\nRACG with open retrieval, i.e., retrieving docu-\nments from various sources with different chunk-\ning strategies (§4). We find that models can benefit\nfrom functionally relevant snippets from certain\nsources, and chunking documents to 200–800 to-\nkens often gives the best results. For instance, by\nretrieving from StackOverflow or online tutorials,\nboth StarCoder and GPT4o can significantly im-\nprove, while on repository-level tasks, the gains\nare rather limited. Overall, we hope CODERAG-\nBENCH can serve as a testbed for future work ex-\nploring, analyzing, and improving RACG systems."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000061",
+      "page": 2,
+      "section": "2 The CODERAG-BENCH",
+      "content": "2\nThe CODERAG-BENCH"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000062",
+      "page": 2,
+      "section": "2 The CODERAG-BENCH",
+      "content": "For CODERAG-BENCH (Figure 1), the curation\nis driven by three factors:\n(i) Diverse tasks:\nCode generation spans multiple levels (line, func-\ntion, repository) across closed and open do-\nmains. (ii) Rigorous evaluation: We offer high-\nquality ground-truth annotations for retrieval and\nexecution-based evaluation to measure functional\ncorrectness. (iii) Unified interface: Our codebase\nprovides a consistent interface for retrieval, aug-\nmented generation, and evaluation, unlike current\ndatasets with varied pipelines."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000063",
+      "page": 2,
+      "section": "2.1 Programming Problems",
+      "content": "datasets into four types:1 code retrieval, basic pro-\ngramming, open-domain problems, and repository-\nlevel problems. To ensure the diversity of datasets,\nwe choose and unify multiple frequently adopted\ndatasets for each category, as listed in Table 1.\nBasic programming problems\nThis category\nincludes interview-style problems that mostly re-\nquire Python built-in operations and pose algorith-\nmic challenges. We select the two most widely\nused datasets: HumanEval (Chen et al., 2021)\nand MBPP (Austin et al., 2021), which ask the\nmodel to complete a function from an NL prob-\nlem description. However, due to limited public\nknowledge about model training data, it is unclear\nwhether models suffer from data contamination on\nHumanEval and MBPP (Jain et al., 2024). Hence,\nwe also include LiveCodeBench (Jain et al., 2024)\nwith problems collected from coding websites af-\nter the training cutoff of LMs that we consider, to\ndecrease the risk of contamination.\nOpen-domain problems\nOpen-domain coding\nproblems require Python libraries beyond the stan-\ndard libraries used in basic programming prob-\nlems. We adopt the DS-1000 (Lai et al., 2023)\nand ODEX (Wang et al., 2023b) datasets that cover\ndata-science and general open-domain coding prob-\nlems.\nDS-1000 collects data science problems\nwith programs using seven common data-related\nlibraries such as pandas and numpy. ODEX cov-"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000064",
+      "page": 2,
+      "section": "2.1 Programming Problems",
+      "content": "1In this work we focus on Python-related tasks because\nit is the most widely-used programming language for bench-\nmarking code generation. We leave extensions to other pro-\ngramming languages for future work."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000065",
+      "page": 2,
+      "section": "2 The CODERAG-BENCH",
+      "content": "In this section, we introduce the creation process\nof CODERAG-BENCH: programming problem in-\ntegration (§2.1), retrieval source collection (§2.2),\ncanonical document annotation (§2.3), and the eval-\nuation pipeline (§2.4). Examples with canonical\ndocuments are available in §A."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000066",
+      "page": 3,
+      "section": "8 Coding Tasks for Code RAG",
+      "content": "Type\nDataset\n# Examples\n# Corpus\nGround-Truth Docs\nEvaluation"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000067",
+      "page": 3,
+      "section": "8 Coding Tasks for Code RAG",
+      "content": "Basic programming"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000068",
+      "page": 3,
+      "section": "8 Coding Tasks for Code RAG",
+      "content": "HumanEval\n164\n164\nprogram solutions\nexecution\nMBPP\n500\n500\nprogram solutions\nexecution\nLiveCodeBench\n400\n-\n-\nexecution"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000069",
+      "page": 3,
+      "section": "8 Coding Tasks for Code RAG",
+      "content": "Open-domain\nDS-1000\n1000\n34,003\ndocs\nexecution\nODEX\n945\n34,003\ndocs, stackoverflow\nexecution"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000070",
+      "page": 3,
+      "section": "8 Coding Tasks for Code RAG",
+      "content": "Repository-level\nRepoEval (function)\n373\n237\ngithub repository\nexecution\nSWE-bench-Lite\n300\n40,868\ngithub repository\nexecution"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000071",
+      "page": 3,
+      "section": "8 Coding Tasks for Code RAG",
+      "content": "Code retrieval\nCodeSearchNet-Py\n22,177\n22177\nCSN functions\nndcg@10"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000072",
+      "page": 3,
+      "section": "8 Coding Tasks for Code RAG",
+      "content": "Table 1: Overview of the datasets in CodeRAG-Bench. CSN stands for CodeSearchNet."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000073",
+      "page": 3,
+      "section": "8 Coding Tasks for Code RAG",
+      "content": "ers problems using a broader range of 79 libraries,\nsuch as web requests with requests and database\noperations with sqlalchemy.\nRepository-level coding problems\nBeyond\nfunction-level, some problems require editing files\nin the context of an entire GitHub repository. We\nthus adopt RepoEval (Zhang et al., 2023) and SWE-\nbench (Jimenez et al., 2024) for repository-level\ncode generation and issue-solving tasks. We inte-\ngrate all three splits of RepoEval but only report\nits function split, as it is the only split supporting\nexecution-based evaluation.2 Notably, our code-\nbase is the first to enable reproducible execution\nevaluation on RepoEval. SWE-bench focuses on re-\nsolving GitHub issues by asking models to edit mul-\ntiple files that pass the required test cases. We use\nSWE-bench-Lite,3 a 300-problem subset whose re-\nsults can be reproduced, with a packaged Docker\ncontainer (Wang et al., 2024).\nCode retrieval problems\nIn addition to retrieval\nfor augmenting generations, we adopt the Python\nsplit of CodeSearchNet (CSN) as a code retrieval\ntask. CSN searches for the correct implementation\nof an NL query from a pool of functions collected\nfrom GitHub repositories. Instead of monitoring\nhow generation changes with various retrieval re-\nsults, CSN can directly measure retrieval quality."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000074",
+      "page": 3,
+      "section": "2.2 Retrieval Sources",
+      "content": "2.2\nRetrieval Sources"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000075",
+      "page": 3,
+      "section": "2.2 Retrieval Sources",
+      "content": "MBPP), following VoyageAI (2024), by concate-\nnating its NL problem and program solution.\nOnline tutorials\nWe collect tutorials from multi-\nple websites including GeeksforGeeks, W3Schools,\ntutorialspoint, and Towards Data Science,4 via the\nraw HTML pages obtained from ClueWeb22 (Over-\nwijk et al., 2022), a large-scale crawled web corpus.\nEach page contains code snippets and their text\nexplanations, covering topics from basic program-\nming techniques to advanced library usage.\nLibrary documentation\nWe collect the offi-\ncial documentation provided by devdocs.io for\nall Python libraries following (Zhou et al., 2023).\nThese could be especially useful for open-domain\nand repository-level problems that use some library\nfunctions to realize complex setups.\nStackOverflow posts\nStackOverflow (SO) is\namong the most frequently visited sites for develop-\ners. We collect all SO posts from the RedPajama-\n1T (Computer, 2023) stackexchange split. We\ntreat each post as a retrievable document, that has a\nquestion, code responses, and textual explanations.\nGitHub repository\nWe collect high-quality\nrepositories from GitHub, using the github split of\nRedPajama-1T (Computer, 2023), as developers of-\nten refer to popular repositories when writing their\nprograms. Following this practical paradigm, we\nenable LMs to retrieve files from other repositories\nas contexts to write the current program."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000076",
+      "page": 3,
+      "section": "2.2 Retrieval Sources",
+      "content": "We collect retrieval documents from five commonly"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000077",
+      "page": 3,
+      "section": "2.2 Retrieval Sources",
+      "content": "Resource\nCorpus size\nAvg. length"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000078",
+      "page": 3,
+      "section": "2.2 Retrieval Sources",
+      "content": "Programming solutions\n1.1k\n194.6\nOnline tutorials\n79.4k\n1502.5\nLibrary documentation\n34k\n953.4\nStackOverflow posts\n23.5M\n689.2\nGithub files\n1.7M\n5135.4"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000079",
+      "page": 3,
+      "section": "2.2 Retrieval Sources",
+      "content": "Table 2: Five sources to form our retrieval datastore."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000080",
+      "page": 3,
+      "section": "2.2 Retrieval Sources",
+      "content": "used resources for program developers, listed in Ta-\nble 2. CODERAG-BENCH supports two retrieval\nsetups: canonical retrieval—retrieves documents\nfrom only the canonical datastore (§2.3), and open\nretrieval—retrieves documents from any datastore.\nProgramming solutions\nWe create one doc-\nument from each basic programming problems\nthat have canonical solutions (i.e., HumanEval and"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000081",
+      "page": 3,
+      "section": "2.2 Retrieval Sources",
+      "content": "2Two other splits (API and line) are evaluated by lexical\nmeasures that have been shown as ineffective in signifying\nfunctional correctness (Chen et al., 2021; Wang et al., 2023b)."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000082",
+      "page": 3,
+      "section": "2.2 Retrieval Sources",
+      "content": "3https://www.swebench.com/lite.html"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000083",
+      "page": 3,
+      "section": "2.2 Retrieval Sources",
+      "content": "4https://geeksforgeeks.org;\nhttps://www.\nw3schools.com/;\nhttps://www.tutorialspoint.com/;\nhttps://towardsdatascience.com"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000084",
+      "page": 4,
+      "section": "2.3 Canonical Document Annotation",
+      "content": "2.3\nCanonical Document Annotation"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000085",
+      "page": 4,
+      "section": "2.3 Canonical Document Annotation",
+      "content": "To ensure reliable retrieval evaluation and estimate\nthe upper bound of a RACG system with an ideal\nretriever, it’s essential that all examples include\ncanonical documents–the documents containing\nthe necessary context to solve the programming\nproblem.\nAs most existing datasets lack these\ncanonical documents, we annotate them from the\ncorresponding retrieval pool, as shown in Table 1.\nBasic programming problems\nThe canonical\ndocument for examples in HumanEval and MBPP\nis the documents we created in §2.2 in the program-\nming solutions pool. Since LiveCodeBench does\nnot provide solutions to its problems, we do not\nannotate canonical documents for it.\nOpen-domain problems\nSince open-domain\nproblems require libraries, we annotate the canoni-\ncal library documentation for DS-1000 and ODEX\nexamples. We first automatically parse out the li-\nbrary functions used in each program, and find\ntheir corresponding documentation entries. Then,\nwe manually verify the functions and remove in-\ncorrect ones. This yields an average of 1.4 and 1.2\nentries for DS-1000 and ODEX.\nRepository-level problems\nWe adopt canoni-\ncal code from the original dataset as our canonical\ndocuments: 20-line code snippets of the missing\nfunctions in RepoEval, and the ground-truth edited\nfiles in SWE-bench. We obtain these from the com-\npleted local repositories from the original datasets."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000086",
+      "page": 4,
+      "section": "3.1 Experimental Setup",
+      "content": "we use BM25 (Robertson and Zaragoza, 2009),\nknown for its robustness in domain adapta-\ntion (Thakur et al., 2021).\nDense retriev-\ners include BGE-base/large (Xiao et al., 2023),\nGIST-base/large (Solatorio, 2024),\nand SFR-\nEmbedding-Mistral (Meng et al., 2024), all top-\nranked on the MTEB leaderboard (Muennighoff\net al., 2022).\nWe also include open code em-\nbedding models, Codesage-small (Zhang et al.,\n2024) and Jina-v2-code Günther et al., 2023,\nwhich are specifically trained for code retrieval.\nProprietary APIs include voyage-code-2 (Voy-\nageAI, 2024), optimized for code retrieval, and\nopenai-text-embedding-small-03, selected for\nits cost-effectiveness. Finally, we apply rerank-\ning with BGE-reranker-base(Xiao et al., 2023) on\ntop-100 openai results before generation.\nGeneration baselines\nWe adopt both code-\nspecific LMs and strong general text-oriented\nLMs. For code-specific LMs, we use StarCoder2\n(Lozhkov et al., 2024), CodeGemma (Team, 2024),\nCodeLlama (Roziere et al., 2023), and DeepSeek-\nCoder (Guo et al., 2024) in various sizes. For gen-\neral text LMs, we include three top-performing\nmodels: Llama3 (Meta, 2024), Command-R (Co-\nhereAI, 2024) specially optimized for RAG, and\nproprietary GPT models gpt-3.5-turbo-0125\nand gpt-4o. We use the instruct version of all\ngeneration models if available, since they often\nperform better than the base versions.\nExperimental setup\nFor retrieval, we imple-\nment BM25 retrievers using pyserini (Lin et al.,\n2021) with parameter k1 = 1.2 and b = 0.75, and\nuse sentence-transformers (Reimers and Gurevych,\n2019)5 for all dense models with open checkpoints.\nWe prepend the top-5 retrieved documents to the"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000087",
+      "page": 4,
+      "section": "2.4 Evaluation Metrics",
+      "content": "2.4\nEvaluation Metrics\nFor retrieval, we evaluate NDCG, Precision and\nRecall (Thakur et al., 2021) and use NDCG@10\npercentage as our primary metric, following prior\nwork (Izacard et al., 2022a). For code generation,\nwe adopt the pass@k metric (Chen et al., 2021)\nto measure the execution correctness of programs.\nWe evaluate the final RAG performance both in"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000088",
+      "page": 4,
+      "section": "2.4 Evaluation Metrics",
+      "content": "canonical and open retrieval setups."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000089",
+      "page": 4,
+      "section": "3 Canonical RACG",
+      "content": "3\nCanonical RACG\nWe evaluate 10 top retrieval and 10 generation"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000090",
+      "page": 4,
+      "section": "3.1 Experimental Setup",
+      "content": "original problems (we study the number of docu-\nments in §E), and do not include other contexts\nsuch as few-shot examples. For code generation,\nwe use temperature t = 0.2, top_p = 0.95 and\nsample one response for all generations, following\nprior work (Li et al., 2023). Specifically on SWE-\nbench-Lite, we adopt the n = 21 way sampling\nand majority-vote reranking strategy proposed by\nAgentless (Xia et al., 2024).6"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000091",
+      "page": 4,
+      "section": "3 Canonical RACG",
+      "content": "models on CODERAG-BENCH with canonical data\nsources. We report results of document retrieval\n(§3.2), direct NL-to-code generation (§3.3), and\nend-to-end RACG with retrieved context (§3.4)."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000092",
+      "page": 4,
+      "section": "3.2 Retrieval Results",
+      "content": "3.2\nRetrieval Results"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000093",
+      "page": 4,
+      "section": "3.2 Retrieval Results",
+      "content": "Table 3 shows retrieval results on six tasks."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000094",
+      "page": 4,
+      "section": "3.2 Retrieval Results",
+      "content": "5https://sbert.net/\n6We found that without these approaches, performance\neven with state-of-the-art GPT4o remains around 1-2%."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000095",
+      "page": 4,
+      "section": "3.1 Experimental Setup",
+      "content": "3.1\nExperimental Setup\nRetrieval baselines\nWe adopt 10 top-performing\nretrievers from three categories: sparse, dense,\nand proprietary APIs.\nFor sparse retrievers,"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000096",
+      "page": 5,
+      "section": "3.2 Retrieval Results",
+      "content": "Method\nProblem Solutions\nLibrary Docs\nIn-Repository Files\nAvg.\nHumanEval\nMBPP\nCSN\nDS-1000\nODEX\nRepoEval\nSWE-bench-Lite\nAll"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000097",
+      "page": 5,
+      "section": "3.2 Retrieval Results",
+      "content": "BM25\n100.0\n98.6\n89.1\n5.2\n6.7\n93.2\n43.0\n57.7"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000098",
+      "page": 5,
+      "section": "3.2 Retrieval Results",
+      "content": "GIST-base (768)\n98.0\n98.0\n89.9\n12.0\n12.1\n81.2\n46.8\n58.0\nGIST-large (1024)\n100.0\n98.9\n89.6\n13.6\n28.0\n82.9\n47.8\n61.7\nBGE-base (768)\n99.7\n98.0\n90.0\n10.8\n22.0\n77.5\n44.9\n58.8\nBGE-large (1024)\n98.0\n99.0\n90.6\n8.9\n11.5\n80.4\n40.1\n56.3\nSFR-Mistral (4096)\n100.0\n99.0\n-\n19.3\n37.1\n83.8\n62.7\n67.0\nCodesage-small (768)\n100.0\n96.3\n90.7\n8.9\n14.3\n94.1\n47.1\n60.1\nJina-v2-code (768)\n100.0\n97.7\n-\n26.2\n19.9\n90.5\n58.3\n65.4"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000099",
+      "page": 5,
+      "section": "3.2 Retrieval Results",
+      "content": "OpenAI-03 (1536)\n100.0\n98.9\n-\n18.2\n16.5\n93.0\n43.3\n61.7\nVoyage-code (1536)\n100.0\n99.0\n-\n33.1\n26.6\n94.3\n29.1\n63.7"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000100",
+      "page": 5,
+      "section": "3.2 Retrieval Results",
+      "content": "Table 3: Retrieval performance (NDCG@10) on code generation datasets. LiveCodeBench is excluded due to lack\nof ground-truth solutions. RepoEval is at the function level with 2k context tokens. Embedding dimension sizes are\nlisted next to method names. Bold indicates best performance, underline indicates second-best. Highlighted models\nare specifically trained for code domains. Avg. reflects overall scores, excluding CodeSearchNet."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000101",
+      "page": 5,
+      "section": "Do larger retrieval models perform better?",
+      "content": "Method\nEncoding\nSearch\nModel\nIndex"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000102",
+      "page": 5,
+      "section": "Do larger retrieval models perform better?",
+      "content": "BM25\n0.15ms\n0.02ms\n-\n141MB\nGIST-base\n3.7ms\n9.7ms\n440MB\n307MB\nGIST-large\n13ms\n18ms\n1300MB\n409MB\nSFR-Mistral\n316ms\n113ms\n14220MB\n1638 MB\nVoyage-code\n22ms\n40ms\n-\n1172MB\nOpenAI-03\n31ms\n47ms\n-\n1172MB"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000103",
+      "page": 5,
+      "section": "Do larger retrieval models perform better?",
+      "content": "Table 4: Efficiency analysis for document retrieval."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000104",
+      "page": 5,
+      "section": "Do larger retrieval models perform better?",
+      "content": "(iii) model storage requirements, and (iv) index\nstorage requirements. We conduct efficiency analy-\nsis on sampled CodeSearchNet Python data.7 See\nexperimental details in §B. As shown in Table 4,\nBM25 indexing and searching takes only seconds\nto finish. Compared to base-size GIST-base, the\nSFR-Mistral model is more powerful in retrieval,\nyet requires over 5× larger index storage, and adds\nnearly 100× latency to encode documents, sug-\ngesting that the efficiency aspect should also be\ncarefully studied for RAG pipelines."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000105",
+      "page": 5,
+      "section": "3.3 Generation with Canonical Documents",
+      "content": "3.3\nGeneration with Canonical Documents"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000106",
+      "page": 5,
+      "section": "3.3 Generation with Canonical Documents",
+      "content": "We first evaluate possible lower- and upper-bounds"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000107",
+      "page": 5,
+      "section": "3.3 Generation with Canonical Documents",
+      "content": "on RACG results by testing generation (i) without\nany retrieval, and (ii) with ground-truth documents.\nWe report both results in Table 5. Compared to"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000108",
+      "page": 5,
+      "section": "3.3 Generation with Canonical Documents",
+      "content": "the base generation without contexts, incorporating\ncanonical contexts improves in most setups, and\nsubstantially so on basic programming problems.\nOn open-domain tasks, most code-specific LMs\nincrease up to 5.2 points, signifying that most mod-\nels can benefit from indirectly helpful documents.\nIn contrast, GPTs show no gains with retrieval.\nWe hypothesize that this is because both datasets"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000109",
+      "page": 5,
+      "section": "3.3 Generation with Canonical Documents",
+      "content": "mostly test on common Python libraries, which"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000110",
+      "page": 5,
+      "section": "3.3 Generation with Canonical Documents",
+      "content": "7Due to the costs, we randomly sample 10k queries and\n100k from CodeSearchNet Python split. For API models, we\nuse a batch size of 64 for encoding."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000111",
+      "page": 5,
+      "section": "3.2 Retrieval Results",
+      "content": "Comparison of lexical and neural retrievers\nBM25 has been widely used as a primary retrieval\nmodel in recent RACG work (Zhou et al., 2023;\nJimenez et al., 2024), yet comprehensive compar-\nisons against diverse retrieval systems are often\nunder-explored. While prior studies indicate that\nneural retrieval systems often underperform BM25\nbaselines in out-of-domain scenarios (Thakur et al.,\n2021), our analysis of CODERAG-BENCH reveals\nthat dense embedding models frequently surpass\nBM25. We hypothesize that this is because many\ncompetitive retrieval models are trained on diverse\ntasks across various domains, including code data\n(Asai et al., 2023; Su et al., 2023), enhancing their\nrobustness in code retrieval setups."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000112",
+      "page": 5,
+      "section": "Do code retrieval models perform better?",
+      "content": "Do code retrieval models perform better?\nAt similar parameter scales, models specifically\ntrained for code retrieval tasks typically show su-\nperior performance. Notably, Jina-v2-code outper-\nforms GIST-base and BGE-base by 7.4 and 6.6\naverage NDCG@10, respectively, while Voyage-\ncode significantly outperforms OpenAI-03."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000113",
+      "page": 5,
+      "section": "Do larger retrieval models perform better?",
+      "content": "Do larger retrieval models perform better?\nAmong dense retrieval models, increasing model\nsize often leads to better retrieval performance, sim-\nilar to the trends observed in LMs (Brown et al.,\n2020). In particular, GIST-large (340M) constantly\noutperforms GIST-base (110M), and SFR-Mistral\n(7B) achieves the best among all open sparse and\ndense models on all tasks, surpassing proprietary\nembedding models on several tasks.\nEfficiency\nWhile larger retrieval models often\noutperform smaller ones, they often introduce sig-\nnificant costs. We analyze efficiency, focusing on\n(i) encoding latency: latency to encode documents\noffline, and (ii) search latency: latency to encode\nqueries/documents and calculate their similarities,"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000114",
+      "page": 6,
+      "section": "3.3 Generation with Canonical Documents",
+      "content": "Method"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000115",
+      "page": 6,
+      "section": "3.3 Generation with Canonical Documents",
+      "content": "Basic Programming\nOpen-Domain\nRepo-Level\nHumanEval\nMBPP\nLCB\nDS-1000\nODEX\nODEX-hard\nRepoEval\nSWE-bench\nw/o\ngold\nw/o\ngold\nw/o\nw/o\ngold\nw/o\ngold\nw/o\ngold\nw/o\ngold\nw/o\ngold"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000116",
+      "page": 6,
+      "section": "3.3 Generation with Canonical Documents",
+      "content": "StarCoder2-7B\n31.7\n94.5\n10.4\n34.8\n1.5\n29.2\n30.0\n14.6\n17.5\n10.3\n17.2\n26.5\n42.0\n0.0\n0.7\nCodeGemma-7B\n49.4\n77.4\n48.0\n52.2\n21.5\n20.1\n19.8\n18.9\n18.2\n13.8\n13.8\n24.7\n32.2\n0.0\n0.3\nCodeLlama-7B\n34.8\n87.2\n23.8\n42.8\n13.5\n21.8\n26.1\n35.8\n41.0\n27.6\n31.0\n24.1\n38.3\n0.0\n0.0\nCodeLlama-34B\n42.7\n84.8\n51.2\n88.0\n5.8\n34.7\n37.0\n34.9\n38.0\n17.2\n27.6\n29.8\n42.6\n0.0\n0.0\nDeepSeekCoder-7B\n70.1\n87.8\n60.8\n63.6\n30.5\n41.4\n43.2\n39.2\n41.7\n17.2\n24.1\n28.2\n43.7\n0.0\n0.0\nDeepSeekCoder-33B\n78.0\n95.7\n61.0\n92.2\n33.8\n40.2\n40.1\n28.0\n28.9\n24.1\n31.0\n32.4\n45.3\n0.3\n0.7"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000117",
+      "page": 6,
+      "section": "3.3 Generation with Canonical Documents",
+      "content": "Llama3-8B\n57.9\n65.2\n35.6\n52.8\n2.8\n28.9\n31.1\n37.4\n33.7\n13.8\n17.2\n26.0\n43.2\n0.0\n0.3\nCommand-R\n43.3\n51.2\n37.2\n37.8\n10.0\n25.8\n28.5\n35.5\n36.0\n20.7\n20.7\n23.9\n37.0\n0.0\n0.3\nGPT-3.5-turbo\n72.6\n91.5\n70.8\n72.6\n35.3\n43.7\n42.9\n41.7\n40.3\n17.2\n24.1\n23.9\n39.1\n0.7\n6.3\nGPT-4o\n75.6\n92.6\n79.4\n81.4\n43.8\n52.7\n51.2\n44.6\n44.2\n20.7\n27.6\n32.4\n46.1\n2.3\n30.7"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000118",
+      "page": 6,
+      "section": "3.3 Generation with Canonical Documents",
+      "content": "Table 5: Code generation pass@1 without additional contexts (w/o), and with ground-truth documents (gold). We\nonly report w/o for LCB because LCB does not have ground-truth documents. We highlight results showing gold >\nw/o with green (darker green when having 10+ increases), and with red if gold < w/o."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000119",
+      "page": 6,
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "content": "Overall, the best retrieval models vary depending\non the task and underlying LMs. In some cases, top-\nperforming retrieval models do not lead to the best\nRACG outcomes, highlighting the need to evaluate\nRACG systems holistically across varied tasks."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000120",
+      "page": 6,
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "content": "Basic programming problems\nMost retrieved\ncontexts help StarCoder2 generations. On MBPP,\nRACG even outperforms canonical setup by\n15.6–17.8. However, RACG does not improve\nDeepSeekCoder generations, which we observe\nis due to over-complicated and ungrammatically\nrepetitive generations when with additional con-\ntexts. In comparison, GPT-3.5-turbo can effectively\nimprove with added contexts, showing its better\nability to leverage augmented contexts."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000121",
+      "page": 6,
+      "section": "3.3 Generation with Canonical Documents",
+      "content": "powerful models may have already memorized,\nsimilar to their memorization of factual knowledge\n(Mallen et al., 2023; Kandpal et al., 2023), thereby\nreducing the need for retrieval. To verify this hy-\npothesis, we build an ODEX subset of examples\nwith the 20 least used libraries, i.e., ODEX-hard.\nAs shown in Table 5, adding documents retrieved\nwith most methods improves the results by 20.3–\n40.1%, showing the effectiveness of RACG on chal-\nlenging coding tasks using unfamiliar libraries.\nRepository-level challenges All models show\ngains of 7.5–17.2 points with canonical snippets in\nRepoEval, but SWE-bench Lite proves much more\nchallenging — only GPT-3.5-turbo and GPT-4o\nachieve non-trivial results, consistent with previ-\nous findings (Yang et al., 2024). Notably, GPT-4o\nshows a 27.4% increase when using gold docu-\nments on SWE-bench, indicating that retrieval sig-\nnificantly enhances performance when paired with\nstrong core generation capabilities, even in highly\nchallenging coding tasks."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000122",
+      "page": 6,
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "content": "3.4\nRetrieval-Augmented Code Generation"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000123",
+      "page": 6,
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "content": "We now experiment with top-performing retrieval"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000124",
+      "page": 6,
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "content": "Open-domain problems\nThe weaker Star-\nCoder2 benefits from retrieved library documenta-\ntion across all datasets, while DeepSeekCoder and\nGPT-3.5 show gains mainly on ODEX-hard prob-\nlems. This aligns with findings from the canonical\ndocument setup, indicating that RACG is particu-\nlarly effective for less popular libraries. Interest-\ningly, despite relatively low NDCG@10 scores, the\nbest-performing RACG combinations match their\ncanonical results on ODEX-hard."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000125",
+      "page": 6,
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "content": "and generation models in the full RACG setting,\nwhich requires both retrieve documents and gen-\nerating conditioned on the documents. We select\nthe best retrieval models from each type: BM25,\nGIST-large, Voyage, and OpenAI embeddings. For\ngeneration, we select (i) StarCoder2-7B: a weaker\nmodel that benefits the most from contexts; (ii)\nDeepSeekCoder-7B: one of the strongest open code\nLMs; and (iii) GPT-3.5-turbo: one of the top propri-\netary models. For each dataset, we retrieve the most\nrelevant contexts from its canonical source marked\nin Table 1, and retrieve programming solutions for\nLiveCodeBench. Table 6 shows the results. Note\nthat we exclude canonical docs (answers) from the\nretrieval corpora for basic programming tasks."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000126",
+      "page": 6,
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "content": "Repository-level problems\nAll models show\nimprovements with retrieved code snippets on Re-\npoEval, with RACG using strong retrievers like\nopenai-embeddings performing on par with—or\neven surpassing—the canonical setup, likely due\nto the additional context provided to the models.\nOn SWE-Bench, the best-performing combination,\nRetrieval-then-Rerank and GPT4o, yields a 21-\npoint improvement over the no-retrieval baseline.\nHowever, there remains a 9-point gap compared to\nthe gold setup, indicating room for improvement\non the retrieval side, as reflected in the limited code\nretrieval performance shown in Table 3."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000127",
+      "page": 7,
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "content": "Method\nBasic Programming\nOpen-Domain\nRepo-Level\nHumanEval\nMBPP\nLCB\nDS-1000\nODEX\nODEX-hard\nRepoEval\nSWE-bench"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000128",
+      "page": 7,
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "content": "w/ StarCoder2-7B"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000129",
+      "page": 7,
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "content": "None\n31.7\n2.4\n1.5\n29.2\n14.6\n10.3\n26.5\n0.0\nBM25\n43.9\n51.8\n1.0\n36.7\n14.1\n13.8\n36.7\n0.0\nGIST-large\n38.7\n50.4\n0.5\n35.9\n17.3\n13.8\n40.8\n0.3\nVoyage, code\n39.0\n52.6\n0.3\n36.0\n15.3\n10.3\n45.8\n0.3\nOpenAI, small\n39.0\n52.6\n1.5\n35.5\n15.9\n17.2\n51.2\n0.0\nOpenAI, rerank\n34.8\n53.4\n0.5\n33.4\n14.1\n17.2\n53.9\n0.3\nGold\n94.5\n34.8\n-\n30.0\n17.5\n17.2\n42.0\n0.7"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000130",
+      "page": 7,
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "content": "w/ DeepseekCoder-7B-instruct"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000131",
+      "page": 7,
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "content": "None\n70.1\n60.8\n30.5\n41.4\n39.2\n17.2\n28.2\n0.7\nBM25\n68.9\n60.0\n31.8\n36.6\n37.8\n20.7\n37.3\n0.0\nGIST-large\n66.3\n56.6\n33.8\n35.9\n34.9\n20.7\n44.5\n0.3\nVoyage, code\n66.5\n56.4\n31.8\n35.9\n39.4\n17.2\n46.6\n0.3\nOpenAI, small\n68.9\n58.6\n32.0\n35.5\n37.1\n20.7\n55.2\n0.3\nOpenAI, rerank\n53.0\n60.6\n31.5\n36.5\n37.1\n24.1\n55.5\n0.3\nGold\n87.8\n63.6\n-\n43.2\n41.7\n24.1\n48.1\n0.0"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000132",
+      "page": 7,
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "content": "w/ GPT-3.5-turbo\nGPT-4o"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000133",
+      "page": 7,
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "content": "None\n72.6\n70.8\n35.3\n43.7\n41.7\n17.2\n23.9\n2.3\nBM25\n73.2\n72.4\n35.5\n36.9\n41.0\n24.1\n30.8\n6.7\nGIST-large\n73.2\n68.2\n34.8\n36.7\n36.2\n13.8\n38.3\n19.3\nVoyage, code\n75.0\n66.8\n34.5\n37.4\n41.0\n20.7\n43.2\n15.7\nOpenAI, small\n73.8\n68.4\n35.8\n36.9\n40.3\n17.2\n48.0\n21.0\nOpenAI, rerank\n64.0\n72.6\n33.5\n37.4\n40.5\n17.2\n49.6\n21.7\nGold\n91.5\n72.6\n-\n42.9\n40.3\n24.1\n39.1\n30.7"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000134",
+      "page": 7,
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "content": "Table 6: Performance of retrieval-augmented code generation, with top retrieval and generation models. We\nbold-type the best RACG results. We test gpt-4o on SWE-bench to show non-trivial results than gpt-3.5-turbo. Note\nthat we exclude code canonical answer from the retrieval corpora for basic programming tasks."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000135",
+      "page": 7,
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "content": "Model\nRetriever\nHumanEval\nODEX"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000136",
+      "page": 7,
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "content": "w/o\nProg\nTut\nDocs\nSO\nGitHub\nAll\nw/o\nProg\nTut\nDocs\nSO\nGitHub\nAll"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000137",
+      "page": 7,
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "content": "BM25"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000138",
+      "page": 7,
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "content": "StarCoder"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000139",
+      "page": 7,
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "content": "31.7\n97.6\n27.4\n29.3\n32.9\n30.5\n97.6\n14.6\n18.2\n13.4\n14.1\n11.6\n15.9\n16.2\nGIST\n67.1\n34.8\n26.7\n32.3\n32.9\n69.1\n14.6\n15.7\n17.3\n11.4\n15.5\n17.1\nOpenAI\n97.6\n29.3\n24.4\n36.0\n31.1\n97.6\n18.7\n14.1\n15.9\n10.9\n16.9\n15.3"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000140",
+      "page": 7,
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "content": "GPT-4o\nOpenAI\n75.6\n94.5\n90.2\n90.9\n91.5\n84.8\n95.1\n44.6\n49.2\n44.2\n47.6\n40.3\n39.4\n39.6"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000141",
+      "page": 7,
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "content": "Table 7: Comparing five retrieval sources on HumanEval and ODEX, using StarCoder2 (top) and GPT-4o (bottom)."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000142",
+      "page": 7,
+      "section": "4 RACG with Open Retrieval",
+      "content": "4\nRACG with Open Retrieval"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000143",
+      "page": 7,
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "content": "ample, with code and detailed textual explanations,\nhence could hint or disclose the answer. Other re-\ntrieval sources do not often contain relevant content\nthus do not bring improvements. Surprisingly, gen-\neration with mixed documents performs as well\nas using the gold documents, suggesting that the\nmodel can discern and integrate the most useful\ncontent from a mixture of texts."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000144",
+      "page": 7,
+      "section": "4 RACG with Open Retrieval",
+      "content": "Besides retrieving documents from the canonical\nsource, we explore RACG with open retrieval from\nall sources (§2.2) on three category-representative"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000145",
+      "page": 7,
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "content": "datasets: HumanEval, ODEX, and RepoEval. We\nalso study mixed retrieval with documents from all\nsources, where we aggregate the top-1 documents\nfrom all five sources as augmented contexts.8 We\nuse the three top retrievers along with StarCoder2\nand OpenAI retrieval with GPT-4o generation, to\nstudy open RACG with weak and strong LMs.\nGeneral programming: HumanEval\nAmong\nall sources, SO posts can improve the results by\n1.8–4.3, regardless of the choice of retrievers. Tuto-\nrials can improve results by 2.1 only with the GIST\nretriever.From manual examinations of the results,\nmany retrieved posts and tutorials are about the\nsame programming problem as the HumanEval ex-"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000146",
+      "page": 7,
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "content": "8We use the first 500 tokens of each document for all\nexperiments in this section, which we show to be optimal in\nablation studies (§4), and satisfies all model context limits."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000147",
+      "page": 7,
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "content": "Open-domain: ODEX\nProgramming solutions\nare the most helpful source by bringing 3.8–4.3\ngains, even surpassing gains of canonical documen-\ntation. Notably, both GPT-4o and StarCoder using\nOpenAI retrieval from programming solutions, out-\nperform their variants retrieving from documenta-\ntion by 3.2 and 1.6 points. Although the retrieved\ncontent is only sometimes functionally relevant to\nthe ODEX examples, they can exemplify the cor-\nrect usage of libraries such as regex in solutions\nand requests in GitHub files, thus guiding the\ngeneration to be more functionally correct. Simi-\nlar to HumanEval, GIST-large is particularly good"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000148",
+      "page": 8,
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "content": "Method\nTutorials\nDocs\nSO\nGitHub"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000149",
+      "page": 8,
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "content": "Full text\n6.7\n17.7\n28.0\n3.7\nFirst chunk\n27.4\n29.3\n30.5\n30.5\nw/ reranking\n9.1\n9.1\n14.0\n13.4\nPre-retrieval\n31.1\n32.9\n33.5\n29.3"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000150",
+      "page": 8,
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "content": "Table 9: Comparing chunking strategies on HumanEval."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000151",
+      "page": 8,
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "content": "5"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000152",
+      "page": 8,
+      "section": "5 Related Work",
+      "content": "Related Work"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000153",
+      "page": 8,
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "content": "at retrieving tutorials, while BM25 and OpenAI\nembeddings find higher-quality program solutions,\nindicating their respective domain advantages.\nRepository-level: RepoEval\nOpen sources are\nless useful than code snippets in the local repository.\nUnderstanding local code contexts is crucial and\nirreplaceable than external resources. When using\nboth local and open-source contexts (L+O), models\nsurpass the no-retrieval baseline, yet are still only\ncomparable with Local, suggesting more efforts\nand insights to benefit from both sources."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000154",
+      "page": 8,
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "content": "Method\nw/o\nLocal\nProg\nTut\nDocs\nSO\nGitHub\nOpen\nL+O"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000155",
+      "page": 8,
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "content": "StarCoder2-7B\nBM25"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000156",
+      "page": 8,
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "content": "26.5\n36.7\n23.6\n25.2\n23.9\n23.6\n25.5\n23.6\n31.4\nGIST\n40.8\n24.1\n23.3\n21.7\n24.7\n24.4\n24.1\n41.8\nOpenAI\n51.2\n23.9\n24.1\n24.1\n23.1\n22.8\n24.9\n50.9"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000157",
+      "page": 8,
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "content": "GPT-4o\nOpenAI\n32.4\n62.2\n35.4\n28.7\n27.8\n29.0\n28.2\n30.3\n54.2"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000158",
+      "page": 8,
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "content": "Table 8: RACG with open retrieval on RepoEval."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000159",
+      "page": 8,
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "content": "Exploring optimal chunking strategies\nAdding\nmany documents may exceed model context lim-\nits hence impairing RACG, we thus explore vari-\nous chunking strategies to better integrate retrieval.\nCompared to the no-chunking baseline, we study (i)\npost-retrieval chunking that takes the first N-tokens\nof each document, (ii) post-retrieval with reranking\nusing BGE-reranker-base (§3.1) to find the most\nrelevant N-token chunk from each document, and\n(iii) pre-retrieval chunking that chunks documents\nbeforehand and retrieves N-token pieces directly.9"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000160",
+      "page": 8,
+      "section": "5 Related Work",
+      "content": "Code generation\nNeural code generation has\nbeen a crucial task (Lu et al., 2021), and increas-\ningly strong code LMs have been created (Roziere\net al., 2023; Li et al., 2023; Guo et al., 2024; Team,\n2024) to solve various tasks (Chen et al., 2021; Lai\net al., 2023; Jimenez et al., 2024). However, most\nLMs generate code solely based on NL queries and\nmodel parametric knowledge, without using exter-\nnal programming sources (e.g., tutorials). To fill in\nthis gap and allow systematic studies of RACG, we\nintegrate various datasets and retrieval sources to\nbuild CODERAG-BENCH.\nRetrieval augmented generation (RAG)\nRAG\nhas been widely used in knowledge-intensive\ntasks (Lewis et al., 2020; Guu et al., 2020), how-\never, mostly on text-centric tasks using general do-\nmain corpora such as Wikipedia (Asai et al., 2024).\nSome works used programming context retrieved\nfrom repositories (Ding et al., 2023; Yang et al.,\n2024) or documentations (Zhou et al., 2023), yet\nnone of them considered RACG across varied cod-\ning tasks and knowledge sources. In text-centric\ntasks, unified benchmarks such as BEIR (Thakur\net al., 2021) and KILT (Petroni et al., 2020) aggre-\ngate retrieval and generation tasks and facilitate its\nprogress (Muennighoff et al., 2022). To similarly\nenable systematic studies of RACG across cod-\ning tasks and retrieval sources, we curate a unified\nbenchmark and release its RACG codebase."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000161",
+      "page": 8,
+      "section": "5 Related Work",
+      "content": "6"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000162",
+      "page": 8,
+      "section": "6 Conclusion",
+      "content": "Conclusion"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000163",
+      "page": 8,
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "content": "Number of Tokens\nFigure 2: Performance with different chunking sizes."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000164",
+      "page": 8,
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "content": "We compare (i) using the first N-tokens for N from"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000165",
+      "page": 8,
+      "section": "6 Conclusion",
+      "content": "In this work, we propose CODERAG-BENCH, a\nbenchmark for retrieval-augmented code genera-\ntion with various coding tasks and retrieval sources.\nWith our experiments with top-performing retrieval"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000166",
+      "page": 8,
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "content": "200 to 1500 (Figure 2). Most sources are best rep-\nresented by the first 800 tokens except for SO posts.\nHowever, we find (ii) reranking within this optimal\nrange of 200–800 tokens greatly degrades the re-\nsults, showing limited utility of current rerankers.\nLastly, (iii) pre-retrieval achieves the highest scores\non almost all document sources (Table 9)."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000167",
+      "page": 8,
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "content": "9We do not chunk programming solutions since they are\ntypically short (average <200 tokens as in Table 2)."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000168",
+      "page": 8,
+      "section": "6 Conclusion",
+      "content": "and generation models, we show that retrieving\nexternal documents can greatly benefit code gener-\nation. However, current retrieval models struggle\nto find useful documents, and generation models\nhave limited context capacity and RAG abilities,\nboth leading to suboptimal RACG results. We hope\nCODERAG-BENCH can serve as a solid testbed to\nadvance future endeavors in this direction."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000169",
+      "page": 9,
+      "section": "Limitations",
+      "content": "Limitations"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000170",
+      "page": 9,
+      "section": "Limitations",
+      "content": "We propose a new paradigm, retrieval-augmented"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000171",
+      "page": 9,
+      "section": "References",
+      "content": "Winter, Christopher Hesse, Mark Chen, Eric Sigler,\nMateusz Litwin, Scott Gray, Benjamin Chess, Jack\nClark, Christopher Berner, Sam McCandlish, Alec\nRadford, Ilya Sutskever, and Dario Amodei. 2020.\nLanguage models are few-shot learners.\nArXiv,\nabs/2005.14165."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000172",
+      "page": 9,
+      "section": "References",
+      "content": "Mark Chen, Jerry Tworek, Heewoo Jun, Qiming"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000173",
+      "page": 9,
+      "section": "References",
+      "content": "Yuan, Henrique Ponde de Oliveira Pinto, Jared Ka-"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000174",
+      "page": 9,
+      "section": "Limitations",
+      "content": "code generation, equipped with a comprehensive\nbenchmark CODERAG-BENCH. However, as an\ninitial exploration in this field, our work could be\nextended in task and language diversity, as well as\nmodel and methodological improvements."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000175",
+      "page": 9,
+      "section": "References",
+      "content": "plan, Harri Edwards, Yuri Burda, Nicholas Joseph,\nGreg Brockman, et al. 2021.\nEvaluating large\nlanguage models trained on code. arXiv preprint\narXiv:2107.03374."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000176",
+      "page": 9,
+      "section": "References",
+      "content": "CohereAI. 2024. Command r."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000177",
+      "page": 9,
+      "section": "Limitations",
+      "content": "We aggregate various existing code generation\ntasks, but many interesting scenarios such as code\ndebugging remain under-explored. Meanwhile, we\nfocus on coding tasks using Python programming\nlanguage, but extrapolating to other languages may\nbring additional challenges."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000178",
+      "page": 9,
+      "section": "References",
+      "content": "Together Computer. 2023. Redpajama: An open source"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000179",
+      "page": 9,
+      "section": "References",
+      "content": "recipe to reproduce llama training dataset."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000180",
+      "page": 9,
+      "section": "References",
+      "content": "Yangruibo Ding, Zijian Wang, Wasi Uddin Ahmad, Han-"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000181",
+      "page": 9,
+      "section": "Limitations",
+      "content": "Meanwhile, for benchmarking purposes, we\nmostly experimented with vanilla retrieval, rerank-\ning, and generation methods, but better backbone\nmodels and advanced methods for each RACG\ncomponent are yet fully explored. Our results may\nnot represent all model behaviors, and we encour-\nage future works to build methods that break certain\nlimitations we observe in current systems."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000182",
+      "page": 9,
+      "section": "References",
+      "content": "tian Ding, Ming Tan, Nihal Jain, Murali Krishna\nRamanathan, Ramesh Nallapati, Parminder Bhatia,\nDan Roth, and Bing Xiang. 2023. Crosscodeeval:\nA diverse and multilingual benchmark for cross-file\ncode completion. In Thirty-seventh Conference on\nNeural Information Processing Systems Datasets and\nBenchmarks Track."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000183",
+      "page": 9,
+      "section": "Acknowledgment",
+      "content": "Acknowledgment"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000184",
+      "page": 9,
+      "section": "References",
+      "content": "Michael Günther, Jackmin Ong, Isabelle Mohr, Alaed-"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000185",
+      "page": 9,
+      "section": "Acknowledgment",
+      "content": "We thank Shuyan Zhou and Xinran Zhao for the"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000186",
+      "page": 9,
+      "section": "References",
+      "content": "dine Abdessalem, Tanguy Abel, Mohammad Kalim\nAkram, Susana Guzman, Georgios Mastrapas, Saba\nSturua, Bo Wang, et al. 2023. Jina embeddings 2:\n8192-token general-purpose text embeddings for long\ndocuments. arXiv preprint arXiv:2310.19923."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000187",
+      "page": 9,
+      "section": "Acknowledgment",
+      "content": "helpful discussions in the early stage of this project;\nSaujas Vaduguru, Jing Yu Koh, Alex Xie, and Andy\nLiu for providing valuable feedback for the draft."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000188",
+      "page": 9,
+      "section": "References",
+      "content": "Daya Guo, Qihao Zhu, Dejian Yang, Zhenda Xie, Kai"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000189",
+      "page": 9,
+      "section": "References",
+      "content": "References"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000190",
+      "page": 9,
+      "section": "References",
+      "content": "Dong, Wentao Zhang, Guanting Chen, Xiao Bi,\nY Wu, YK Li, et al. 2024. Deepseek-coder: When the"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000191",
+      "page": 9,
+      "section": "References",
+      "content": "Akari Asai, Timo Schick, Patrick Lewis, Xilun Chen,"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000192",
+      "page": 9,
+      "section": "References",
+      "content": "large language model meets programming–the rise of\ncode intelligence. arXiv preprint arXiv:2401.14196."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000193",
+      "page": 9,
+      "section": "References",
+      "content": "Kelvin Guu, Kenton Lee, Zora Tung, Panupong Pasu-"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000194",
+      "page": 9,
+      "section": "References",
+      "content": "pat, and Mingwei Chang. 2020. Retrieval augmented\nlanguage model pre-training. In International confer-\nence on machine learning, pages 3929–3938. PMLR."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000195",
+      "page": 9,
+      "section": "References",
+      "content": "Gautier Izacard, Sebastian Riedel, Hannaneh Ha-\njishirzi, and Wen-tau Yih. 2023. Task-aware retrieval\nwith instructions. In Findings of the Association for\nComputational Linguistics: ACL 2023, pages 3650–\n3675, Toronto, Canada. Association for Computa-\ntional Linguistics."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000196",
+      "page": 9,
+      "section": "References",
+      "content": "Gautier Izacard, Mathilde Caron, Lucas Hosseini, Sebas-"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000197",
+      "page": 9,
+      "section": "References",
+      "content": "Akari Asai, Zexuan Zhong, Danqi Chen, Pang Wei"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000198",
+      "page": 9,
+      "section": "References",
+      "content": "tian Riedel, Piotr Bojanowski, Armand Joulin, and\nEdouard Grave. 2022a. Unsupervised dense informa-\ntion retrieval with contrastive learning. Transactions\non Machine Learning Research."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000199",
+      "page": 9,
+      "section": "References",
+      "content": "Koh, Luke Zettlemoyer, Hannaneh Hajishirzi, and\nWen-tau Yih. 2024.\nReliable, adaptable, and at-\ntributable language models with retrieval.\narXiv\npreprint arXiv:2403.03187."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000200",
+      "page": 9,
+      "section": "References",
+      "content": "Gautier Izacard, Patrick Lewis, Maria Lomeli, Lucas"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000201",
+      "page": 9,
+      "section": "References",
+      "content": "Jacob Austin, Augustus Odena, Maxwell Nye, Maarten"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000202",
+      "page": 9,
+      "section": "References",
+      "content": "Hosseini, Fabio Petroni, Timo Schick, Jane A. Yu,\nArmand Joulin, Sebastian Riedel, and Edouard Grave.\n2022b. Few-shot learning with retrieval augmented\nlanguage models. ArXiv, abs/2208.03299."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000203",
+      "page": 9,
+      "section": "References",
+      "content": "Bosma, Henryk Michalewski, David Dohan, Ellen\nJiang, Carrie Cai, Michael Terry, Quoc Le, et al. 2021.\nProgram synthesis with large language models. arXiv\npreprint arXiv:2108.07732."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000204",
+      "page": 9,
+      "section": "References",
+      "content": "Naman Jain, King Han, Alex Gu, Wen-Ding Li, Fanjia"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000205",
+      "page": 9,
+      "section": "References",
+      "content": "Tom B. Brown, Benjamin Mann, Nick Ryder, Melanie"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000206",
+      "page": 9,
+      "section": "References",
+      "content": "Yan, Tianjun Zhang, Sida Wang, Armando Solar-"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000207",
+      "page": 9,
+      "section": "References",
+      "content": "Subbiah, Jared Kaplan, Prafulla Dhariwal, Arvind\nNeelakantan, Pranav Shyam, Girish Sastry, Amanda\nAskell, Sandhini Agarwal, Ariel Herbert-Voss,\nGretchen Krueger, Tom Henighan, Rewon Child,\nAditya Ramesh, Daniel M. Ziegler, Jeff Wu, Clemens"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000208",
+      "page": 9,
+      "section": "References",
+      "content": "Lezama, Koushik Sen, and Ion Stoica. 2024. Live-\ncodebench: Holistic and contamination free eval-\nuation of large language models for code. arXiv\npreprint arXiv:2403.07974."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000209",
+      "page": 10,
+      "section": "References",
+      "content": "Carlos E Jimenez, John Yang, Alexander Wettig,"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000210",
+      "page": 10,
+      "section": "References",
+      "content": "Jimmy Lin, Xueguang Ma, Sheng-Chieh Lin, Jheng-"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000211",
+      "page": 10,
+      "section": "References",
+      "content": "Shunyu Yao, Kexin Pei, Ofir Press, and Karthik R\nNarasimhan. 2024. SWE-bench: Can language mod-\nels resolve real-world github issues? In The Twelfth\nInternational Conference on Learning Representa-\ntions."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000212",
+      "page": 10,
+      "section": "References",
+      "content": "Hong Yang, Ronak Pradeep, and Rodrigo Nogueira.\n2021. Pyserini: A Python toolkit for reproducible\ninformation retrieval research with sparse and dense\nrepresentations. In Proceedings of the 44th Annual\nInternational ACM SIGIR Conference on Research\nand Development in Information Retrieval (SIGIR\n2021)."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000213",
+      "page": 10,
+      "section": "References",
+      "content": "Nikhil Kandpal, Haikang Deng, Adam Roberts, Eric"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000214",
+      "page": 10,
+      "section": "References",
+      "content": "Jiawei Liu, Chunqiu Steven Xia, Yuyao Wang, and Ling-"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000215",
+      "page": 10,
+      "section": "References",
+      "content": "Wallace, and Colin Raffel. 2023. Large language\nmodels struggle to learn long-tail knowledge. In In-\nternational Conference on Machine Learning, pages\n15696–15707. PMLR."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000216",
+      "page": 10,
+      "section": "References",
+      "content": "Yuhang Lai, Chengxi Li, Yiming Wang, Tianyi Zhang,"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000217",
+      "page": 10,
+      "section": "References",
+      "content": "ming Zhang. 2023. Is your code generated by chat-\nGPT really correct? rigorous evaluation of large lan-\nguage models for code generation. In Thirty-seventh\nConference on Neural Information Processing Sys-\ntems."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000218",
+      "page": 10,
+      "section": "References",
+      "content": "Anton Lozhkov, Raymond Li, Loubna Ben Allal, Fed-"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000219",
+      "page": 10,
+      "section": "References",
+      "content": "Ruiqi Zhong, Luke Zettlemoyer, Wen-tau Yih, Daniel\nFried, Sida Wang, and Tao Yu. 2023.\nDs-1000:\na natural and reliable benchmark for data science\ncode generation. In Proceedings of the 40th Interna-\ntional Conference on Machine Learning, ICML’23.\nJMLR.org."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000220",
+      "page": 10,
+      "section": "References",
+      "content": "erico Cassano, Joel Lamy-Poirier, Nouamane Tazi,\nAo Tang, Dmytro Pykhtar, Jiawei Liu, Yuxiang Wei,\net al. 2024. Starcoder 2 and the stack v2: The next\ngeneration. arXiv preprint arXiv:2402.19173."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000221",
+      "page": 10,
+      "section": "References",
+      "content": "Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000222",
+      "page": 10,
+      "section": "References",
+      "content": "Shuai Lu, Daya Guo, Shuo Ren, Junjie Huang, Alexey"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000223",
+      "page": 10,
+      "section": "References",
+      "content": "Petroni, Vladimir Karpukhin, Naman Goyal, Hein-\nrich Küttler, Mike Lewis, Wen-tau Yih, Tim Rock-\ntäschel, Sebastian Riedel, and Douwe Kiela. 2020.\nRetrieval-augmented generation for knowledge-\nintensive nlp tasks. In Advances in Neural Infor-\nmation Processing Systems, volume 33, pages 9459–\n9474. Curran Associates, Inc."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000224",
+      "page": 10,
+      "section": "References",
+      "content": "Svyatkovskiy, Ambrosio Blanco, Colin B. Clement,\nDawn Drain, Daxin Jiang, Duyu Tang, Ge Li, Li-\ndong Zhou, Linjun Shou, Long Zhou, Michele Tu-\nfano, Ming Gong, Ming Zhou, Nan Duan, Neel Sun-\ndaresan, Shao Kun Deng, Shengyu Fu, and Shujie\nLiu. 2021. Codexglue: A machine learning bench-\nmark dataset for code understanding and generation.\nCoRR, abs/2102.04664."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000225",
+      "page": 10,
+      "section": "References",
+      "content": "Raymond Li, Loubna Ben allal, Yangtian Zi, Niklas"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000226",
+      "page": 10,
+      "section": "References",
+      "content": "Alex Mallen, Akari Asai, Victor Zhong, Rajarshi Das,"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000227",
+      "page": 10,
+      "section": "References",
+      "content": "Daniel Khashabi, and Hannaneh Hajishirzi. 2023.\nWhen not to trust language models: Investigating\neffectiveness of parametric and non-parametric mem-\nories. In Proceedings of the 61st Annual Meeting of\nthe Association for Computational Linguistics (Vol-\nume 1: Long Papers), pages 9802–9822, Toronto,\nCanada. Association for Computational Linguistics."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000228",
+      "page": 10,
+      "section": "References",
+      "content": "Rui Meng, Ye Liu, Shafiq Rayhan Joty, Caiming"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000229",
+      "page": 10,
+      "section": "References",
+      "content": "Xiong, Yingbo Zhou, and Semih Yavuz. 2024. Sfr-\nembedding-mistral:enhance text retrieval with trans-\nfer learning."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000230",
+      "page": 10,
+      "section": "References",
+      "content": "Meta. 2024. Introducing meta llama 3: The most capa-"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000231",
+      "page": 10,
+      "section": "References",
+      "content": "ble openly available llm to date."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000232",
+      "page": 10,
+      "section": "References",
+      "content": "Niklas Muennighoff, Nouamane Tazi, Loïc Magne, and"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000233",
+      "page": 10,
+      "section": "References",
+      "content": "Nils Reimers. 2022. Mteb: Massive text embedding\nbenchmark. arXiv preprint arXiv:2210.07316."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000234",
+      "page": 10,
+      "section": "References",
+      "content": "Muennighoff, Denis Kocetkov, Chenghao Mou, Marc\nMarone, Christopher Akiki, Jia LI, Jenny Chim,\nQian Liu, Evgenii Zheltonozhskii, Terry Yue Zhuo,\nThomas Wang, Olivier Dehaene, Joel Lamy-Poirier,\nJoao Monteiro, Nicolas Gontier, Ming-Ho Yee, Lo-\ngesh Kumar Umapathi, Jian Zhu, Ben Lipkin, Muh-\ntasham Oblokulov, Zhiruo Wang, Rudra Murthy, Ja-\nson T Stillerman, Siva Sankalp Patel, Dmitry Ab-\nulkhanov, Marco Zocca, Manan Dey, Zhihan Zhang,\nUrvashi Bhattacharyya, Wenhao Yu, Sasha Luccioni,\nPaulo Villegas, Fedor Zhdanov, Tony Lee, Nadav\nTimor, Jennifer Ding, Claire S Schlesinger, Hailey\nSchoelkopf, Jan Ebert, Tri Dao, Mayank Mishra,\nAlex Gu, Carolyn Jane Anderson, Brendan Dolan-\nGavitt, Danish Contractor, Siva Reddy, Daniel Fried,\nDzmitry Bahdanau, Yacine Jernite, Carlos Muñoz\nFerrandis, Sean Hughes, Thomas Wolf, Arjun Guha,\nLeandro Von Werra, and Harm de Vries. 2023. Star-\ncoder: may the source be with you! Transactions on\nMachine Learning Research. Reproducibility Certifi-\ncation."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000235",
+      "page": 10,
+      "section": "References",
+      "content": "Arnold Overwijk, Chenyan Xiong, Xiao Liu, Cameron"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000236",
+      "page": 10,
+      "section": "References",
+      "content": "Yujia Li, David Choi, Junyoung Chung, Nate Kush-"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000237",
+      "page": 10,
+      "section": "References",
+      "content": "VandenBerg, and Jamie Callan. 2022. Clueweb22:\n10 billion web documents with visual and semantic\ninformation. arXiv preprint arXiv:2211.15848."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000238",
+      "page": 10,
+      "section": "References",
+      "content": "Fabio Petroni, Aleksandra Piktus, Angela Fan, Patrick"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000239",
+      "page": 10,
+      "section": "References",
+      "content": "Lewis, Majid Yazdani, Nicola De Cao, James Thorne,\nYacine Jernite, Vladimir Karpukhin, Jean Mail-"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000240",
+      "page": 10,
+      "section": "References",
+      "content": "man, Julian Schrittwieser, Rémi Leblond, Tom Ec-\ncles, James Keeling, Felix Gimeno, Agustin Dal\nLago, Thomas Hubert, Peter Choy, Cyprien de Mas-\nson d’Autume, Igor Babuschkin, Xinyun Chen, Po-\nSen Huang, Johannes Welbl, Sven Gowal, Alexey\nCherepanov, James Molloy, Daniel J. Mankowitz,\nEsme Sutherland Robson, Pushmeet Kohli, Nando\nde Freitas, Koray Kavukcuoglu, and Oriol Vinyals.\n2022. Competition-level code generation with alpha-\ncode. Science, 378(6624):1092–1097."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000241",
+      "page": 10,
+      "section": "References",
+      "content": "lard, et al. 2020.\nKilt: a benchmark for knowl-\nedge intensive language tasks.\narXiv preprint\narXiv:2009.02252."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000242",
+      "page": 11,
+      "section": "References",
+      "content": "Nils Reimers and Iryna Gurevych. 2019. Sentence-bert:"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000243",
+      "page": 11,
+      "section": "References",
+      "content": "Chunqiu Steven Xia, Yinlin Deng, Soren Dunn, and"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000244",
+      "page": 11,
+      "section": "References",
+      "content": "Lingming Zhang. 2024.\nAgentless: Demystify-\ning llm-based software engineering agents. arXiv\npreprint arXiv:2407.01489."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000245",
+      "page": 11,
+      "section": "References",
+      "content": "Sentence embeddings using siamese bert-networks.\nIn Proceedings of the 2019 Conference on Empirical\nMethods in Natural Language Processing. Associa-\ntion for Computational Linguistics."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000246",
+      "page": 11,
+      "section": "References",
+      "content": "Shitao Xiao, Zheng Liu, Peitian Zhang, and Niklas"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000247",
+      "page": 11,
+      "section": "References",
+      "content": "Stephen E. Robertson and Hugo Zaragoza. 2009. The"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000248",
+      "page": 11,
+      "section": "References",
+      "content": "Muennighoff. 2023. C-pack: Packaged resources\nto advance general chinese embedding. arXiv."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000249",
+      "page": 11,
+      "section": "References",
+      "content": "probabilistic relevance framework: Bm25 and be-\nyond. Found. Trends Inf. Retr., 3:333–389."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000250",
+      "page": 11,
+      "section": "References",
+      "content": "John Yang, Carlos E Jimenez, Alexander Wettig, Kil-"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000251",
+      "page": 11,
+      "section": "References",
+      "content": "Baptiste Roziere, Jonas Gehring, Fabian Gloeckle, Sten"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000252",
+      "page": 11,
+      "section": "References",
+      "content": "ian Lieret, Shunyu Yao, Karthik Narasimhan, and\nOfir Press. 2024. Swe-agent: Agent-computer inter-\nfaces enable automated software engineering. arXiv\npreprint arXiv:2405.15793."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000253",
+      "page": 11,
+      "section": "References",
+      "content": "Sootla, Itai Gat, Xiaoqing Ellen Tan, Yossi Adi,\nJingyu Liu, Tal Remez, Jérémy Rapin, et al. 2023.\nCode llama: Open foundation models for code. arXiv\npreprint arXiv:2308.12950."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000254",
+      "page": 11,
+      "section": "References",
+      "content": "Dejiao Zhang, Wasi Ahmad, Ming Tan, Hantian Ding,"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000255",
+      "page": 11,
+      "section": "References",
+      "content": "Aivin V. Solatorio. 2024. Gistembed: Guided in-sample"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000256",
+      "page": 11,
+      "section": "References",
+      "content": "Ramesh Nallapati, Dan Roth, Xiaofei Ma, and Bing\nXiang. 2024. Code representation learning at scale.\narXiv preprint arXiv:2402.01935."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000257",
+      "page": 11,
+      "section": "References",
+      "content": "selection of training negatives for text embedding\nfine-tuning."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000258",
+      "page": 11,
+      "section": "References",
+      "content": "Fengji Zhang, Bei Chen, Yue Zhang, Jacky Keung, Jin"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000259",
+      "page": 11,
+      "section": "References",
+      "content": "Hongjin Su, Shuyang Jiang, Yuhang Lai, Haoyuan Wu,"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000260",
+      "page": 11,
+      "section": "References",
+      "content": "Boao Shi, Che Liu, Qian Liu, and Tao Yu. 2024.\nArks: Active retrieval in knowledge soup for code\ngeneration. arXiv preprint arXiv:2402.12317."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000261",
+      "page": 11,
+      "section": "References",
+      "content": "Liu, Daoguang Zan, Yi Mao, Jian-Guang Lou, and\nWeizhu Chen. 2023. Repocoder: Repository-level\ncode completion through iterative retrieval and gen-\neration. In Proceedings of the 2023 Conference on\nEmpirical Methods in Natural Language Processing.\nAssociation for Computational Linguistics."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000262",
+      "page": 11,
+      "section": "References",
+      "content": "Hongjin Su, Weijia Shi, Jungo Kasai, Yizhong Wang,"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000263",
+      "page": 11,
+      "section": "References",
+      "content": "Yushi Hu, Mari Ostendorf, Wen-tau Yih, Noah A."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000264",
+      "page": 11,
+      "section": "References",
+      "content": "Shuyan Zhou, Uri Alon, Frank F. Xu, Zhengbao Jiang,"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000265",
+      "page": 11,
+      "section": "References",
+      "content": "and Graham Neubig. 2023. Docprompting: Gener-\nating code by retrieving the docs. In The Eleventh\nInternational Conference on Learning Representa-\ntions."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000266",
+      "page": 11,
+      "section": "References",
+      "content": "Smith, Luke Zettlemoyer, and Tao Yu. 2023. One\nembedder, any task: Instruction-finetuned text em-\nbeddings. In Findings of the Association for Compu-\ntational Linguistics: ACL 2023, pages 1102–1121,\nToronto, Canada. Association for Computational Lin-\nguistics."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000267",
+      "page": 11,
+      "section": "References",
+      "content": "CodeGemma Team. 2024. Codegemma: Open code"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000268",
+      "page": 11,
+      "section": "References",
+      "content": "models based on gemma."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000269",
+      "page": 11,
+      "section": "References",
+      "content": "Nandan Thakur, Nils Reimers, Andreas Rücklé, Ab-"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000270",
+      "page": 11,
+      "section": "References",
+      "content": "hishek Srivastava, and Iryna Gurevych. 2021. BEIR:\nA heterogeneous benchmark for zero-shot evaluation\nof information retrieval models. In Thirty-fifth Con-\nference on Neural Information Processing Systems\nDatasets and Benchmarks Track (Round 2)."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000271",
+      "page": 11,
+      "section": "References",
+      "content": "VoyageAI. 2024. voyage-code-2: Elevate your code"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000272",
+      "page": 11,
+      "section": "References",
+      "content": "retrieval."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000273",
+      "page": 11,
+      "section": "References",
+      "content": "Xingyao Wang, Boxuan Li, Yufan Song, Frank F Xu,"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000274",
+      "page": 11,
+      "section": "References",
+      "content": "Xiangru Tang, Mingchen Zhuge, Jiayi Pan, Yueqi\nSong, Bowen Li, Jaskirat Singh, et al. 2024. Open-\ndevin: An open platform for ai software developers as\ngeneralist agents. arXiv preprint arXiv:2407.16741."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000275",
+      "page": 11,
+      "section": "References",
+      "content": "Zhiruo Wang, Jun Araki, Zhengbao Jiang, Md Rizwan"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000276",
+      "page": 11,
+      "section": "References",
+      "content": "Parvez, and Graham Neubig. 2023a. Learning to fil-\nter context for retrieval-augmented generation. arXiv\npreprint arXiv:2311.08377."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000277",
+      "page": 11,
+      "section": "References",
+      "content": "Zhiruo Wang, Shuyan Zhou, Daniel Fried, and Gra-"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000278",
+      "page": 11,
+      "section": "References",
+      "content": "ham Neubig. 2023b. Execution-based evaluation for\nopen-domain code generation. In Findings of the\nAssociation for Computational Linguistics: EMNLP\n2023. Association for Computational Linguistics."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000279",
+      "page": 12,
+      "section": "References",
+      "content": "A\nExample Illustrations\nA.1\nExample with Canonical Documents"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000280",
+      "page": 12,
+      "section": "C Result Reproduction",
+      "content": "Our approach\nTo keep a fair comparison among\nall models, we use the same prompt for each dataset\nwhen evaluating all models. Meanwhile, we use\nzero-shot prompts without any additional instruc-\ntions, i.e., only input the original problem descrip-\ntion of the example, to prevent unknown effects\non the model performance when using different\ninstructions and/or in-context examples."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000281",
+      "page": 12,
+      "section": "A.1 Example with Canonical Documents",
+      "content": "To present our canonical document annotation\n(§2.3) more concretely, we illustrate examples with\ntheir annotated canonical documents. Figure 3\nshows the general-programming examples, with\none HumanEval and one MBPP example, respec-\ntively. Figure 4 shows two open-domain coding ex-\namples with canonical library documentation from\nDS-1000 and ODEX, respectively."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000282",
+      "page": 12,
+      "section": "A.2 RACG with Helpful and Distracting",
+      "content": "A.2\nRACG with Helpful and Distracting"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000283",
+      "page": 12,
+      "section": "A.2 RACG with Helpful and Distracting",
+      "content": "Documents"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000284",
+      "page": 12,
+      "section": "A.2 RACG with Helpful and Distracting",
+      "content": "Beyond the numerical numbers reported in experi-\nment sections, here we provide some concrete ex-\namples that: (i) benefit from RACG when relevant\ndocuments are retrieved, and (ii) distracted by ir-\nrelevant documents retrieved hence results in de-\ngraded performance."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000285",
+      "page": 12,
+      "section": "C Result Reproduction",
+      "content": "According to this setup, we next describe the\ndifferences in prompts used by the original works\nand how they may affect the results.\nStarCoder2\nThe StarCoder2 technical report\n(Lozhkov et al., 2024) reported results on the Hu-\nmanEval, MBPP, and DS-1000 datasets. On Hu-\nmanEval, our reproduced results (31.7) is slightly\nlower than their number (35.4), possibly because\nthe original paper additionally input the test cases\nas additional information in the prompt, whereas\nin our basic NL-to-code setup, no test cases are\nprovided. This additional information may cause\ntheir results to be higher."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000286",
+      "page": 12,
+      "section": "B Additional Details about Retrieval",
+      "content": "B\nAdditional Details about Retrieval"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000287",
+      "page": 12,
+      "section": "Efficiency",
+      "content": "Efficiency"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000288",
+      "page": 12,
+      "section": "C Result Reproduction",
+      "content": "On MBPP dataset, they adopt a subset of MBPP,\ni.e., 399 out of 427 examples that have additional\ntest cases populated by Liu et al. (2023). In contrast,\nwe evaluate on the entire dataset, which is likely to\ncause the variance in results."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000289",
+      "page": 12,
+      "section": "Efficiency",
+      "content": "For open access models, we use the same single\nA100 GPU with 80 GRAM, with a batch size of\n64 for GIST base and large, and 8 for SFR-Mistral.\nFor proprietary models, we estimate their efficiency\nusing a batch size of 64. We then average the time\nfor each batch for each query and document. For\nVoyage-code, we apply a “dynamic-batching” tech-\nnique that make sure the total tokens in the batch\nwon’t exceed the token limit. For both open and\nproprietary models, we define the search efficiency\nas the time it takes to embed individual query and\nthe time to calculate similarities. Note that the time\nfor both can be optimized by tokenizing all docu-\nments and all queries, then taking the dot product.\nThe actual runtime for API models varies for each\norganization with different rate limits and the batch\nsize. For this experiment, we set the maximum\ncontext length to match the maximum length of\nthe original models. This notably increases the en-\ncoding latency of SFR Mixtral, which has a longer\nmaximum context window size than smaller em-\nbedding models."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000290",
+      "page": 12,
+      "section": "C Result Reproduction",
+      "content": "On DS-1000, the original paper samples 40 gen-\nerations and report the pass@1 rate, while we only\ngenerate one program with greedy decoding. This\ndifference in decoding strategy may cause slight\nvariance in the results.\nCodeGemma\nThe CodeGemma technical report\n(Team, 2024) reported results on HumanEval and\nMBPP datasets, but does not provide any details\nabout the instructions, few-shot examples, or other\nparts of the prompt that they use. We were able to\nroughly reproduce their reported results, but with\n3-5 points less in pass@1.\nCodeLlama\nThe CodeLlama technical report\n(Roziere et al., 2023) reports results on HumanEval\nand MBPP datasets. We were able to perfectly\nreproduce their results on the HumanEval dataset\nunder the zero-shot setting. However, for MBPP ex-\nperiments, they use 3-shot prompting, which could\npotentially explain that our zero-shot results are 4\npoints lower in pass@1.\nDeepSeekCoder\nThe DeepSeekCoder technical\nreport (Guo et al., 2024) reports results on Hu-\nmanEval and MBPP for the 7B-instruct-v1.5 and\nthe 33B-instruct models, the report additionally re-\nport DS1000 results for the 33B-instruct model. We\ncould reproduce the original results on HumanEval"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000291",
+      "page": 12,
+      "section": "C Result Reproduction",
+      "content": "C\nResult Reproduction\nIn Table 5 in §3, we are able to reproduce most\nresults reported in the original papers, but with\nminor variances. Here we explain the differences\nin implementation and (potential) reasons that lead\nto these small performance variances."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000292",
+      "page": 13,
+      "section": "C Result Reproduction",
+      "content": "Canonical Document"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000293",
+      "page": 13,
+      "section": "Problem",
+      "content": "Canonical Document"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000294",
+      "page": 13,
+      "section": "C Result Reproduction",
+      "content": "def truncate_number(number: ﬂoat) -> ﬂoat:"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000295",
+      "page": 13,
+      "section": "Problem",
+      "content": "# Write a python function to remove ﬁrst and last\noccurrence of a given character from the string."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000296",
+      "page": 13,
+      "section": "C Result Reproduction",
+      "content": "\"\"\" Given a positive ﬂoating point number, it can\nbe decomposed into   and integer part (largest\ninteger smaller than given number) and decimals\n(leftover part always smaller than 1)."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000297",
+      "page": 13,
+      "section": "C Result Reproduction",
+      "content": "Return the decimal part of the number.\n>>> truncate_number(3.5)\n0.5\n\"\"\"\nreturn number % 1.0"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000298",
+      "page": 13,
+      "section": "Problem",
+      "content": "def remove_Occ(s,ch):\nfor i in range(len(s)):\nif (s[i] == ch):\ns = s[0 : i] + s[i + 1:]\nbreak\nfor i in range(len(s) - 1,-1,-1):\nif (s[i] == ch):\ns = s[0 : i] + s[i + 1:]\nbreak\nreturn s"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000299",
+      "page": 13,
+      "section": "Problem",
+      "content": "Problem"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000300",
+      "page": 13,
+      "section": "Problem",
+      "content": "def truncate_number(number: ﬂoat) -> ﬂoat:"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000301",
+      "page": 13,
+      "section": "Problem",
+      "content": "Problem"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000302",
+      "page": 13,
+      "section": "Problem",
+      "content": "\"\"\" Given a positive ﬂoating point number, it can\nbe decomposed into   and integer part (largest\ninteger smaller than given number) and decimals\n(leftover part always smaller than 1)."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000303",
+      "page": 13,
+      "section": "Problem",
+      "content": "# Write a python function to remove ﬁrst and last\noccurrence of a given character from the string."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000304",
+      "page": 13,
+      "section": "Problem",
+      "content": "Return the decimal part of the number.\n>>> truncate_number(3.5)\n0.5\n\"\"\""
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000305",
+      "page": 13,
+      "section": "Problem",
+      "content": "Figure 3: HumanEval (left) and MBPP (right) examples with annotated canonical solutions."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000306",
+      "page": 13,
+      "section": "Problem",
+      "content": "and DS-1000, but got slightly worse results on\nMBPP because they used few-shot prompting,\nwhich should outperform our zero-shot method.\nLlama3\nSince there is no technical report avail-\nable yet, the official blog post 10 report results on\nHumanEval, without any descriptions on prompt-\ning construction or the inference process. Our re-\nproduced results are about 4 points lower than their\noriginal results."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000307",
+      "page": 13,
+      "section": "D Analysis on Open-Domain Coding",
+      "content": "D\nAnalysis on Open-Domain Coding"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000308",
+      "page": 13,
+      "section": "Problems",
+      "content": "Problems"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000309",
+      "page": 13,
+      "section": "Problems",
+      "content": "With varied retrieval models\nAligning with\n§3.4, we examine the RACG results using docu-\nmentation retrieved by different retrieval models.\nAs shown in Table 10, augmenting documentation\nretrieved with most methods improves the results\nby 20.3–40.1%. Compared to the entire ODEX set\nwhere most queries require common libraries, this\nhard-library split more clearly demonstrates the ef-\nfectiveness of augmenting library documentation.\nThis result verifies our hypothesis that strong GPT\nmodels are familiar with most common libraries,\nand can only benefit from additional library infor-\nmation when harder libraries are required."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000310",
+      "page": 13,
+      "section": "Problems",
+      "content": "Model\nnone\nBM25\nGIST\nVoyage\nOpenAI\nGold"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000311",
+      "page": 13,
+      "section": "Problems",
+      "content": "GPT-3.5-turbo\n17.2\n24.1\n13.8\n20.7\n17.2\n24.1\nGPT-4\n20.7\n24.1\n17.2\n27.6\n24.1\n27.6"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000312",
+      "page": 13,
+      "section": "Problems",
+      "content": "Table 10: RACG results on the subset of ODEX exam-\nples using the least common libraries."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000313",
+      "page": 13,
+      "section": "Problems",
+      "content": "In §3.4, providing the documentation of required\nlibraries brings limited benefits, especially with\nstrong proprietary models such as GPT and Gem-\nini. While we hypothesize that these strong models\nare sufficiently familiar with the required libraries\nand in turn barely benefit from additional informa-\ntion about them, in this section, we quantitatively\ninvestigate this issue and verify its validity."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000314",
+      "page": 13,
+      "section": "E How Many Documents to Augment?",
+      "content": "E\nHow Many Documents to Augment?"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000315",
+      "page": 13,
+      "section": "Problems",
+      "content": "Concretely, we construct a subset of ODEX con-\ntaining only examples with less common libraries.\nWe use the real-world distribution of all libraries"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000316",
+      "page": 13,
+      "section": "E How Many Documents to Augment?",
+      "content": "Different models have varied context length lim-\nits and context utilization abilities. Therefore, we\nstudy how model performance varies when provid-\ning different numbers of documents in the context.\nWe experiment with one representative dataset for"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000317",
+      "page": 13,
+      "section": "Problems",
+      "content": "involved in ODEX and select examples that use\nthe top 20 least common libraries (e.g., sqlite3,\nftplib, flask). We then evaluate model perfor-\nmance on this subset and compare the results with\nand without documentation in model contexts."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000318",
+      "page": 13,
+      "section": "Problems",
+      "content": "10https://ai.meta.com/blog/meta-llama-3/"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000319",
+      "page": 13,
+      "section": "E How Many Documents to Augment?",
+      "content": "each task category: HumanEval since it is the most\ncommonly used dataset, ODEX for its broad do-\nmain coverage, and RepoEval for its solvable dif-"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000320",
+      "page": 14,
+      "section": "E How Many Documents to Augment?",
+      "content": "Canonical Document"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000321",
+      "page": 14,
+      "section": "E How Many Documents to Augment?",
+      "content": "Canonical Document"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000322",
+      "page": 14,
+      "section": "E How Many Documents to Augment?",
+      "content": "# python.library.socket#socket.socket.send"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000323",
+      "page": 14,
+      "section": "E How Many Documents to Augment?",
+      "content": "# pandas.reference.api.pandas.dataframe.groupby\npandas.DataFrame.groupby   DataFrame.groupby(by=None, axis=0,\nlevel=None, as_index=True, sort=True, group_keys=True,\nsqueeze=NoDefault.no_default, observed=False,\ndropna=True)[source]\n… …"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000324",
+      "page": 14,
+      "section": "E How Many Documents to Augment?",
+      "content": "# pandas.reference.api.pandas.dataframe.squeeze\npandas.DataFrame.squeeze\nDataFrame.squeeze(axis=None)[source]\nSqueeze 1 dimensional axis objects into scalars. Series or\nDataFrames with a single element are squeezed to a scalar.\n… …"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000325",
+      "page": 14,
+      "section": "E How Many Documents to Augment?",
+      "content": "socket.send(bytes[, ﬂags])\nSend data to the socket. The socket must be connected to a remote\nsocket. The optional ﬂags argument has the same meaning as for\nrecv() above. Returns the number of bytes sent. Applications are\nresponsible for checking that all data has been sent; if only some of\nthe data was transmitted, the application needs to attempt delivery\nof the remaining data. For further information on this topic, consult\nthe Socket Programming HOWTO.  Changed in version 3.5: If the\nsystem call is interrupted and the signal handler does not raise an\nexception, the method now retries the system call instead of raising\nan InterruptedError exception (see PEP 475 for the rationale)."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000326",
+      "page": 14,
+      "section": "E How Many Documents to Augment?",
+      "content": "Problem"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000327",
+      "page": 14,
+      "section": "E How Many Documents to Augment?",
+      "content": "Problem"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000328",
+      "page": 14,
+      "section": "E How Many Documents to Augment?",
+      "content": "# sending http headers to `client`"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000329",
+      "page": 14,
+      "section": "E How Many Documents to Augment?",
+      "content": "What is best way to achieve this ? closest I got was with the zip\nfunction but haven't managed to make it work for more then one\nlevel (two columns).\nA:\n<code>\nimport pandas as pd\ndf = pd.DataFrame({'name': ['A', 'A', 'B', 'C', 'B', 'A'], 'v1': ['A1', 'A2', 'B1',\n'C1', 'B2', 'A2'], 'v2': ['A11', 'A12', 'B12', 'C11', 'B21', 'A21'], 'v3': [1, 2, 3, 4,\n5, 6]})\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000330",
+      "page": 14,
+      "section": "E How Many Documents to Augment?",
+      "content": "Figure 4: DS-1000 (left) and ODEX (right) examples with annotated canonical library documentation."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000331",
+      "page": 14,
+      "section": "E How Many Documents to Augment?",
+      "content": "ficulty. We compare RACG performance when\nproviding top-1, 2, 5, and 10 documents."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000332",
+      "page": 14,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "falls short when grounding on one source (even\nthe canonical solution source). Interestingly, the\nstronger Claude-3-sonnet performs worse than the\nweaker Claude-3-haiku, but can benefit from all\nretrieval sources and outperform haiku with doc-\numents from the canonical programming source,\nsuggesting its potentially better RAG ability. While\nthe stronger Claude effectively benefits from ex-\ntra contexts, the stronger Gemini-1.5-pro behaves\nsimilarly to its weaker counterpart and cannot do\nRACG effectively with non-canonical sources."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000333",
+      "page": 14,
+      "section": "E How Many Documents to Augment?",
+      "content": "As shown by Figure 6, adding five documents\nyields the best results in most settings, except for\nStarCoder2 on RepoEval which best uses 8 docu-\nments. Despite the drastic variance in length limits\nof StarCoder2 (16k) and DeepseekCoder (4k), the\nsweet spot is consistently 5 documents. While\nadding a few documents brings helpful contexts,\nadding more low-ranked documents may introduce\nnoise and deteriorate generation due to the imper-\nfections of retrieval systems (Wang et al., 2023a)."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000334",
+      "page": 14,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "F\nDoes RACG Help Stronger Models?"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000335",
+      "page": 14,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "We have shown that RACG with open retrieval im-"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000336",
+      "page": 14,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "Open domain: ODEX\nAll models experience\nlimited improvements by leveraging library doc-\numentation to complex the ODEX task, with the\nonly exception that GPT-4o improves 4.6 points\nby incorporating programming solutions into the\ncontext."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000337",
+      "page": 14,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "As results degrade in most cases, we conduct\na manual analysis to examine when most mod-\nels fail. We find that most models tend to copy\nfunctions in the context, sometimes even overwrit-\ning the function being queried, thus failing all the\ntest cases specific to the queried function. Further,\npossibly affected by the plethora of programs in\ncontext, models tend to generate over-complicated\nprograms which, however, do not often pass the\ntest cases."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000338",
+      "page": 14,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "proves a relatively weaker model, StarCoder2 (§4).\nTo see if this improvement of RACG with open\nretrieval generalizes to stronger models, we exper-\niment with a series of top-performing proprietary\nmodels: GPT-4o, Claude-3-haiku and sonnet, and\nGemini-1.5-flash and pro.\nBasic programming: HumanEval\nRACG can\nconsistently improve the performance of GPT-4\nand Claude-3-sonnet when leveraging all sources\nof documents. However, for weaker models such\nas Claude-3-haiku and Gemini-1.5-flash, RACG\nonly helps when aggregating multiple sources yet"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000339",
+      "page": 15,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "Split string 'Words, words, words.' using a regex '(\\\\W+)'\nQuestion"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000340",
+      "page": 15,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "Find intersection data between series `s1` and series `s2`\nQuestion"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000341",
+      "page": 15,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "re.split('(\\\\W+)', 'Words, words, words.')\nSolution"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000342",
+      "page": 15,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "pd.Series(list(set(s1).intersection(set(s2))))\nSolution"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000343",
+      "page": 15,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "C0ntext (distracting)"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000344",
+      "page": 15,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "C0ntext (helpful)"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000345",
+      "page": 15,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "# Write a function to put spaces between words starting\nwith capital letters in a given string by using regex.\nimport re\ndef capital_words_spaces(str1):\nreturn re.sub(r\"(\\w)([A-Z])\", r\"\\1 \\2\", str1)"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000346",
+      "page": 15,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "skimage.segmentation.join_segmentations(s1, s2)\n[source]\nReturn the join of the two input segmentations. The join J\nof S1 and S2 is deﬁned as the segmentation in which two\nvoxels are in the same segment if and only if they are in\nthe same segment in both S1 and S2.  Parameters\nclass Intersection(expr1, expr2, **extra)\nset_extremes(e1, e2)[source]"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000347",
+      "page": 15,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "Model Prediction"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000348",
+      "page": 15,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "Model Prediction\nimport re\ndef f_2195340():\n\"\"\"split string 'Words, words, words.' using a regex\n'(\\W+)'\"\"\"\ntext = 'Words, words, words.'\nreturn re.split(r'(\\W+)', text)"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000349",
+      "page": 15,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "from skimage.segmentation import join_segmentations\ndef f_18079563(s1, s2):\n\"\"\"Find intersection data between series `s1` and series\n`s2`\n\"\"\"\nreturn join_segmentations(s1, s2)"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000350",
+      "page": 15,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "Figure 5: RACG helps with relevant contexts (left) and hurts with distracting contexts (right)."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000351",
+      "page": 15,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "HumanEval\nODEX\nRepoEval"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000352",
+      "page": 15,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "Figure 6: Comparing RACG performance with various numbers of documents."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000353",
+      "page": 15,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "In general, most models can be easily distracted\nor disturbed by additional contexts (Wang et al.,\n2023a), and fail to conduct the designated code\ngeneration task, indicating much room for improve-\nment for RACG."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000354",
+      "page": 15,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "Repository level: RepoEval\nWhile GPT-4o can\nsolve the RepoEval task with a reasonable success\nrate, all Claude models are challenged by the task\nand achieve less than 10% pass@1 for most scenar-\nios. We find Claude models mostly respond with\nexplanations of the incomplete input code, instead\nof the to-be-completed code even with proper in-\nstructions, possibly caused by some properties of\nthe unknown training data. Gemini-1.5-flash also\nbarely solves the task and often generates textual\nexplanations; however its stronger pro variant gets\nabout 10–25 point improvements, demonstrating its\nstronger repository-level code completion abilities."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000355",
+      "page": 16,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "Method\nBaseline\nProgram\nTutorial\nDocs\nSO\nGitHub\nAll"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000356",
+      "page": 16,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "GPT-4o\n75.6\n94.5\n90.2\n90.9\n91.5\n84.8\n95.1"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000357",
+      "page": 16,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "Claude-3-haiku\n74.4\n77.4\n77.4\n71.3\n67.7\n73.2\n82.9\nClaude-3-sonnet\n65.9\n78.7\n66.5\n68.9\n70.7\n73.8\n80.5"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000358",
+      "page": 16,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "Gemini-1.5-flash\n72.0\n91.5\n75.0\n70.1\n68.9\n68.9\n95.1\nGemini-1.5-pro\n82.9\n95.7\n79.9\n77.4\n79.9\n80.5\n86.6"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000359",
+      "page": 16,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "Table 11: RACG on HumanEval with strong code LMs."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000360",
+      "page": 16,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "Method\nBaseline\nProgram\nTutorial\nDocs\nSO\nGitHub\nAll"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000361",
+      "page": 16,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "GPT-4o\n44.6\n49.2\n44.2\n47.6\n40.3\n39.4\n39.6"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000362",
+      "page": 16,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "Claude-3-haiku\n48.5\n42.6\n39.2\n44.6\n33.7\n40.5\n35.1\nClaude-3-sonnet\n41.0\n37.6\n35.3\n38.0\n34.2\n42.4\n38.0"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000363",
+      "page": 16,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "Gemini-1.5-flash\n50.6\n48.3\n46.7\n46.2\n41.9\n44.9\n43.1\nGemini-1.5-pro\n57.2\n54.4\n45.6\n51.0\n46.5\n39.6\n46.0"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000364",
+      "page": 16,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "Table 12: RACG on ODEX with strong code LMs."
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000365",
+      "page": 16,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "Method\nBaseline\nLocal\nProgram\nTutorial\nDocs\nSO\nGitHub\nAll\nL+E"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000366",
+      "page": 16,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "GPT-4o\n32.4\n62.2\n35.4\n28.7\n27.8\n29.0\n28.2\n30.3\n54.2"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000367",
+      "page": 16,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "Claude-3-haiku\n9.1\n0.5\n0.5\n0.5\n0.5\n0.5\n0.2\n0.2\n0.5\nClaude-3-sonnet\n0.5\n0.5\n0.5\n0.5\n0.5\n0.5\n0.5\n0.5\n0.5"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000368",
+      "page": 16,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "Gemini-1.5-flash\n1.3\n16.9\n4.0\n2.1\n3.2\n2.1\n3.2\n2.7\n11.8\nGemini-1.5-pro\n10.5\n39.1\n15.1\n13.4\n15.8\n15.3\n11.8\n12.3\n33.0"
+    },
+    {
+      "id": "chunk-paper-f77503c596c24013-000369",
+      "page": 16,
+      "section": "F Does RACG Help Stronger Models?",
+      "content": "Table 13: RACG on RepoEval with strong code LMs."
+    }
+  ],
+  "items": [
+    {
+      "field": "one_sentence_summary",
+      "content": "CODERAG-BENCH是面向Python检索增强代码生成的统一基准，通过多粒度、封闭与开放领域任务、规范文档标注及执行评估，联合考察检索质量和代码生成能力。",
+      "citation_ids": [
+        "R00069",
+        "R00073",
+        "R00098",
+        "R00104"
+      ]
+    },
+    {
+      "field": "main_results",
+      "content": "完整RACG比较BM25、GIST-large、Voyage和OpenAI embeddings，生成模型为StarCoder2-7B、DeepSeekCoder-7B与GPT-3.5-turbo；正文默认前置top-5文档，temperature=0.2、top_p=0.95，非SWE任务单次生成，基础编程检索池排除对应规范答案。在MBPP上，StarCoder2-7B的实际检索增强结果比规范上下文设置高15.6–17.8个百分点；DeepSeekCoder-7B在基础编程任务中未获改善，作者观察到额外上下文伴随过度复杂、语法不通的重复生成。在包含20个最少使用库的ODEX-hard上，三种生成模型均可从检索库文档中受益，DeepSeekCoder-7B与GPT-3.5-turbo的开放领域收益主要集中于此，最佳检索—生成组合可达到该子集的规范文档结果。另在采用21次采样和多数投票重排序的SWE-bench-Lite实验中，Retrieval-then-Rerank与GPT-4o较无检索基线高21个百分点，但仍比金标准文档设置低9个百分点。总体上，最优检索器随任务和生成模型变化，较高检索得分不保证较好的RACG结果。",
+      "citation_ids": [
+        "R00145",
+        "R00146",
+        "R00103",
+        "R00107",
+        "R00139",
+        "R00140",
+        "R00144",
+        "R00147",
+        "R00138"
+      ]
+    },
+    {
+      "field": "limitations",
+      "content": "作者将本工作定位为初步探索：主要覆盖Python，其他语言可能带来额外挑战；代码调试等任务仍探索不足。实验主要采用原生检索、重排和生成方法，更强骨干与先进RACG组件尚未充分研究，因此结果不代表全部模型行为。",
+      "citation_ids": [
+        "R00200",
+        "R00207",
+        "R00203"
+      ]
+    },
+    {
+      "field": "tldr[0]",
+      "content": "Python代码RAG统一基准：作者报告约9k任务、25M检索文档，强调标注、执行评估与统一接口。",
+      "citation_ids": [
+        "R00069",
+        "R00009",
+        "R00073"
+      ]
+    },
+    {
+      "field": "tldr[1]",
+      "content": "检索看NDCG@10，生成看pass@k；规范检索与开放检索分别评价。",
+      "citation_ids": [
+        "R00104",
+        "R00105"
+      ]
+    },
+    {
+      "field": "tldr[2]",
+      "content": "ODEX-hard上，top-5库文档前置、单响应生成（t=0.2、top_p=0.95）可帮助StarCoder2-7B、DeepSeekCoder-7B和GPT-3.5-turbo。",
+      "citation_ids": [
+        "R00145",
+        "R00144",
+        "R00103",
+        "R00107"
+      ]
+    },
+    {
+      "field": "tldr[3]",
+      "content": "SWE-bench-Lite采用21次采样与多数投票；Retrieval-then-Rerank+GPT-4o比无检索高21个百分点，仍比金标准低9个百分点。",
+      "citation_ids": [
+        "R00107",
+        "R00147"
+      ]
+    },
+    {
+      "field": "tldr[4]",
+      "content": "检索质量与上下文利用共同制约效果；Python和原生组件的实验范围不代表所有模型。",
+      "citation_ids": [
+        "R00194",
+        "R00207",
+        "R00203"
+      ]
+    },
+    {
+      "field": "section_summaries[9]",
+      "content": "复现比较对每个数据集统一使用原题描述的零样本提示，不添加额外指令或示例。作者称多数原论文结果可复现，并将小幅差异解释为实现、提示、评估范围和推理设置等可能因素，而非确定的单一原因。",
+      "citation_ids": [
+        "R00307",
+        "R00321",
+        "R00312",
+        "R00315",
+        "R00318"
+      ],
+      "section": "C Result Reproduction"
+    },
+    {
+      "field": "claims[1]",
+      "content": "常用库知识可能已被强模型记忆，是作者解释检索收益较弱的假设；ODEX-hard包含20个最少使用库，用于检验陌生库条件。该子集上的检索收益并不是对模型记忆机制的直接测量，不应将假设写成已证明的原因。",
+      "citation_ids": [
+        "R00140",
+        "R00339"
+      ]
+    },
+    {
+      "field": "method",
+      "content": "1. 整合不同代码粒度及封闭、开放领域任务，并提供统一的检索、增强生成和评估接口。\n2. 构造规范文档：HumanEval与MBPP使用规范解答文档；DS-1000与ODEX先解析程序调用的库函数、匹配文档，再人工核验并清理；RepoEval使用缺失函数的20行代码片段，SWE-bench使用真实编辑后的文件。LiveCodeBench因不提供解答而没有规范文档标注。\n3. 区分规范检索与开放检索。实际RACG默认将top-5检索文档前置于原题，不加入few-shot示例；另使用BGE-reranker-base重排OpenAI检索的前100项。\n4. 正文常规生成设置为temperature=0.2、top_p=0.95、单响应；SWE-bench-Lite采用21次采样和多数投票重排序。\n5. 检索使用NDCG、Precision、Recall，以NDCG@10百分比为主指标；代码生成使用pass@k衡量执行正确性，并分别评价规范和开放检索下的最终RAG效果。",
+      "citation_ids": [
+        "R00069",
+        "R00093",
+        "R00098",
+        "R00099",
+        "R00100",
+        "R00102",
+        "R00103",
+        "R00107",
+        "R00104",
+        "R00105"
+      ]
+    },
+    {
+      "field": "ablation_findings[0]",
+      "content": "开放来源比较覆盖HumanEval、ODEX和RepoEval，使用三种优选检索器配合StarCoder2，以及OpenAI检索配合GPT-4o；按正文常规temperature=0.2、top_p=0.95单响应生成，混合来源则聚合五类来源各自的top-1文档。作者报告HumanEval中StackOverflow带来1.8–4.3个百分点提升，教程仅在GIST检索下提升2.1个百分点。在ODEX中，使用OpenAI检索编程解答而非库文档时，GPT-4o和StarCoder2分别高3.2和1.6个百分点，说明来源收益依任务和检索器而异。",
+      "citation_ids": [
+        "R00167",
+        "R00170",
+        "R00107"
+      ]
+    }
+  ],
+  "sources": [
+    {
+      "id": "R00009",
+      "source_text": "GitHub files. In total, CODERAG-BENCH has 9k\ncoding tasks and 25 million retrieval documents,\nproviding a robust foundation for reproducible and\nreliable evaluations in retrieval and RACG.",
+      "section": "1 Introduction",
+      "page": 1
+    },
+    {
+      "id": "R00069",
+      "source_text": "For CODERAG-BENCH (Figure 1), the curation\nis driven by three factors:\n(i) Diverse tasks:\nCode generation spans multiple levels (line, func-\ntion, repository) across closed and open do-\nmains. (ii) Rigorous evaluation: We offer high-\nquality ground-truth annotations for retrieval and\nexecution-based evaluation to measure functional\ncorrectness. (iii) Unified interface: Our codebase\nprovides a consistent interface for retrieval, aug-\nmented generation, and evaluation, unlike current\ndatasets with varied pipelines.",
+      "section": "2 The CODERAG-BENCH",
+      "page": 2
+    },
+    {
+      "id": "R00073",
+      "source_text": "1In this work we focus on Python-related tasks because\nit is the most widely-used programming language for bench-\nmarking code generation. We leave extensions to other pro-\ngramming languages for future work.",
+      "section": "2.1 Programming Problems",
+      "page": 2
+    },
+    {
+      "id": "R00093",
+      "source_text": "used resources for program developers, listed in Ta-\nble 2. CODERAG-BENCH supports two retrieval\nsetups: canonical retrieval—retrieves documents\nfrom only the canonical datastore (§2.3), and open\nretrieval—retrieves documents from any datastore.\nProgramming solutions\nWe create one doc-\nument from each basic programming problems\nthat have canonical solutions (i.e., HumanEval and",
+      "section": "2.2 Retrieval Sources",
+      "page": 3
+    },
+    {
+      "id": "R00098",
+      "source_text": "To ensure reliable retrieval evaluation and estimate\nthe upper bound of a RACG system with an ideal\nretriever, it’s essential that all examples include\ncanonical documents–the documents containing\nthe necessary context to solve the programming\nproblem.\nAs most existing datasets lack these\ncanonical documents, we annotate them from the\ncorresponding retrieval pool, as shown in Table 1.\nBasic programming problems\nThe canonical\ndocument for examples in HumanEval and MBPP\nis the documents we created in §2.2 in the program-\nming solutions pool. Since LiveCodeBench does\n",
+      "section": "2.3 Canonical Document Annotation",
+      "page": 4
+    },
+    {
+      "id": "R00099",
+      "source_text": "not provide solutions to its problems, we do not\nannotate canonical documents for it.\nOpen-domain problems\nSince open-domain\nproblems require libraries, we annotate the canoni-\ncal library documentation for DS-1000 and ODEX\nexamples. We first automatically parse out the li-\nbrary functions used in each program, and find\ntheir corresponding documentation entries. Then,\nwe manually verify the functions and remove in-\ncorrect ones. This yields an average of 1.4 and 1.2\nentries for DS-1000 and ODEX.\nRepository-level problems\nWe adopt canoni-\ncal code from the original dataset as our canonical\n",
+      "section": "2.3 Canonical Document Annotation",
+      "page": 4
+    },
+    {
+      "id": "R00100",
+      "source_text": "documents: 20-line code snippets of the missing\nfunctions in RepoEval, and the ground-truth edited\nfiles in SWE-bench. We obtain these from the com-\npleted local repositories from the original datasets.",
+      "section": "2.3 Canonical Document Annotation",
+      "page": 4
+    },
+    {
+      "id": "R00102",
+      "source_text": "openai-text-embedding-small-03, selected for\nits cost-effectiveness. Finally, we apply rerank-\ning with BGE-reranker-base(Xiao et al., 2023) on\ntop-100 openai results before generation.\nGeneration baselines\nWe adopt both code-\nspecific LMs and strong general text-oriented\nLMs. For code-specific LMs, we use StarCoder2\n(Lozhkov et al., 2024), CodeGemma (Team, 2024),\nCodeLlama (Roziere et al., 2023), and DeepSeek-\nCoder (Guo et al., 2024) in various sizes. For gen-\neral text LMs, we include three top-performing\nmodels: Llama3 (Meta, 2024), Command-R (Co-\n",
+      "section": "3.1 Experimental Setup",
+      "page": 4
+    },
+    {
+      "id": "R00103",
+      "source_text": "hereAI, 2024) specially optimized for RAG, and\nproprietary GPT models gpt-3.5-turbo-0125\nand gpt-4o. We use the instruct version of all\ngeneration models if available, since they often\nperform better than the base versions.\nExperimental setup\nFor retrieval, we imple-\nment BM25 retrievers using pyserini (Lin et al.,\n2021) with parameter k1 = 1.2 and b = 0.75, and\nuse sentence-transformers (Reimers and Gurevych,\n2019)5 for all dense models with open checkpoints.\nWe prepend the top-5 retrieved documents to the",
+      "section": "3.1 Experimental Setup",
+      "page": 4
+    },
+    {
+      "id": "R00104",
+      "source_text": "2.4\nEvaluation Metrics\nFor retrieval, we evaluate NDCG, Precision and\nRecall (Thakur et al., 2021) and use NDCG@10\npercentage as our primary metric, following prior\nwork (Izacard et al., 2022a). For code generation,\nwe adopt the pass@k metric (Chen et al., 2021)\nto measure the execution correctness of programs.\nWe evaluate the final RAG performance both in",
+      "section": "2.4 Evaluation Metrics",
+      "page": 4
+    },
+    {
+      "id": "R00105",
+      "source_text": "canonical and open retrieval setups.",
+      "section": "2.4 Evaluation Metrics",
+      "page": 4
+    },
+    {
+      "id": "R00107",
+      "source_text": "original problems (we study the number of docu-\nments in §E), and do not include other contexts\nsuch as few-shot examples. For code generation,\nwe use temperature t = 0.2, top_p = 0.95 and\nsample one response for all generations, following\nprior work (Li et al., 2023). Specifically on SWE-\nbench-Lite, we adopt the n = 21 way sampling\nand majority-vote reranking strategy proposed by\nAgentless (Xia et al., 2024).6",
+      "section": "3.1 Experimental Setup",
+      "page": 4
+    },
+    {
+      "id": "R00138",
+      "source_text": "Overall, the best retrieval models vary depending\non the task and underlying LMs. In some cases, top-\nperforming retrieval models do not lead to the best\nRACG outcomes, highlighting the need to evaluate\nRACG systems holistically across varied tasks.",
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "page": 6
+    },
+    {
+      "id": "R00139",
+      "source_text": "Basic programming problems\nMost retrieved\ncontexts help StarCoder2 generations. On MBPP,\nRACG even outperforms canonical setup by\n15.6–17.8. However, RACG does not improve\nDeepSeekCoder generations, which we observe\nis due to over-complicated and ungrammatically\nrepetitive generations when with additional con-\ntexts. In comparison, GPT-3.5-turbo can effectively\nimprove with added contexts, showing its better\nability to leverage augmented contexts.",
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "page": 6
+    },
+    {
+      "id": "R00140",
+      "source_text": "powerful models may have already memorized,\nsimilar to their memorization of factual knowledge\n(Mallen et al., 2023; Kandpal et al., 2023), thereby\nreducing the need for retrieval. To verify this hy-\npothesis, we build an ODEX subset of examples\nwith the 20 least used libraries, i.e., ODEX-hard.\nAs shown in Table 5, adding documents retrieved\nwith most methods improves the results by 20.3–\n40.1%, showing the effectiveness of RACG on chal-\nlenging coding tasks using unfamiliar libraries.\nRepository-level challenges All models show\ngains of 7.5–17.2 points with canonical snippets in\n",
+      "section": "3.3 Generation with Canonical Documents",
+      "page": 6
+    },
+    {
+      "id": "R00144",
+      "source_text": "Open-domain problems\nThe weaker Star-\nCoder2 benefits from retrieved library documenta-\ntion across all datasets, while DeepSeekCoder and\nGPT-3.5 show gains mainly on ODEX-hard prob-\nlems. This aligns with findings from the canonical\ndocument setup, indicating that RACG is particu-\nlarly effective for less popular libraries. Interest-\ningly, despite relatively low NDCG@10 scores, the\nbest-performing RACG combinations match their\ncanonical results on ODEX-hard.",
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "page": 6
+    },
+    {
+      "id": "R00145",
+      "source_text": "and generation models in the full RACG setting,\nwhich requires both retrieve documents and gen-\nerating conditioned on the documents. We select\nthe best retrieval models from each type: BM25,\nGIST-large, Voyage, and OpenAI embeddings. For\ngeneration, we select (i) StarCoder2-7B: a weaker\nmodel that benefits the most from contexts; (ii)\nDeepSeekCoder-7B: one of the strongest open code\nLMs; and (iii) GPT-3.5-turbo: one of the top propri-\netary models. For each dataset, we retrieve the most\nrelevant contexts from its canonical source marked\nin Table 1, and retrieve programming solutions for\n",
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "page": 6
+    },
+    {
+      "id": "R00146",
+      "source_text": "LiveCodeBench. Table 6 shows the results. Note\nthat we exclude canonical docs (answers) from the\nretrieval corpora for basic programming tasks.",
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "page": 6
+    },
+    {
+      "id": "R00147",
+      "source_text": "Repository-level problems\nAll models show\nimprovements with retrieved code snippets on Re-\npoEval, with RACG using strong retrievers like\nopenai-embeddings performing on par with—or\neven surpassing—the canonical setup, likely due\nto the additional context provided to the models.\nOn SWE-Bench, the best-performing combination,\nRetrieval-then-Rerank and GPT4o, yields a 21-\npoint improvement over the no-retrieval baseline.\nHowever, there remains a 9-point gap compared to\nthe gold setup, indicating room for improvement\non the retrieval side, as reflected in the limited code\n",
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "page": 6
+    },
+    {
+      "id": "R00167",
+      "source_text": "datasets: HumanEval, ODEX, and RepoEval. We\nalso study mixed retrieval with documents from all\nsources, where we aggregate the top-1 documents\nfrom all five sources as augmented contexts.8 We\nuse the three top retrievers along with StarCoder2\nand OpenAI retrieval with GPT-4o generation, to\nstudy open RACG with weak and strong LMs.\nGeneral programming: HumanEval\nAmong\nall sources, SO posts can improve the results by\n1.8–4.3, regardless of the choice of retrievers. Tuto-\nrials can improve results by 2.1 only with the GIST\nretriever.From manual examinations of the results,\n",
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "page": 7
+    },
+    {
+      "id": "R00170",
+      "source_text": "Open-domain: ODEX\nProgramming solutions\nare the most helpful source by bringing 3.8–4.3\ngains, even surpassing gains of canonical documen-\ntation. Notably, both GPT-4o and StarCoder using\nOpenAI retrieval from programming solutions, out-\nperform their variants retrieving from documenta-\ntion by 3.2 and 1.6 points. Although the retrieved\ncontent is only sometimes functionally relevant to\nthe ODEX examples, they can exemplify the cor-\nrect usage of libraries such as regex in solutions\nand requests in GitHub files, thus guiding the\ngeneration to be more functionally correct. Simi-\n",
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "page": 7
+    },
+    {
+      "id": "R00194",
+      "source_text": "and generation models, we show that retrieving\nexternal documents can greatly benefit code gener-\nation. However, current retrieval models struggle\nto find useful documents, and generation models\nhave limited context capacity and RAG abilities,\nboth leading to suboptimal RACG results. We hope\nCODERAG-BENCH can serve as a solid testbed to\nadvance future endeavors in this direction.",
+      "section": "6 Conclusion",
+      "page": 8
+    },
+    {
+      "id": "R00200",
+      "source_text": "code generation, equipped with a comprehensive\nbenchmark CODERAG-BENCH. However, as an\ninitial exploration in this field, our work could be\nextended in task and language diversity, as well as\nmodel and methodological improvements.",
+      "section": "Limitations",
+      "page": 9
+    },
+    {
+      "id": "R00203",
+      "source_text": "We aggregate various existing code generation\ntasks, but many interesting scenarios such as code\ndebugging remain under-explored. Meanwhile, we\nfocus on coding tasks using Python programming\nlanguage, but extrapolating to other languages may\nbring additional challenges.",
+      "section": "Limitations",
+      "page": 9
+    },
+    {
+      "id": "R00207",
+      "source_text": "Meanwhile, for benchmarking purposes, we\nmostly experimented with vanilla retrieval, rerank-\ning, and generation methods, but better backbone\nmodels and advanced methods for each RACG\ncomponent are yet fully explored. Our results may\nnot represent all model behaviors, and we encour-\nage future works to build methods that break certain\nlimitations we observe in current systems.",
+      "section": "Limitations",
+      "page": 9
+    },
+    {
+      "id": "R00307",
+      "source_text": "Our approach\nTo keep a fair comparison among\nall models, we use the same prompt for each dataset\nwhen evaluating all models. Meanwhile, we use\nzero-shot prompts without any additional instruc-\ntions, i.e., only input the original problem descrip-\ntion of the example, to prevent unknown effects\non the model performance when using different\ninstructions and/or in-context examples.",
+      "section": "C Result Reproduction",
+      "page": 12
+    },
+    {
+      "id": "R00312",
+      "source_text": "According to this setup, we next describe the\ndifferences in prompts used by the original works\nand how they may affect the results.\nStarCoder2\nThe StarCoder2 technical report\n(Lozhkov et al., 2024) reported results on the Hu-\nmanEval, MBPP, and DS-1000 datasets. On Hu-\nmanEval, our reproduced results (31.7) is slightly\nlower than their number (35.4), possibly because\nthe original paper additionally input the test cases\nas additional information in the prompt, whereas\nin our basic NL-to-code setup, no test cases are\nprovided. This additional information may cause\ntheir results to be higher.",
+      "section": "C Result Reproduction",
+      "page": 12
+    },
+    {
+      "id": "R00315",
+      "source_text": "On MBPP dataset, they adopt a subset of MBPP,\ni.e., 399 out of 427 examples that have additional\ntest cases populated by Liu et al. (2023). In contrast,\nwe evaluate on the entire dataset, which is likely to\ncause the variance in results.",
+      "section": "C Result Reproduction",
+      "page": 12
+    },
+    {
+      "id": "R00318",
+      "source_text": "On DS-1000, the original paper samples 40 gen-\nerations and report the pass@1 rate, while we only\ngenerate one program with greedy decoding. This\ndifference in decoding strategy may cause slight\nvariance in the results.\nCodeGemma\nThe CodeGemma technical report\n(Team, 2024) reported results on HumanEval and\nMBPP datasets, but does not provide any details\nabout the instructions, few-shot examples, or other\nparts of the prompt that they use. We were able to\nroughly reproduce their reported results, but with\n3-5 points less in pass@1.\nCodeLlama\nThe CodeLlama technical report\n",
+      "section": "C Result Reproduction",
+      "page": 12
+    },
+    {
+      "id": "R00321",
+      "source_text": "C\nResult Reproduction\nIn Table 5 in §3, we are able to reproduce most\nresults reported in the original papers, but with\nminor variances. Here we explain the differences\nin implementation and (potential) reasons that lead\nto these small performance variances.",
+      "section": "C Result Reproduction",
+      "page": 12
+    },
+    {
+      "id": "R00339",
+      "source_text": "With varied retrieval models\nAligning with\n§3.4, we examine the RACG results using docu-\nmentation retrieved by different retrieval models.\nAs shown in Table 10, augmenting documentation\nretrieved with most methods improves the results\nby 20.3–40.1%. Compared to the entire ODEX set\nwhere most queries require common libraries, this\nhard-library split more clearly demonstrates the ef-\nfectiveness of augmenting library documentation.\nThis result verifies our hypothesis that strong GPT\nmodels are familiar with most common libraries,\nand can only benefit from additional library infor-\n",
+      "section": "Problems",
+      "page": 13
+    },
+    {
+      "id": "R00020",
+      "source_text": "tion. However, current retrieval models face chal-\nlenges in selecting useful documents, particularly\nfor open-domain and repository-level tasks. Ad-\nditionally, generation models with limited context",
+      "section": "1 Introduction",
+      "page": 1
+    },
+    {
+      "id": "R00021",
+      "source_text": "8 Coding Tasks for Code RAG",
+      "section": "8 Coding Tasks for Code RAG",
+      "page": 2
+    },
+    {
+      "id": "R00075",
+      "source_text": "Type\nDataset\n# Examples\n# Corpus\nGround-Truth Docs\nEvaluation",
+      "section": "8 Coding Tasks for Code RAG",
+      "page": 3
+    },
+    {
+      "id": "R00097",
+      "source_text": "2.3\nCanonical Document Annotation",
+      "section": "2.3 Canonical Document Annotation",
+      "page": 4
+    },
+    {
+      "id": "R00137",
+      "source_text": "Table 5: Code generation pass@1 without additional contexts (w/o), and with ground-truth documents (gold). We\nonly report w/o for LCB because LCB does not have ground-truth documents. We highlight results showing gold >\nw/o with green (darker green when having 10+ increases), and with red if gold < w/o.",
+      "section": "3.3 Generation with Canonical Documents",
+      "page": 6
+    },
+    {
+      "id": "R00149",
+      "source_text": "Method\nBasic Programming\nOpen-Domain\nRepo-Level\nHumanEval\nMBPP\nLCB\nDS-1000\nODEX\nODEX-hard\nRepoEval\nSWE-bench",
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "page": 7
+    },
+    {
+      "id": "R00172",
+      "source_text": "Method\nTutorials\nDocs\nSO\nGitHub",
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "page": 8
+    },
+    {
+      "id": "R00195",
+      "source_text": "Limitations",
+      "section": "Limitations",
+      "page": 9
+    },
+    {
+      "id": "R00306",
+      "source_text": "A\nExample Illustrations\nA.1\nExample with Canonical Documents",
+      "section": "References",
+      "page": 12
+    },
+    {
+      "id": "R00322",
+      "source_text": "Canonical Document",
+      "section": "C Result Reproduction",
+      "page": 13
+    },
+    {
+      "id": "R00113",
+      "source_text": "Method\nProblem Solutions\nLibrary Docs\nIn-Repository Files\nAvg.\nHumanEval\nMBPP\nCSN\nDS-1000\nODEX\nRepoEval\nSWE-bench-Lite\nAll",
+      "section": "3.2 Retrieval Results",
+      "page": 5
+    },
+    {
+      "id": "R00235",
+      "source_text": "Carlos E Jimenez, John Yang, Alexander Wettig,",
+      "section": "References",
+      "page": 10
+    },
+    {
+      "id": "R00305",
+      "source_text": "ham Neubig. 2023b. Execution-based evaluation for\nopen-domain code generation. In Findings of the\nAssociation for Computational Linguistics: EMNLP\n2023. Association for Computational Linguistics.",
+      "section": "References",
+      "page": 11
+    },
+    {
+      "id": "R00351",
+      "source_text": "Canonical Document",
+      "section": "E How Many Documents to Augment?",
+      "page": 14
+    },
+    {
+      "id": "R00008",
+      "source_text": "We present CODERAG-BENCH, a holistic\nbenchmark designed to advance research in\nretrieval-augmented code generation (RACG; §2).\nCODERAG-BENCH (as in Figure 1) covers six pro-\ngramming tasks across four categories: basic pro-\ngramming, open-domain coding, repository-level,\nand code retrieval tasks. For each task, we man-\nually annotate canonical documents as references\nfor evaluating RACG systems. We also compile\na diverse corpus of documents from five sources:\nprogramming solutions, online tutorials, Python\nlibrary documentation, StackOverflow posts, and\n",
+      "section": "1 Introduction",
+      "page": 1
+    },
+    {
+      "id": "R00062",
+      "source_text": "Figure 1: Overview of CODERAG-BENCH.",
+      "section": "8 Coding Tasks for Code RAG",
+      "page": 2
+    },
+    {
+      "id": "R00081",
+      "source_text": "Table 1: Overview of the datasets in CodeRAG-Bench. CSN stands for CodeSearchNet.",
+      "section": "8 Coding Tasks for Code RAG",
+      "page": 3
+    },
+    {
+      "id": "R00106",
+      "source_text": "3\nCanonical RACG\nWe evaluate 10 top retrieval and 10 generation",
+      "section": "3 Canonical RACG",
+      "page": 4
+    },
+    {
+      "id": "R00141",
+      "source_text": "RepoEval, but SWE-bench Lite proves much more\nchallenging — only GPT-3.5-turbo and GPT-4o\nachieve non-trivial results, consistent with previ-\nous findings (Yang et al., 2024). Notably, GPT-4o\nshows a 27.4% increase when using gold docu-\nments on SWE-bench, indicating that retrieval sig-\nnificantly enhances performance when paired with\nstrong core generation capabilities, even in highly\nchallenging coding tasks.",
+      "section": "3.3 Generation with Canonical Documents",
+      "page": 6
+    },
+    {
+      "id": "R00156",
+      "source_text": "Table 6: Performance of retrieval-augmented code generation, with top retrieval and generation models. We\nbold-type the best RACG results. We test gpt-4o on SWE-bench to show non-trivial results than gpt-3.5-turbo. Note\nthat we exclude code canonical answer from the retrieval corpora for basic programming tasks.",
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "page": 7
+    },
+    {
+      "id": "R00174",
+      "source_text": "Table 9: Comparing chunking strategies on HumanEval.",
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "page": 8
+    },
+    {
+      "id": "R00196",
+      "source_text": "We propose a new paradigm, retrieval-augmented",
+      "section": "Limitations",
+      "page": 9
+    },
+    {
+      "id": "R00308",
+      "source_text": "To present our canonical document annotation\n(§2.3) more concretely, we illustrate examples with\ntheir annotated canonical documents. Figure 3\nshows the general-programming examples, with\none HumanEval and one MBPP example, respec-\ntively. Figure 4 shows two open-domain coding ex-\namples with canonical library documentation from\nDS-1000 and ODEX, respectively.",
+      "section": "A.1 Example with Canonical Documents",
+      "page": 12
+    },
+    {
+      "id": "R00335",
+      "source_text": "Figure 3: HumanEval (left) and MBPP (right) examples with annotated canonical solutions.",
+      "section": "Problem",
+      "page": 13
+    },
+    {
+      "id": "R00117",
+      "source_text": "Table 3: Retrieval performance (NDCG@10) on code generation datasets. LiveCodeBench is excluded due to lack\nof ground-truth solutions. RepoEval is at the function level with 2k context tokens. Embedding dimension sizes are\nlisted next to method names. Bold indicates best performance, underline indicates second-best. Highlighted models\nare specifically trained for code domains. Avg. reflects overall scores, excluding CodeSearchNet.",
+      "section": "3.2 Retrieval Results",
+      "page": 5
+    },
+    {
+      "id": "R00236",
+      "source_text": "Jimmy Lin, Xueguang Ma, Sheng-Chieh Lin, Jheng-",
+      "section": "References",
+      "page": 10
+    },
+    {
+      "id": "R00304",
+      "source_text": "Zhiruo Wang, Shuyan Zhou, Daniel Fried, and Gra-",
+      "section": "References",
+      "page": 11
+    },
+    {
+      "id": "R00362",
+      "source_text": "Figure 4: DS-1000 (left) and ODEX (right) examples with annotated canonical library documentation.",
+      "section": "E How Many Documents to Augment?",
+      "page": 14
+    },
+    {
+      "id": "R00010",
+      "source_text": "While language models (LMs) excel at generat-\ning code, many programs are difficult to gener-\nate using only parametric knowledge. Despite\nthe success of retrieval-augmented generation\n(RAG) in text-centric tasks, its potential for\ncode generation remains under-explored. This\nwork introduces CODERAG-BENCH, a holis-\ntic retrieval-augmented code generation bench-\nmark covering tasks like basic programming,\nopen-domain, and repository-level problems\nand provide reproducible evaluations on both\nretrieval and end-to-end code generation perfor-\nmance. We further create a diverse, open datas-\n",
+      "section": "Abstract",
+      "page": 1
+    },
+    {
+      "id": "R00063",
+      "source_text": "2.1\nProgramming Problems",
+      "section": "2.1 Programming Problems",
+      "page": 2
+    },
+    {
+      "id": "R00092",
+      "source_text": "Table 2: Five sources to form our retrieval datastore.",
+      "section": "2.2 Retrieval Sources",
+      "page": 3
+    },
+    {
+      "id": "R00108",
+      "source_text": "models on CODERAG-BENCH with canonical data\nsources. We report results of document retrieval\n(§3.2), direct NL-to-code generation (§3.3), and\nend-to-end RACG with retrieved context (§3.4).",
+      "section": "3 Canonical RACG",
+      "page": 4
+    },
+    {
+      "id": "R00142",
+      "source_text": "3.4\nRetrieval-Augmented Code Generation",
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "page": 6
+    },
+    {
+      "id": "R00163",
+      "source_text": "Table 7: Comparing five retrieval sources on HumanEval and ODEX, using StarCoder2 (top) and GPT-4o (bottom).",
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "page": 7
+    },
+    {
+      "id": "R00182",
+      "source_text": "Table 8: RACG with open retrieval on RepoEval.",
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "page": 8
+    },
+    {
+      "id": "R00199",
+      "source_text": "Yuan, Henrique Ponde de Oliveira Pinto, Jared Ka-",
+      "section": "References",
+      "page": 9
+    },
+    {
+      "id": "R00311",
+      "source_text": "Beyond the numerical numbers reported in experi-\nment sections, here we provide some concrete ex-\namples that: (i) benefit from RACG when relevant\ndocuments are retrieved, and (ii) distracted by ir-\nrelevant documents retrieved hence results in de-\ngraded performance.",
+      "section": "A.2 RACG with Helpful and Distracting",
+      "page": 12
+    },
+    {
+      "id": "R00336",
+      "source_text": "and DS-1000, but got slightly worse results on\nMBPP because they used few-shot prompting,\nwhich should outperform our zero-shot method.\nLlama3\nSince there is no technical report avail-\nable yet, the official blog post 10 report results on\nHumanEval, without any descriptions on prompt-\ning construction or the inference process. Our re-\nproduced results are about 4 points lower than their\noriginal results.",
+      "section": "Problem",
+      "page": 13
+    },
+    {
+      "id": "R00120",
+      "source_text": "Table 4: Efficiency analysis for document retrieval.",
+      "section": "Do larger retrieval models perform better?",
+      "page": 5
+    },
+    {
+      "id": "R00237",
+      "source_text": "Shunyu Yao, Kexin Pei, Ofir Press, and Karthik R\nNarasimhan. 2024. SWE-bench: Can language mod-\nels resolve real-world github issues? In The Twelfth\nInternational Conference on Learning Representa-\ntions.",
+      "section": "References",
+      "page": 10
+    },
+    {
+      "id": "R00303",
+      "source_text": "Parvez, and Graham Neubig. 2023a. Learning to fil-\nter context for retrieval-augmented generation. arXiv\npreprint arXiv:2311.08377.",
+      "section": "References",
+      "page": 11
+    },
+    {
+      "id": "R00352",
+      "source_text": "Canonical Document",
+      "section": "E How Many Documents to Augment?",
+      "page": 14
+    },
+    {
+      "id": "R00019",
+      "source_text": "We conduct holistic evaluations in retrieval, gen-\neration, and RACG (§3). Code generation mod-\nels significantly benefit from access to canonical\ndocuments (i.e., from the canonical retrieval cor-\npus) in various scenarios. For example, GPT-4o\nachieves a 27.4% gain on SWE-Bench and a 6.9%\ngain on the harder ODEX subset when canonical\ndocuments are provided. In RACG settings, where\nmodels retrieve top relevant documents, some even\nsurpass their performance when using gold docu-\nments, highlighting the strong potential of retrieval-\naugmented approaches for enhancing code genera-\n",
+      "section": "1 Introduction",
+      "page": 1
+    },
+    {
+      "id": "R00064",
+      "source_text": "windows exhibit smaller improvements, suggesting\nconsiderable room for future advancements.",
+      "section": "1 Introduction",
+      "page": 2
+    },
+    {
+      "id": "R00096",
+      "source_text": "4https://geeksforgeeks.org;\nhttps://www.\nw3schools.com/;\nhttps://www.tutorialspoint.com/;\nhttps://towardsdatascience.com",
+      "section": "2.2 Retrieval Sources",
+      "page": 3
+    },
+    {
+      "id": "R00109",
+      "source_text": "3.2\nRetrieval Results",
+      "section": "3.2 Retrieval Results",
+      "page": 4
+    },
+    {
+      "id": "R00143",
+      "source_text": "We now experiment with top-performing retrieval",
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "page": 6
+    },
+    {
+      "id": "R00164",
+      "source_text": "4\nRACG with Open Retrieval",
+      "section": "4 RACG with Open Retrieval",
+      "page": 7
+    },
+    {
+      "id": "R00173",
+      "source_text": "Full text\n6.7\n17.7\n28.0\n3.7\nFirst chunk\n27.4\n29.3\n30.5\n30.5\nw/ reranking\n9.1\n9.1\n14.0\n13.4\nPre-retrieval\n31.1\n32.9\n33.5\n29.3",
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "page": 8
+    },
+    {
+      "id": "R00201",
+      "source_text": "plan, Harri Edwards, Yuri Burda, Nicholas Joseph,\nGreg Brockman, et al. 2021.\nEvaluating large\nlanguage models trained on code. arXiv preprint\narXiv:2107.03374.",
+      "section": "References",
+      "page": 9
+    },
+    {
+      "id": "R00313",
+      "source_text": "B\nAdditional Details about Retrieval",
+      "section": "B Additional Details about Retrieval",
+      "page": 12
+    },
+    {
+      "id": "R00337",
+      "source_text": "D\nAnalysis on Open-Domain Coding",
+      "section": "D Analysis on Open-Domain Coding",
+      "page": 13
+    },
+    {
+      "id": "R00132",
+      "source_text": "(i) encoding latency: latency to encode documents\noffline, and (ii) search latency: latency to encode\nqueries/documents and calculate their similarities,",
+      "section": "Do larger retrieval models perform better?",
+      "page": 5
+    },
+    {
+      "id": "R00238",
+      "source_text": "Hong Yang, Ronak Pradeep, and Rodrigo Nogueira.\n2021. Pyserini: A Python toolkit for reproducible\ninformation retrieval research with sparse and dense\nrepresentations. In Proceedings of the 44th Annual\nInternational ACM SIGIR Conference on Research\nand Development in Information Retrieval (SIGIR\n2021).",
+      "section": "References",
+      "page": 10
+    },
+    {
+      "id": "R00302",
+      "source_text": "Zhiruo Wang, Jun Araki, Zhengbao Jiang, Md Rizwan",
+      "section": "References",
+      "page": 11
+    },
+    {
+      "id": "R00361",
+      "source_text": "What is best way to achieve this ? closest I got was with the zip\nfunction but haven't managed to make it work for more then one\nlevel (two columns).\nA:\n<code>\nimport pandas as pd\ndf = pd.DataFrame({'name': ['A', 'A', 'B', 'C', 'B', 'A'], 'v1': ['A1', 'A2', 'B1',\n'C1', 'B2', 'A2'], 'v2': ['A11', 'A12', 'B12', 'C11', 'B21', 'A21'], 'v3': [1, 2, 3, 4,\n5, 6]})\n</code>\nresult = ... # put solution in this variable\nBEGIN SOLUTION\n<code>",
+      "section": "E How Many Documents to Augment?",
+      "page": 14
+    },
+    {
+      "id": "R00007",
+      "source_text": "Retrieval-augmented generation (RAG; Lewis\net al. 2020; Guu et al. 2020) addresses this by re-\ntrieving relevant documents at inference time, re-\nducing reliance on model parameters (Asai et al.,\n2024) and improving accuracy across tasks (Izac-\nard et al., 2022b). Despite success in text-based\ntasks, its application to diverse coding problems\nand retrieval sources remains under-explored (Zhou\net al., 2023; Su et al., 2024).",
+      "section": "1 Introduction",
+      "page": 1
+    },
+    {
+      "id": "R00065",
+      "source_text": "We categorize existing Python-based coding",
+      "section": "2.1 Programming Problems",
+      "page": 2
+    },
+    {
+      "id": "R00076",
+      "source_text": "Basic programming",
+      "section": "8 Coding Tasks for Code RAG",
+      "page": 3
+    },
+    {
+      "id": "R00110",
+      "source_text": "Table 3 shows retrieval results on six tasks.",
+      "section": "3.2 Retrieval Results",
+      "page": 4
+    },
+    {
+      "id": "R00148",
+      "source_text": "retrieval performance shown in Table 3.",
+      "section": "3.4 Retrieval-Augmented Code Generation",
+      "page": 6
+    },
+    {
+      "id": "R00165",
+      "source_text": "ample, with code and detailed textual explanations,\nhence could hint or disclose the answer. Other re-\ntrieval sources do not often contain relevant content\nthus do not bring improvements. Surprisingly, gen-\neration with mixed documents performs as well\nas using the gold documents, suggesting that the\nmodel can discern and integrate the most useful\ncontent from a mixture of texts.",
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "page": 7
+    },
+    {
+      "id": "R00175",
+      "source_text": "5",
+      "section": "datasets: HumanEval, ODEX, and RepoEval. We",
+      "page": 8
+    },
+    {
+      "id": "R00202",
+      "source_text": "CohereAI. 2024. Command r.",
+      "section": "References",
+      "page": 9
+    },
+    {
+      "id": "R00314",
+      "source_text": "Efficiency",
+      "section": "Efficiency",
+      "page": 12
+    },
+    {
+      "id": "R00338",
+      "source_text": "Problems",
+      "section": "Problems",
+      "page": 13
+    },
+    {
+      "id": "R00114",
+      "source_text": "BM25\n100.0\n98.6\n89.1\n5.2\n6.7\n93.2\n43.0\n57.7",
+      "section": "3.2 Retrieval Results",
+      "page": 5
+    },
+    {
+      "id": "R00239",
+      "source_text": "Nikhil Kandpal, Haikang Deng, Adam Roberts, Eric",
+      "section": "References",
+      "page": 10
+    },
+    {
+      "id": "R00301",
+      "source_text": "Xiangru Tang, Mingchen Zhuge, Jiayi Pan, Yueqi\nSong, Bowen Li, Jaskirat Singh, et al. 2024. Open-\ndevin: An open platform for ai software developers as\ngeneralist agents. arXiv preprint arXiv:2407.16741.",
+      "section": "References",
+      "page": 11
+    },
+    {
+      "id": "R00363",
+      "source_text": "ficulty. We compare RACG performance when\nproviding top-1, 2, 5, and 10 documents.",
+      "section": "E How Many Documents to Augment?",
+      "page": 14
+    },
+    {
+      "id": "R00011",
+      "source_text": "tore for code retrieval, aggregating sources such\nas competition solutions, tutorials, library doc-\numentation, StackOverflow posts, and GitHub\nrepositories. Based on CODERAG-BENCH, we\nconduct large-scale evaluations of 10 retrievers\nand 10 LMs and systematically analyze when\nretrieval can benefit code generation models\nand identify remaining challenges. We find that\nwhile retrieving high-quality contexts improves\ncode generation, retrievers often struggle to\nfetch useful contexts, and generators face limi-\ntations in using those contexts effectively. We\nhope CODERAG-BENCH encourages further\n",
+      "section": "Abstract",
+      "page": 1
+    },
+    {
+      "id": "R00066",
+      "source_text": "Beyond canonical retrieval, we also explore\nRACG with open retrieval, i.e., retrieving docu-\nments from various sources with different chunk-\ning strategies (§4). We find that models can benefit\nfrom functionally relevant snippets from certain\nsources, and chunking documents to 200–800 to-\nkens often gives the best results. For instance, by\nretrieving from StackOverflow or online tutorials,\nboth StarCoder and GPT4o can significantly im-\nprove, while on repository-level tasks, the gains\nare rather limited. Overall, we hope CODERAG-\nBENCH can serve as a testbed for future work ex-\n",
+      "section": "1 Introduction",
+      "page": 2
+    },
+    {
+      "id": "R00080",
+      "source_text": "Code retrieval\nCodeSearchNet-Py\n22,177\n22177\nCSN functions\nndcg@10",
+      "section": "8 Coding Tasks for Code RAG",
+      "page": 3
+    },
+    {
+      "id": "R00136",
+      "source_text": "Llama3-8B\n57.9\n65.2\n35.6\n52.8\n2.8\n28.9\n31.1\n37.4\n33.7\n13.8\n17.2\n26.0\n43.2\n0.0\n0.3\nCommand-R\n43.3\n51.2\n37.2\n37.8\n10.0\n25.8\n28.5\n35.5\n36.0\n20.7\n20.7\n23.9\n37.0\n0.0\n0.3\nGPT-3.5-turbo\n72.6\n91.5\n70.8\n72.6\n35.3\n43.7\n42.9\n41.7\n40.3\n17.2\n24.1\n23.9\n39.1\n0.7\n6.3\nGPT-4o\n75.6\n92.6\n79.4\n81.4\n43.8\n52.7\n51.2\n44.6\n44.2\n20.7\n27.6\n32.4\n46.1\n2.3\n30.7",
+      "section": "3.3 Generation with Canonical Documents",
+      "page": 6
+    }
+  ]
+}

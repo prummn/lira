@@ -1,5 +1,7 @@
 from copy import deepcopy
 import importlib
+import json
+from pathlib import Path
 
 import pytest
 
@@ -76,6 +78,16 @@ def test_review_budget_keeps_cited_sources_and_reports_omitted_context(review):
     for batch in batches:
         available = {source['id'] for source in batch.payload['sources']}
         assert all(set(item['citation_ids']) <= available for item in batch.payload['items'])
+
+
+def test_missing_required_table_context_cannot_be_silently_marked_supported(review):
+    card, parts = example()
+    batch = review.prepare_reviews(card, parts)[0][0]
+    item = next(item for item in batch.payload['items'] if item['field'] == 'main_results')
+    item['table_context_complete'] = False
+    raw, result = review.apply_review(review.serialize_card(card, parts), batch, responses(batch), lambda *args: True)
+    assert raw['card']['main_results'] is None
+    assert result['rejection_reasons']['main_results'] == 'science_review_context'
 
 
 def test_review_is_bounded_and_deferred_slots_are_visible(review):
@@ -330,3 +342,119 @@ def test_only_tldr_losing_required_cardinality_returns_explicit_empty_result(rev
     assert result.card['tldr'] == [] and result.citations == []
     assert report['partial'] and report['no_supported_card']
     assert report['card_invalid_entries'] == 2
+
+
+def test_real_coderag_review_keeps_table_six_and_seven_rows_before_unrelated_prose(review):
+    saved = json.loads((Path(__file__).parent / 'fixtures/coderag_review_context.json').read_text('utf-8'))
+    chunks = [PaperChunk(paper_id='coderag', **chunk) for chunk in saved['chunks']]
+    parts = {p.part_id: p for w in pack_windows(chunks) for p in source_passages(w).values()}
+    sources = {source['id']: source for source in saved['sources']}
+    card = AnalysisResult()
+    for item in saved['items']:
+        citations = []
+        for sid in item['citation_ids']:
+            quote = sources[sid]['source_text']
+            chunk = next(chunk for chunk in chunks if quote in chunk.content)
+            citations.append(VerifiedCitation(chunk, quote, item['content'], 'llm_summary'))
+        entry = CardEntry(item['content'], citations, item.get('section'))
+        field = item['field'].split('[', 1)[0]
+        if '[' in item['field']:
+            card.card.setdefault(field, []).append(entry)
+        else:
+            card.card[field] = entry
+    batches, report = review.prepare_reviews(card, parts)
+    batch = next(batch for batch in batches if any(item['field'] == 'main_results' for item in batch.payload['items']))
+    included = {source['source_text'] for source in batch.payload['sources']}
+    table_chunks = [chunk for chunk in chunks if chunk.page == 7 and
+                    ('21.7' in chunk.content or '34.8\n26.7\n32.3' in chunk.content)]
+    assert len(table_chunks) == 2
+    assert all(part.content in included for part in parts.values()
+               if part.chunk_id in {chunk.id for chunk in table_chunks})
+    assert len(review.encoded(batch.payload)) <= review.MAX_PAYLOAD_CHARS
+    assert all(cite.source_text in included for entry in [card.card['main_results']]
+               for cite in entry.citations)
+
+
+def test_cited_table_baseline_is_reserved_before_large_neighbor_tables(review):
+    chunks = []
+    def row(label, page, index):
+        return PaperChunk(id=f'{page}-{index:03d}', paper_id='paper', page=page, section='Results',
+            content=label + '\n' + '70.0\n' * 107)
+    for table in range(3):
+        chunks.extend(row(f'Unrelated{table}-{i}', 1, table * 15 + i) for i in range(14))
+        chunks.append(PaperChunk(id=f'1-{table*15+14:03d}', paper_id='paper', page=1,
+            section='Results', content=f'Table {table+1}: An unrelated comparison.'))
+    target = [row('Proposed' if i == 0 else 'Baseline' if i == 9 else f'Target{i}', 2, i) for i in range(10)]
+    chunks.extend(target)
+    chunks.append(PaperChunk(id='2-010', paper_id='paper', page=2, section='Results',
+        content='Table 4: The target comparison.'))
+    parts = {p.part_id: p for w in pack_windows(chunks) for p in source_passages(w).values()}
+    entry = CardEntry('Table 4 reports a numeric comparison.', [VerifiedCitation(target[0], target[0].content, '', 'llm_summary')])
+    batches, _ = review.prepare_reviews(AnalysisResult(card={'main_results': entry}), parts)
+    text = '\n'.join(source['source_text'] for source in batches[0].payload['sources'])
+    assert 'Baseline' in text
+    assert all(part.content in text for part in parts.values() if part.page == 2)
+
+
+def test_oversized_referenced_table_is_disclosed_to_reviewer(review):
+    rows = [PaperChunk(id=f'row-{i:03d}', paper_id='paper', page=2, section='Results',
+            content=f'Row{i}\n' + '70.0\n' * 107) for i in range(30)]
+    caption = PaperChunk(id='zz-caption', paper_id='paper', page=2, section='Results',
+        content='Table 4: A large comparison.')
+    parts = {p.part_id: p for w in pack_windows([*rows, caption]) for p in source_passages(w).values()}
+    entry = CardEntry('Table 4 reports a comparison.', [VerifiedCitation(rows[0], rows[0].content, '', 'llm_summary')])
+    batches, report = review.prepare_reviews(AnalysisResult(card={'main_results': entry}), parts, max_payload_chars=5000)
+    assert batches[0].payload['incomplete_tables'][0]['caption'] == caption.content
+    assert batches[0].payload['incomplete_tables'][0]['affected_fields'] == ['main_results']
+    assert report['context_partial']
+
+
+def test_large_contiguous_table_never_hides_baseline_beyond_scan_limit(review):
+    caption = PaperChunk(id='000', paper_id='paper', page=2, section='Results', content='Table 1: Large results.')
+    rows = [PaperChunk(id=f'{i+1:03d}', paper_id='paper', page=2, section='Results',
+        content=('Baseline' if i == 59 else f'Row{i}') + '\n' + '70.0\n' * 107) for i in range(60)]
+    parts = {p.part_id: p for w in pack_windows([caption, *rows]) for p in source_passages(w).values()}
+    entry = CardEntry('Table 1: improvement over Baseline.', [VerifiedCitation(rows[0], rows[0].content, '', 'llm_summary')])
+    batches, _ = review.prepare_reviews(AnalysisResult(card={'main_results': entry}), parts)
+    batch = batches[0]
+    if not any('Baseline' in source['source_text'] for source in batch.payload['sources']):
+        assert batch.payload['items'][0]['table_context_complete'] is False
+    assert len(review.encoded(batch.payload)) <= review.MAX_PAYLOAD_CHARS
+
+
+def test_named_table_is_retrieved_beyond_neighbor_pages(review):
+    prose = PaperChunk(id='prose', paper_id='paper', page=1, section='Abstract', content='Table 9 reports a 10-point improvement.')
+    rows = PaperChunk(id='rows', paper_id='paper', page=5, section='Results', content='Ours\n80.0\nBaseline\n90.0')
+    caption = PaperChunk(id='caption', paper_id='paper', page=5, section='Results', content='Table 9: Main comparison.')
+    parts = {p.part_id: p for w in pack_windows([prose, caption, rows]) for p in source_passages(w).values()}
+    entry = CardEntry('Table 9 reports a 10-point improvement.', [VerifiedCitation(prose, prose.content, '', 'llm_summary')])
+    batches, _ = review.prepare_reviews(AnalysisResult(card={'main_results': entry}), parts)
+    assert any('Baseline' in source['source_text'] for source in batches[0].payload['sources'])
+
+
+def test_unavailable_named_table_cannot_be_marked_complete(review):
+    prose = PaperChunk(id='prose', paper_id='paper', page=1, section='Abstract', content='See Table 9 for results.')
+    parts = {p.part_id: p for w in pack_windows([prose]) for p in source_passages(w).values()}
+    entry = CardEntry('Table 9 reports a 10-point improvement.', [VerifiedCitation(prose, prose.content, '', 'llm_summary')])
+    batches, report = review.prepare_reviews(AnalysisResult(card={'main_results': entry}), parts)
+    assert batches[0].payload['items'][0]['table_context_complete'] is False
+    assert report['context_partial']
+
+
+@pytest.mark.parametrize('reference', ['Table 9', 'Tables 8 and 9'])
+def test_distant_referenced_table_includes_rows_continuing_on_next_page(review, reference):
+    chunks = [PaperChunk(id='a', paper_id='paper', page=1, section='Abstract', content=f'{reference} report improvement.'),
+        PaperChunk(id='b', paper_id='paper', page=5, section='Results', content='Table 9: Main comparison.'),
+        PaperChunk(id='c', paper_id='paper', page=5, section='Results', content='Model\nAccuracy'),
+        PaperChunk(id='d', paper_id='paper', page=6, section='Results', content='Ours\n80.0\nBaseline\n90.0')]
+    parts = {p.part_id: p for w in pack_windows(chunks) for p in source_passages(w).values()}
+    entry = CardEntry(f'{reference} report improvement.', [VerifiedCitation(chunks[0], chunks[0].content, '', 'llm_summary')])
+    batches, _ = review.prepare_reviews(AnalysisResult(card={'main_results': entry}), parts)
+    assert any('Baseline' in source['source_text'] for source in batches[0].payload['sources'])
+
+
+def test_table_reference_ranges_include_intermediate_tables_without_unbounded_expansion(review):
+    assert review.table_references('Tables 1–3 and Table 7') == {'1', '2', '3', '7'}
+    enormous = review.table_references('Tables 1 to 99999999999999999999999999')
+    assert len(enormous) < 100
+    assert '__unresolved_range__' in enormous

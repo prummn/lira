@@ -211,6 +211,77 @@ def test_nonstream_responses_failure_matches_stream_classification(data):
     assert 'test-secret' not in str(error.value)
 
 
+@pytest.mark.parametrize('upstream,code,retryable', [
+    ({'code': None, 'type': 'server_error'}, 'upstream_error', True),
+    ({'type': 'api_error'}, 'upstream_error', True),
+    ({'type': 'overloaded_error'}, 'upstream_error', True),
+    ({'type': 'authentication_error'}, 'authentication', False),
+    ({'type': 'invalid_request_error'}, 'invalid_request', False),
+    ({'code': 'invalid_api_key', 'type': 'server_error'}, 'authentication', False),
+    ({'code': 'test-secret', 'type': 'server_error'}, 'upstream_error', False),
+])
+def test_upstream_type_only_errors_are_classified_without_overriding_explicit_code(upstream, code, retryable):
+    from app.providers.base import ProviderError
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+    provider = OpenAICompatibleProvider(api_key='test-secret', wire_api='responses', transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, headers={'content-type': 'text/event-stream'},
+            content=('data: '+json.dumps({'type': 'response.failed', 'response': {
+                'status': 'failed', 'error': {**upstream, 'message': 'test-secret'}}})+'\n\n').encode())))
+    with pytest.raises(ProviderError) as caught:
+        provider.complete_json('JSON', {}, max_output_tokens=300)
+    assert caught.value.code == code
+    assert caught.value.retryable is retryable
+    assert caught.value.diagnostics['http_status'] == 200
+    assert caught.value.diagnostics['upstream_type'] == upstream['type']
+    assert 'test-secret' not in json.dumps(caught.value.diagnostics)
+
+
+@pytest.mark.parametrize('body', ['timeout', 'malformed'])
+def test_errors_while_reading_response_keep_known_http_status(body):
+    from app.providers.base import ProviderError
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+    class TimedOut(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b'data: {"type":"response.created","response":{"status":"in_progress"}}\n\n'
+            raise httpx.ReadTimeout('test-secret')
+    response = (httpx.Response(200, headers={'content-type': 'text/event-stream'}, stream=TimedOut())
+                if body == 'timeout' else httpx.Response(200, content=b'not JSON'))
+    provider = OpenAICompatibleProvider(api_key='test-secret', wire_api='responses',
+        transport=httpx.MockTransport(lambda request: response))
+    with pytest.raises(ProviderError) as caught:
+        provider.complete_json('JSON', {}, max_output_tokens=300)
+    assert caught.value.diagnostics['http_status'] == 200
+    assert 'test-secret' not in str(caught.value)
+
+
+def test_certificate_failure_is_not_retried_as_service_outage():
+    import ssl
+    from app.providers.base import ProviderError
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+    def fail(request):
+        certificate = ssl.SSLCertVerificationError(1, 'test-secret')
+        certificate.verify_code = 18
+        raise httpx.ConnectError('test-secret') from certificate
+    provider = OpenAICompatibleProvider(api_key='test-secret', transport=httpx.MockTransport(fail))
+    with pytest.raises(ProviderError) as caught:
+        provider.complete_json('JSON', {}, max_output_tokens=300)
+    assert caught.value.code == 'tls_certificate'
+    assert caught.value.retryable is False
+    assert caught.value.diagnostics == {'transport_type': 'ConnectError', 'tls_verify_code': 18}
+    assert 'test-secret' not in str(caught.value)
+
+
+def test_connection_and_read_failures_are_distinguishable_without_private_text():
+    from app.providers.base import ProviderError
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+    provider = OpenAICompatibleProvider(api_key='test-secret', transport=httpx.MockTransport(
+        lambda request: (_ for _ in ()).throw(httpx.ConnectError('test-secret'))))
+    with pytest.raises(ProviderError) as caught:
+        provider.complete_json('JSON', {}, max_output_tokens=300)
+    assert caught.value.diagnostics == {'transport_type': 'ConnectError'}
+    assert caught.value.retryable
+
+
 @pytest.mark.parametrize('event', [
     {'type': []},
     {'type': 'response.completed', 'response': {'status': 'in_progress'}},

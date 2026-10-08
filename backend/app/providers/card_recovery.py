@@ -7,7 +7,10 @@ import json
 import re
 
 from .base import ProviderError
-from .cards import CARD_ALIASES, LIST_FIELDS, SINGLE_FIELDS
+from .cards import CARD_ALIASES, LIST_FIELDS, SINGLE_FIELDS, field_schema
+
+MAX_REJECTED_VALUE_CHARS = 12000
+MAX_REJECTED_TEXT_CHARS = 24000
 
 
 def repair_targets(data: dict, rejections: list[dict]) -> list[dict]:
@@ -24,12 +27,22 @@ def repair_targets(data: dict, rejections: list[dict]) -> list[dict]:
                 continue
             value = value[int(index)]
         path = field if index is None else f'{field}[{index}]'
+        rejected_value = json.dumps(value, ensure_ascii=False)
         target = targets.setdefault(path, {'field': path, 'reason_codes': [],
-            'rejected_value': json.dumps(value, ensure_ascii=False)[:1200]})
+            'value_schema': field_schema(field, indexed=index is not None),
+            'rejected_value': rejected_value[:MAX_REJECTED_VALUE_CHARS],
+            'rejected_value_complete': len(rejected_value) <= MAX_REJECTED_VALUE_CHARS})
         if rejection['reason'] not in target['reason_codes']:
             target['reason_codes'].append(rejection['reason'])
     # Local paths/reasons are bounded; the earlier model output is untrusted.
-    return list(targets.values())[:16]
+    selected = list(targets.values())[:16]
+    remaining = MAX_REJECTED_TEXT_CHARS
+    for target in selected:
+        value = target['rejected_value']
+        target['rejected_value'] = value[:remaining]
+        target['rejected_value_complete'] &= len(value) <= remaining
+        remaining -= len(target['rejected_value'])
+    return selected
 
 
 def apply_repairs(data: dict, targets: list[dict], repairs: object, validate) -> tuple[dict, set[str]]:

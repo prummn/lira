@@ -21,6 +21,52 @@ SOURCE_SCOPE = re.compile(r'\bonly (?:consider|include|use|when|if)\b|possible e
 OVERVIEW = ('one_sentence_summary', 'main_results', 'limitations', 'tldr')
 DETAILS = ('method', 'ablation_findings', 'section_summaries', 'claims', 'abstract_zh', 'abstract_en')
 CAPTION = re.compile(r'^\s*(?:Table|Figure|Fig\.?|表|图)\s*\d+[.:：\s]', re.I)
+TABLE_CAPTION = re.compile(r'^\s*(?:Table|表)\s*\d+[.:：\s]', re.I)
+TABLE_REFERENCE = re.compile(r'(?:\bTable|表)\s*(\d+)', re.I)
+TABLE_REFERENCES = re.compile(r'(?:\bTables?|表)\s*(\d+(?:\s*(?:,|and|&|to|[-–—])\s*\d+)*)', re.I)
+
+
+def table_references(text):
+    result = set()
+    for group in TABLE_REFERENCES.findall(text):
+        result.update(re.findall(r'\d+', group))
+        for first, last in re.findall(r'(\d+)\s*(?:to|[-–—])\s*(\d+)', group, re.I):
+            # PDF/model text is untrusted. Huge or reversed ranges cannot be
+            # silently treated as just their endpoints or expanded without a cap.
+            if len(first) > 6 or len(last) > 6 or not 0 <= int(last) - int(first) < 64:
+                result.add('__unresolved_range__')
+            else:
+                result.update(str(number) for number in range(int(first), int(last) + 1))
+    return result
+
+
+def _table_context(catalog, context_pages):
+    """Collect contiguous table fragments as a unit, before spreading prose.
+
+    PDF extraction often separates headers, model labels and numeric rows into
+    several chunks, with the caption below them. A caption alone is useless
+    for checking a measurement or recomputing a difference.
+    """
+    def fragment(part):
+        lines = [line.strip() for line in part.content.splitlines() if line.strip()]
+        return bool(lines) and (sum(bool(re.fullmatch(r'[-+\d.,%±–—/()]+', line)) for line in lines) >= 3
+            or sum(len(line) <= 45 for line in lines) / len(lines) >= .75)
+    # Keep contiguous fragments across page boundaries: a caption/header may
+    # be on one page and its actual comparison rows on the next.
+    for index, part in enumerate(catalog):
+        if part.page not in context_pages or not TABLE_CAPTION.match(part.content):
+            continue
+        positions = {index}
+        for direction in (-1, 1):
+            position = index + direction
+            while 0 <= position < len(catalog):
+                candidate = catalog[position]
+                if CAPTION.match(candidate.content) or not fragment(candidate):
+                    break
+                positions.add(position)
+                position += direction
+        if len(positions) > 1:
+            yield [catalog[position] for position in sorted(positions)]
 
 
 @dataclass(frozen=True)
@@ -144,10 +190,13 @@ def prepare_reviews(analysis, parts, *, max_batches=MAX_BATCHES, max_items=MAX_I
         while position < len(selected) and len(items) < max_items:
             path, field, entry = selected[position]
             refs = list(dict.fromkeys(citation_id(cite) for cite in entry.citations))
-            item = {'field': path, 'content': entry.content, 'citation_ids': refs}
+            # Reserve this fixed flag in the budget before any supplementary
+            # context; detailed caption diagnostics may themselves not fit.
+            item = {'field': path, 'content': entry.content, 'citation_ids': refs,
+                    'table_context_complete': False}
             if field == 'section_summaries': item['section'] = entry.section
             candidate_ids = cited | set(refs)
-            candidate = {'stage': 'review_card_science', 'limits': dict(CARD_LIMITS), 'items': [*items, item],
+            candidate = {'stage': 'review_card_science', 'limits': dict(CARD_LIMITS), 'incomplete_tables': [], 'items': [*items, item],
                 'sources': [source_payload(sid) for sid in sorted(candidate_ids)]}
             if len(encoded(candidate)) > max_payload_chars:
                 break
@@ -160,6 +209,15 @@ def prepare_reviews(analysis, parts, *, max_batches=MAX_BATCHES, max_items=MAX_I
         pages = {sources[sid]['page'] for sid in cited if sources[sid]['page'] is not None}
         context_pages = pages | {neighbor for page in pages for neighbor in (page - 1, page + 1)
                                  if neighbor > 0}
+        item_parts = {item['field']: {sources[sid]['part_id'] for sid in item['citation_ids']} for item in items}
+        item_tables = {item['field']: table_references(item['content'] + '\n' +
+            '\n'.join(sources[sid]['source_text'] for sid in item['citation_ids'])) for item in items}
+        named = set().union(*item_tables.values())
+        # Abstracts and conclusions often refer to result tables several pages
+        # away. Resolve explicit names over the whole immutable local catalog.
+        context_pages.update(part.page for part in catalog if part.page is not None
+            and TABLE_CAPTION.match(part.content)
+            and TABLE_REFERENCE.search(part.content)[1] in named)
         payload = {'stage': 'review_card_science', 'limits': dict(CARD_LIMITS), 'items': items,
                    'sources': [source_payload(sid) for sid in sorted(cited)]}
         included = set(cited)
@@ -168,6 +226,38 @@ def prepare_reviews(analysis, parts, *, max_batches=MAX_BATCHES, max_items=MAX_I
         # comparator in this extra context must be cited by a correction.
         parents = {parent_ids[sid] for sid in cited if sid in parent_ids}
         anchors = {sources[sid]['part_id'] for sid in cited}
+        # Reserve complete table headers/rows/captions before unrelated prose.
+        # Never use a few isolated numeric rows as if they were a full table.
+        def table_info(table):
+            caption = next(part for part in table if TABLE_CAPTION.match(part.content))
+            number = TABLE_REFERENCE.search(caption.content)[1]
+            table_ids = {part.part_id for part in table}
+            affected = [item['field'] for item in items if item_parts[item['field']] & table_ids
+                        or number in item_tables[item['field']]]
+            priority = (0 if anchors & table_ids else 1 if affected else
+                        2 if caption.page in pages else 3)
+            return priority, caption.page, caption, affected
+        tables = sorted(_table_context(catalog, context_pages), key=lambda table: table_info(table)[:2])
+        found = {TABLE_REFERENCE.search(table_info(table)[2].content)[1] for table in tables}
+        incomplete = []
+        missing_fields = {field for field, names in item_tables.items() if names - found}
+        partial |= bool(missing_fields)
+        payload['incomplete_tables'] = incomplete
+        for table in tables:
+            missing = [ids[part.part_id] for part in table if ids[part.part_id] not in included]
+            candidate = {**payload, 'sources': [*payload['sources'], *(source_payload(sid) for sid in missing)]}
+            if len(encoded(candidate)) <= max_payload_chars:
+                payload = candidate
+                included.update(missing)
+            else:
+                partial = True
+                _, _, caption, affected = table_info(table)
+                if affected:
+                    missing_fields.update(affected)
+                    marker = {'page': caption.page, 'caption': caption.content[:300], 'affected_fields': affected}
+                    marked = {**payload, 'incomplete_tables': [*incomplete, marker]}
+                    if len(encoded(marked)) <= max_payload_chars:
+                        incomplete.append(marker)
         ordered = [part for part in catalog if ids[part.part_id] in parents]
         ordered.extend(_context_order(catalog, anchors, pages, context_pages))
         for part in ordered:
@@ -180,6 +270,8 @@ def prepare_reviews(analysis, parts, *, max_batches=MAX_BATCHES, max_items=MAX_I
                 included.add(sid)
             else:
                 partial = True
+        for item in items:
+            item['table_context_complete'] = item['field'] not in missing_fields
         batches.append(ReviewBatch(payload, {sid: sources[sid] for sid in included}))
     scheduled = sum(len(batch.payload['items']) for batch in batches)
     return batches, {'scope': 'overview_sections_and_risky_claims', 'candidate_items': len(selected),
@@ -216,7 +308,8 @@ def apply_review(raw, batch, response, validate):
     for item in batch.payload['items']:
         path = item['field']
         reply = replies.get(path) if counts[path] == 1 else None
-        if reply and reply.get('decision') == 'supported' and 'value' not in reply:
+        incomplete_context = item.get('table_context_complete') is False or any(path in table['affected_fields'] for table in batch.payload.get('incomplete_tables', []))
+        if reply and reply.get('decision') == 'supported' and 'value' not in reply and not incomplete_context:
             result['supported_fields'].append(path)
             result['checked_fields'].append(path)
             continue
@@ -246,7 +339,7 @@ def apply_review(raw, batch, response, validate):
         _set(patched, path, None)
         result['rejected_fields'].append(path)
         explicit = reply is not None and reply.get('decision') == 'unsupported' and 'value' not in reply
-        result['rejection_reasons'][path] = 'science_support' if explicit else 'science_review_format'
+        result['rejection_reasons'][path] = 'science_support' if explicit else 'science_review_context' if incomplete_context else 'science_review_format'
         if explicit: result['checked_fields'].append(path)
     return patched, result
 
@@ -283,7 +376,7 @@ def run_science_review(analysis, parts, call, validate):
         report['checked_items'] += len(result['checked_fields'])
         report['corrected_items'] += len(result['corrected_fields'])
         report['rejected_items'] += len(result['rejected_fields'])
-        if any(reason == 'science_review_format' for reason in result['rejection_reasons'].values()):
+        if any(reason != 'science_support' for reason in result['rejection_reasons'].values()):
             report['invalid_response_batches'].append(index)
         changed |= bool(result['corrected_fields'] or result['rejected_fields'])
     if changed:

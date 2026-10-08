@@ -11,6 +11,34 @@ CARD_ALIASES = {'one_sentence_summary':'one_liner','main_results':'findings'}
 CARD_LIMITS = {'max_citation_ids': 10, 'max_citation_chars': 8000, 'max_content_chars': 8000}
 
 
+def field_schema(field: str, *, indexed: bool = False) -> dict:
+    """Describe the same cardinality/limits enforced by the local validator."""
+    entry = {'type': 'object', 'required': ['content', 'citation_ids'],
+        'properties': {
+            'content': {'type': 'string', 'minLength': 1, 'maxLength': CARD_LIMITS['max_content_chars']},
+            'citation_ids': {'type': 'array', 'minItems': 1,
+                'maxItems': CARD_LIMITS['max_citation_ids'], 'uniqueItems': True,
+                'items': {'type': 'string'}}}}
+    if field == 'section_summaries':
+        entry['required'].append('section')
+        entry['properties']['section'] = {'type': ['string', 'null'],
+            'description': 'Exact shared source section of all citation_ids; never infer a heading.'}
+    if field in SINGLE_FIELDS or indexed:
+        return entry
+    return {'type': 'array', 'items': entry,
+        'minItems': 3 if field == 'tldr' else 1,
+        'maxItems': 5 if field == 'tldr' else 100}
+
+
+def card_schema() -> dict:
+    properties = {field: {'anyOf': [field_schema(field), {'type': 'null'}]}
+                  for field in SINGLE_FIELDS}
+    for field in LIST_FIELDS:
+        schema = field_schema(field)
+        properties[field] = {'anyOf': [schema, {'type': 'array', 'maxItems': 0}]} if field == 'tldr' else {**schema, 'minItems': 0}
+    return {'type': 'object', 'properties': properties}
+
+
 def extractive_card(chunks: list[PaperChunk], analysis: AnalysisResult) -> dict[str, CardEntry | list[CardEntry] | None]:
     useful = [chunk for chunk in chunks if len(chunk_body(chunk)) > 30]
     card: dict[str,CardEntry | list[CardEntry] | None] = {field:None for field in SINGLE_FIELDS}

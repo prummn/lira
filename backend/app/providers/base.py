@@ -8,12 +8,13 @@ from ..models import PaperChunk
 
 class ProviderError(RuntimeError):
     """Safe user-visible failure; never embeds upstream bodies, URLs, or keys."""
-    def __init__(self, message: str, status_code: int = 502, *, code: str = 'provider_error', retryable: bool = False, retry_after: float | None = None) -> None:
+    def __init__(self, message: str, status_code: int = 502, *, code: str = 'provider_error', retryable: bool = False, retry_after: float | None = None, diagnostics: dict | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.retryable = retryable
         self.retry_after = retry_after
+        self.diagnostics = diagnostics or {}
 
 
 @dataclass(frozen=True)
