@@ -5,7 +5,7 @@ test('library focuses a paper and exposes next actions without dashboard chrome'
   await expect(page.locator('.library-toolbar')).toBeVisible()
   await expect(page.locator('.paper-table')).toBeVisible()
   await expect(page.locator('.library-selection-detail')).toHaveCount(0)
-  await page.locator('.paper-name > button').first().click()
+  await page.locator('.paper-row').first().click()
   await expect(page.locator('.library-selection-detail')).toBeVisible()
   await expect(page.getByRole('button', { name: '打开阅读器', exact: true })).toBeVisible()
 })
