@@ -40,6 +40,29 @@ test('file batches require preflight, default opt-out and explain unavailable AI
   expect(imports).toBe(1)
 })
 
+test('settings model form saves a local provider profile without exposing the key',async({page})=>{
+  await page.route('**/api/settings',route=>route.fulfill({json:{provider:'MockProvider',mode:'extractive',configured:false,translation_available:false}}))
+  await page.route('**/api/settings/model',route=>{
+    expect(route.request().method()).toBe('PUT')
+    const body=route.request().postDataJSON()
+    expect(body.api_key).toBe('fixture-secret')
+    expect(body.base_url).toBe('https://spacetimeai.cc/v1')
+    return route.fulfill({json:{provider:'FixtureProvider',mode:'remote',configured:true,translation_available:true,model:'gpt-6.1-sol',wire_api:'responses',reasoning_effort:'xhigh',api_key_configured:true}})
+  })
+  await page.goto('/')
+  await page.getByRole('button',{name:'设置',exact:true}).click()
+  await expect(page.getByRole('heading',{name:'设置',exact:true})).toBeVisible()
+  await page.getByRole('textbox',{name:'模型 API 地址',exact:true}).fill('https://spacetimeai.cc/v1')
+  await page.getByRole('textbox',{name:'模型名称',exact:true}).fill('gpt-6.1-sol')
+  await page.getByRole('textbox',{name:'API key',exact:true}).fill('fixture-secret')
+  await page.getByRole('combobox',{name:'模型协议',exact:true}).selectOption('responses')
+  await page.getByRole('combobox',{name:'推理强度',exact:true}).selectOption('xhigh')
+  await page.getByRole('button',{name:'测试连接并保存',exact:true}).click()
+  await expect(page.locator('.model-save-success')).toContainText('已保存')
+  await expect(page.locator('.model-config-status')).toContainText('FixtureProvider')
+  await expect(page.locator('body')).not.toContainText('fixture-secret')
+})
+
 test('URL opt-in remembers preference and collection retry reuses saved PDF',async({page})=>{
   const paper=await realPaper(page)
   const collection=await (await page.request.post('/api/collections',{data:{name:'Intelligence Retry Scope',description:'UI fixture'}})).json()

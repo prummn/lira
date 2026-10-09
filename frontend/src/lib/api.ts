@@ -51,6 +51,8 @@ export const api = {
   graph: (collectionId: string) => request<Graph>(`/graph${collectionId ? `?collection_id=${encodeURIComponent(collectionId)}` : ''}`),
   search: (query: string, collectionId='') => request<{items: SearchHit[]}>(`/search?query=${encodeURIComponent(query)}${collectionId?'&collection_id='+encodeURIComponent(collectionId):''}`),
   settings: () => request<ModelSettings>('/settings'),
+  updateModelSettings: (body: {base_url:string;model:string;api_key?:string|null;wire_api:'chat_completions'|'responses';reasoning_effort:'disabled'|'none'|'minimal'|'low'|'medium'|'high'|'xhigh';timeout:number;test_connection:boolean}) => request<ModelSettings>('/settings/model', {method:'PUT', ...json(body)}),
+  clearModelSettings: () => request<ModelSettings>('/settings/model', {method:'DELETE'}),
   translate: (id: string, chunkId: string) => request<{text: string; provider: string}>(`/papers/${encodeURIComponent(id)}/translate`, {method: 'POST', ...json({chunk_id: chunkId})}),
 }
 export const errorMessage = (error: unknown): string => error instanceof Error ? error.message : String(error)

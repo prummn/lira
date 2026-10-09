@@ -22,6 +22,7 @@ from .services.intelligence import IntelligenceWorker
 def create_app(
     database_url: str | None = None,
     storage_dir: Path | None = None,
+    model_config_path: Path | None = None,
     seed_demo: bool = True,
 ) -> FastAPI:
     database = Database(database_url or DATABASE_URL)
@@ -29,6 +30,7 @@ def create_app(
     storage = storage_dir or Path(
         os.getenv("PAPER_READER_STORAGE_DIR", str(BACKEND_DIR / "storage"))
     )
+    config_path = model_config_path or Path(os.getenv("PAPER_READER_MODEL_CONFIG_PATH", str(BACKEND_DIR.parent / ".env")))
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
@@ -52,6 +54,7 @@ def create_app(
     application.state.database = database
     application.state.intelligence_worker = worker
     application.state.storage_dir = storage
+    application.state.model_config_path = config_path
     application.add_middleware(
         CORSMiddleware,
         allow_origins=[

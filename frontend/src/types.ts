@@ -47,7 +47,7 @@ export interface Graph {
   edges: {id: string; source: string; target: string; relation: string; description?: string; relation_source?: string }[]
 }
 export interface SearchHit { paper_id: string; title: string; chunk_id: string; page: number; section: string | null; content: string; match_type: string }
-export interface ModelSettings { provider: string; mode: string; configured: boolean; translation_available: boolean; model?:string|null; configuration_error?:string|null; wire_api?:string|null; reasoning_effort?:string|null; intelligence_available?:boolean; quality?:Record<string,unknown> }
+export interface ModelSettings { provider: string; mode: string; configured: boolean; translation_available: boolean; model?:string|null; base_url?:string|null; api_key_configured?:boolean; configuration_error?:string|null; wire_api?:string|null; reasoning_effort?:string|null; intelligence_available?:boolean; quality?:Record<string,unknown> }
 export type IntelligenceStatus = 'unanalyzed'|'queued'|'running'|'completed'|'partial'|'failed'|'cancelled'
 export interface Usage { input_tokens?:number|null; output_tokens?:number|null; total_tokens?:number|null; model_calls?:number; remote_calls?:number; cache_hits?:number;unknown_usage_calls?:number }
 export interface IntelligenceReport { coverage?:Record<string,unknown>; usage?:Usage; [key:string]:unknown }

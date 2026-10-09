@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import json
+import os
 import uuid
 from pathlib import Path
 
@@ -23,7 +24,8 @@ from starlette.concurrency import run_in_threadpool
 
 from ..db import get_db
 from ..models import Author, Collection, CollectionPaper, Edge, Note, Paper, PaperAuthor
-from ..providers import get_model_provider
+from ..providers import OpenAICompatibleProvider, get_model_provider
+from ..providers.config import MODEL_ENV_KEYS, clear_model_config, persist_model_config
 from ..schemas import (
     AskRequest,
     AskResponse,
@@ -37,6 +39,7 @@ from ..schemas import (
     PaperListResponse,
     PaperSummary,
     PaperUpdate,
+    ModelSettingsUpdate,
     TranslateRequest,
 )
 from ..services.analysis import analyze_paper, evidence_for
@@ -63,8 +66,7 @@ def health() -> dict[str, str]:
     return {"status": "ok", "service": "research-intelligence-api"}
 
 
-@router.get("/settings")
-def settings() -> dict[str, object]:
+def _settings_payload() -> dict[str, object]:
     provider = get_model_provider()
     return {
         "provider": provider.name,
@@ -75,10 +77,70 @@ def settings() -> dict[str, object]:
         "metadata_providers": ["arxiv", "crossref"],
         "embeddings_connected": False,
         "model": getattr(provider,'model',None),
+        "base_url": getattr(provider,'base_url',None),
         "wire_api": getattr(provider,'wire_api',None),
         "reasoning_effort": getattr(provider,'reasoning_effort',None),
+        "api_key_configured": bool(os.getenv('PAPER_READER_MODEL_API_KEY','').strip()),
         "configuration_error": getattr(provider,'configuration_error',None),
     }
+
+
+@router.get("/settings")
+def settings() -> dict[str, object]:
+    return _settings_payload()
+
+
+@router.put('/settings/model')
+def update_model_settings(payload: ModelSettingsUpdate, request: Request) -> dict[str, object]:
+    current_key = os.getenv('PAPER_READER_MODEL_API_KEY', '').strip()
+    api_key = payload.api_key.strip() if payload.api_key is not None and payload.api_key.strip() else current_key
+    if not api_key:
+        raise HTTPException(422, '请输入模型 API key')
+    try:
+        provider = OpenAICompatibleProvider(
+            api_key=api_key,
+            base_url=payload.base_url.strip(),
+            model=payload.model.strip(),
+            wire_api=payload.wire_api,
+            reasoning_effort=payload.reasoning_effort,
+            timeout=payload.timeout,
+            completion_parameter=os.getenv('PAPER_READER_MODEL_COMPLETION_PARAMETER', 'max_completion_tokens'),
+            json_mode=os.getenv('PAPER_READER_MODEL_JSON_MODE', 'json_object'),
+        )
+        if payload.test_connection:
+            provider.test_connection()
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from None
+    except Exception as error:
+        from ..providers.base import ProviderError
+        if isinstance(error, ProviderError):
+            raise
+        raise HTTPException(502, '模型连接测试失败，请检查地址、模型名、协议和 API key') from None
+    values = {
+        'PAPER_READER_MODEL_BASE_URL': payload.base_url.strip(),
+        'PAPER_READER_MODEL_NAME': payload.model.strip(),
+        'PAPER_READER_MODEL_API_KEY': api_key,
+        'PAPER_READER_MODEL_WIRE_API': payload.wire_api,
+        'PAPER_READER_MODEL_REASONING_EFFORT': payload.reasoning_effort,
+        'PAPER_READER_MODEL_TIMEOUT': str(payload.timeout).rstrip('0').rstrip('.') if '.' in str(payload.timeout) else str(payload.timeout),
+    }
+    try:
+        persist_model_config(request.app.state.model_config_path, values)
+    except OSError:
+        raise HTTPException(500, '模型连接已通过，但本机配置文件无法保存') from None
+    os.environ.update(values)
+    return _settings_payload()
+
+
+@router.delete('/settings/model')
+def reset_model_settings(request: Request) -> dict[str, object]:
+    for key in MODEL_ENV_KEYS:
+        os.environ.pop(key, None)
+    try:
+        clear_model_config(request.app.state.model_config_path)
+    except OSError:
+        raise HTTPException(500, '模型配置已从当前进程移除，但本机配置文件无法更新') from None
+    return _settings_payload()
 
 
 @router.get("/stats")

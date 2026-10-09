@@ -95,6 +95,16 @@ class OpenAICompatibleProvider:
         # Nonreasoning endpoints must omit the parameter even when a stage requests it.
         return None if self.reasoning_effort == 'disabled' else requested or self.reasoning_effort
 
+    def test_connection(self) -> None:
+        """Make a tiny uncached request so the settings form can verify the profile."""
+        self._complete(
+            'Reply with the single word OK.',
+            'OK',
+            json_output=False,
+            max_output_tokens=8,
+            reasoning_effort='minimal',
+        )
+
     @staticmethod
     def _retry_after(response: httpx.Response) -> float | None:
         value = response.headers.get('retry-after', '').strip()

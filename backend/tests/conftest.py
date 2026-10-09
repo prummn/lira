@@ -1,6 +1,7 @@
 """All API tests use isolated temporary databases and file stores."""
 
 from __future__ import annotations
+import os
 import sys
 from pathlib import Path
 from collections.abc import Iterator
@@ -28,10 +29,17 @@ def client(tmp_path: Path) -> Iterator[TestClient]:
     app = create_app(
         database_url=f"sqlite:///{(tmp_path / 'workspace.db').as_posix()}",
         storage_dir=tmp_path / "storage",
+        model_config_path=tmp_path / "model.env",
         seed_demo=False,
     )
     with TestClient(app) as api:
         yield api
+    for name in (
+        "PAPER_READER_MODEL_BASE_URL", "PAPER_READER_MODEL_API_KEY",
+        "PAPER_READER_MODEL_NAME", "PAPER_READER_MODEL_WIRE_API",
+        "PAPER_READER_MODEL_REASONING_EFFORT", "PAPER_READER_MODEL_TIMEOUT",
+    ):
+        os.environ.pop(name, None)
 
 
 @pytest.fixture
@@ -41,6 +49,7 @@ def demo_client(tmp_path: Path) -> Iterator[TestClient]:
     app = create_app(
         database_url=f"sqlite:///{(tmp_path / 'demo.db').as_posix()}",
         storage_dir=tmp_path / "demo-pdfs",
+        model_config_path=tmp_path / "model.env",
         seed_demo=True,
     )
     with TestClient(app) as api:

@@ -327,6 +327,25 @@ blockquote { margin: 10px 0; padding: 8px 11px; border-left: 2px solid var(--bor
 .settings-section h2 { font-size: 15px; font-weight: 550; margin: 0 0 8px; }
 .settings-section > p { font-size: 11px; color: var(--text-3); line-height: 1.8; }
 .settings-card { border: 1px solid var(--border); background: var(--surface); border-radius: 6px; overflow: hidden; margin-top: 12px; }
+.model-config-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 16px 18px; border-bottom: 1px solid var(--border); background: var(--surface-subtle); }
+.model-config-head > div { display: grid; gap: 5px; min-width: 0; }
+.model-config-head strong { font-size: 12px; font-weight: 600; }
+.model-config-head small { color: var(--text-3); font-size: 10px; line-height: 1.6; }
+.model-config-head .text-btn { flex-shrink: 0; margin-top: 1px; }
+.model-config-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 15px; padding: 18px; }
+.model-config-form label { display: grid; gap: 7px; min-width: 0; color: var(--text-2); font-size: 10px; }
+.model-config-form label > span { display: flex; align-items: baseline; gap: 4px; min-height: 14px; }
+.model-config-form label > span small { color: var(--accent); font-size: 9px; }
+.model-config-form input, .model-config-form select { width: 100%; min-width: 0; font-size: 11px; padding: 9px 10px; }
+.model-config-grid { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 15px; }
+.model-config-status { display: flex; align-items: center; gap: 14px; padding: 0 18px 15px; color: var(--text-3); font-size: 10px; }
+.model-status-ready, .model-status-off, .model-save-success { display: inline-flex; align-items: center; gap: 6px; }
+.model-status-ready { color: var(--accent); }
+.model-status-off { color: var(--text-3); }
+.model-status-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: currentColor; }
+.model-save-success { color: var(--accent); }
+.model-config-actions { display: flex; align-items: center; gap: 8px; padding: 14px 18px; border-top: 1px solid var(--border); background: var(--surface-subtle); }
+.model-config-actions .btn { font-size: 11px; padding: 8px 10px; }
 .setting-row { display: flex; justify-content: space-between; gap: 20px; align-items: center; padding: 18px; border-bottom: 1px solid var(--border); font-size: 12px; }
 .setting-row:last-child { border: 0; }
 .setting-row strong { font-weight: 500; }
@@ -510,6 +529,15 @@ body { background: var(--bg); }
 @media (max-width: 650px) {
   .app-shell.reader-active .reader-toolbar { padding-inline: 12px; }
   .app-shell.reader-active .notebook-content { padding-inline: 17px; }
+}
+
+@media (max-width: 900px) {
+  .model-config-form, .model-config-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 650px) {
+  .model-config-head { flex-direction: column; }
+  .model-config-form, .model-config-grid { grid-template-columns: 1fr; }
+  .model-config-actions { flex-direction: column; align-items: stretch; }
 }
 
 /* The application shell owns the viewport. Only the main content pane scrolls. */

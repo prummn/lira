@@ -14,6 +14,23 @@ NoteKind = Literal["note", "idea", "question", "todo", "highlight"]
 IntelligenceStatus = Literal['unanalyzed', 'queued', 'running', 'completed', 'partial', 'failed', 'cancelled']
 
 
+class ModelSettingsUpdate(BaseModel):
+    base_url: str = Field(min_length=1, max_length=500)
+    model: str = Field(min_length=1, max_length=200)
+    api_key: str | None = Field(default=None, max_length=1000)
+    wire_api: Literal['chat_completions', 'responses'] = 'chat_completions'
+    reasoning_effort: Literal['disabled', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh'] = 'disabled'
+    timeout: float = Field(default=600, ge=1, le=1800)
+    test_connection: bool = True
+
+    @field_validator('base_url', 'model', 'api_key')
+    @classmethod
+    def reject_control_characters(cls, value: str | None) -> str | None:
+        if value is not None and any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError('模型配置不能包含控制字符')
+        return value
+
+
 class TaskRead(BaseModel):
     id: str
     paper_id: str
