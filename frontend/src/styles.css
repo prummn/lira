@@ -484,3 +484,18 @@ body { background: var(--bg); }
   .reader-toolbar { flex-wrap:wrap; height:auto; min-height:48px; padding-block:9px; }
   .reader-pages { margin-left:auto; }
 }
+
+/* The application shell owns the viewport. Only the main content pane scrolls. */
+html, body, #root { height: 100%; }
+html, body { overflow: hidden; }
+.app-shell { height: 100dvh; min-height: 0; }
+.sidebar { position: fixed; inset: 0 auto 0 0; height: 100dvh; z-index: 30; overflow: hidden; }
+.collection-nav { min-height: 0; }
+.main-shell { height: 100dvh; min-height: 0; margin-left: 224px; display: flex; flex-direction: column; overflow: hidden; }
+.topbar { flex: 0 0 60px; }
+.page-wrap { flex: 1 1 auto; min-height: 0; width: 100%; overflow: auto; }
+.page-wrap.reader-wrap { overflow: hidden; }
+.modal-backdrop { position: fixed; inset: 0; width: 100vw; height: 100dvh; z-index: 1000; }
+@media (max-width: 1200px) { .main-shell { margin-left: 204px; } }
+@media (max-width: 900px) { .main-shell { margin-left: 170px; } }
+@media (max-width: 650px) { .main-shell { margin-left: 60px; } }
