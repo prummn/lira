@@ -138,7 +138,7 @@ test('mock answers cite current source and refuse unsupported questions', async 
   await expect(page.locator('.ask-answer')).toContainText('当前材料不足以确认')
   await expect(page.locator('.answer-citation')).toHaveCount(0)
   await page.getByRole('button',{name:'中英对照',exact:true}).click()
-  await expect(page.getByRole('alert')).toContainText('翻译需要配置生成模型')
+  await expect(page.locator('.translation-panel .translation-model-hint')).toContainText('翻译需要配置生成模型')
 })
 
 test('bad PDF import reports failure and leaves the library unchanged',async({page})=>{
@@ -255,17 +255,20 @@ test('a selected passage can be explained with source citations',async({page})=>
 test('cached paragraph translations are readable without a configured model',async({page,request})=>{
   const library=await (await request.get('/api/papers?limit=1')).json()
   const paper=await (await request.get('/api/papers/'+library.items[0].id)).json()
-  paper.translations=[{id:'cache-fixture',chunk_id:paper.chunks[0].id,text:'离线缓存测试：不调用模型。',source_text:paper.chunks[0].content,provider:'FixtureProvider',mode:'remote',model_version:'fixture',prompt_version:'fixture',created_at:new Date().toISOString()}]
-  await page.route('**/api/papers/'+paper.id,route=>route.fulfill({json:paper}))
+  const reading=await (await request.get(`/api/papers/${paper.id}/reading-paragraphs`)).json()
+  reading.translations[reading.paragraphs[0].id]={text:'离线缓存测试：不调用模型。',model:'fixture'}
+  await page.route(`**/api/papers/${paper.id}/reading-paragraphs`,route=>route.fulfill({json:reading}))
   let calls=0
   page.on('request',request=>{if(request.url().endsWith('/translate'))calls++})
   await page.goto('/')
   await page.locator('.paper-row .paper-name > button').first().click()
   await page.getByRole('button',{name:'中英对照',exact:true}).click()
+  await page.locator('.translation-paragraph-list button').first().click()
   await expect(page.locator('.translated-text')).toContainText('离线缓存测试')
   await page.reload()
   await page.getByRole('button',{name:'正在阅读',exact:true}).click()
   await page.getByRole('button',{name:'中英对照',exact:true}).click()
+  await page.locator('.translation-paragraph-list button').first().click()
   await expect(page.locator('.translated-text')).toContainText('离线缓存测试')
   expect(calls).toBe(0)
 })

@@ -3,12 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle, ChevronDown, ChevronLeft, ChevronRight, Download, FileText,
-  List, LoaderCircle, Maximize, RotateCcw, Search, X, ZoomIn, ZoomOut,
+  Languages, List, LoaderCircle, Maximize, RotateCcw, Search, X, ZoomIn, ZoomOut,
 } from 'lucide-react'
 import { getDocument, GlobalWorkerOptions, TextLayer } from 'pdfjs-dist'
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist'
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { useUi } from '../lib/i18n'
+import type { ReadingParagraph } from '../types'
 import './pdf-viewer.css'
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl
@@ -24,6 +25,7 @@ export interface PdfLocator {
   page_width?: number | null
   page_height?: number | null
   source_text?: string
+  kind?: 'translation'
   /** Increment to revisit an already selected piece of evidence. */
   nonce?: number
 }
@@ -41,6 +43,10 @@ export interface PdfViewerProps {
   locator?: PdfLocator | null
   onSelection?: (selection: PdfSelection) => void
   onPageChange?: (page: number) => void
+  paragraphs?: ReadingParagraph[]
+  activeParagraphId?: string | null
+  translatedParagraphIds?: string[]
+  onTranslateParagraph?: (paragraph:ReadingParagraph) => void
 }
 
 type Viewport = ReturnType<PDFPageProxy['getViewport']>
@@ -138,7 +144,7 @@ function sourceTextRectangle(source: string, textContainer: HTMLElement): Rectan
   ]))
 }
 
-export function PdfViewer({ url, initialPage = 1, locator, onSelection, onPageChange }: PdfViewerProps) {
+export function PdfViewer({ url, initialPage = 1, locator, onSelection, onPageChange, paragraphs = [], activeParagraphId, translatedParagraphIds = [], onTranslateParagraph }: PdfViewerProps) {
   const { t } = useUi()
   const [document, setDocument] = useState<PDFDocumentProxy | null>(null)
   const [page, setPage] = useState(1)
@@ -168,6 +174,7 @@ export function PdfViewer({ url, initialPage = 1, locator, onSelection, onPageCh
   const [sourceRectangle, setSourceRectangle] = useState<Rectangle | null>(null)
   const [downloadError, setDownloadError] = useState('')
   const [downloading, setDownloading] = useState(false)
+  const [hoveredRegionKey, setHoveredRegionKey] = useState<string|null>(null)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const layersRef = useRef<HTMLDivElement>(null)
@@ -192,7 +199,7 @@ export function PdfViewer({ url, initialPage = 1, locator, onSelection, onPageCh
   geometryRef.current = geometry
 
   const locatorKey = locator ? JSON.stringify([
-    locator.page, locator.bbox, locator.page_width, locator.page_height, locator.source_text, locator.nonce,
+    locator.page, locator.bbox, locator.page_width, locator.page_height, locator.source_text, locator.nonce, locator.kind,
   ]) : ''
 
   const goToPage = useCallback((value: number) => {
@@ -545,6 +552,21 @@ export function PdfViewer({ url, initialPage = 1, locator, onSelection, onPageCh
     else { goToPage(Number(pageInput)); setPageInput(String(clamp(Math.round(Number(pageInput)), 1, document?.numPages ?? 1))) }
   }
   const selectedEvidenceOnPage = locator?.page === page
+  const paragraphRegions = useMemo(() => !geometry || rendering ? [] : paragraphs.flatMap(paragraph =>
+    paragraph.anchors.filter(anchor => anchor.page === page).flatMap((anchor, index) => {
+      const rect = evidenceRectangle(anchor, geometry)
+      return rect ? [{ paragraph, rect, key:`${paragraph.id}-${page}-${index}` }] : []
+    })), [paragraphs, geometry, rendering, page])
+  const hoveredRegion = paragraphRegions.find(region => region.key === hoveredRegionKey)
+  const inspectParagraph: React.PointerEventHandler<HTMLDivElement> = event => {
+    if ((event.target as HTMLElement).closest('.pdfv-paragraph-actions')) return
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const x = event.clientX - bounds.left, y = event.clientY - bounds.top
+    const candidates = paragraphRegions.filter(({rect}) => x >= rect.left && x <= rect.left + rect.width && y >= rect.top && y <= rect.top + rect.height)
+    const region = candidates.sort((a,b) => a.rect.width*a.rect.height - b.rect.width*b.rect.height)[0]
+    if (region) setHoveredRegionKey(region.key)
+    else if (!hoveredRegion || x < hoveredRegion.rect.left - 8 || x > hoveredRegion.rect.left + hoveredRegion.rect.width + 8 || y < hoveredRegion.rect.top - 40 || y > hoveredRegion.rect.top + hoveredRegion.rect.height + 8) setHoveredRegionKey(null)
+  }
 
   return (
     <section className="pdfv-viewer" aria-label={t('pdfvViewer')}>
@@ -590,16 +612,20 @@ export function PdfViewer({ url, initialPage = 1, locator, onSelection, onPageCh
           {loading && <div className="pdfv-state" role="status"><LoaderCircle size={24} className="pdfv-spin" /><strong>{t('pdfvLoading')}</strong><span>{progress === null ? t('pdfvLoadingHint') : `${t('pdfvLoaded')} ${progress}%`}</span></div>}
           {!loading && loadError && <div className="pdfv-state pdfv-error-state" role="alert"><AlertCircle size={26} /><strong>{t('pdfvUnavailable')}</strong><p>{loadError}</p><button className="pdfv-retry" type="button" onClick={() => setRetry(value => value + 1)}><RotateCcw size={14} />{t('retry')}</button></div>}
           <div className={`pdfv-page-area ${!document ? 'pdfv-hidden' : ''}`}>
-            <div className="pdfv-paper" style={{ width: geometry?.viewport.width ?? 0, height: geometry?.viewport.height ?? 0 }}>
+            <div className="pdfv-paper" onPointerMove={inspectParagraph} onPointerDown={inspectParagraph} onPointerLeave={() => setHoveredRegionKey(null)} style={{ width: geometry?.viewport.width ?? 0, height: geometry?.viewport.height ?? 0 }}>
               <div ref={layersRef} className="pdfv-layers" onMouseUp={captureSelection} onKeyUp={event => { if (event.key.startsWith('Arrow')) captureSelection() }} />
               {highlightedRectangle && !rendering && <div ref={evidenceRef} className="pdfv-evidence-overlay" style={highlightedRectangle} aria-label={`${t('pdfvEvidenceRegion')} · ${page} ${t('page')}`} />}
+              {paragraphRegions.map(({paragraph,rect,key}) => <div key={key} className={`pdfv-paragraph-marker ${key===hoveredRegionKey?'hovered':''} ${paragraph.id===activeParagraphId?'selected':''}`} style={rect} aria-hidden="true" />)}
+              {hoveredRegion && <div className="pdfv-paragraph-actions" style={{top:Math.max(4,hoveredRegion.rect.top-36),left:Math.max(4,Math.min(hoveredRegion.rect.left+hoveredRegion.rect.width-124,(geometry?.viewport.width??200)-132))}}>
+                <button type="button" onClick={() => onTranslateParagraph?.(hoveredRegion.paragraph)}><Languages size={14}/>{t(translatedParagraphIds.includes(hoveredRegion.paragraph.id)?'expandTranslation':'translate')}</button>
+              </div>}
             </div>
             {rendering && <div className="pdfv-page-loading" role="status"><LoaderCircle size={18} className="pdfv-spin" />{t('pdfvRendering')} · {page}</div>}
             {renderError && <div className="pdfv-state pdfv-render-error" role="alert"><AlertCircle size={23} /><p>{renderError}</p><button className="pdfv-retry" type="button" onClick={() => setRenderRetry(value => value + 1)}><RotateCcw size={14} />{t('pdfvRerender')}</button></div>}
           </div>
         </div>
       </div>
-      <div className="pdfv-footer"><span>{selectedEvidenceOnPage ? <><span className="pdfv-evidence-dot" />{t('pdfvEvidenceLocation')} · {page} {t('page')}{highlightedRectangle ? '' : ` · ${t('pdfvWholePage')}`}</> : t('pdfvSelectHint')}</span><span>{document ? `${document.numPages} ${t('page')} · ${t('pdfvOriginal')}` : t('pdfvLocal')}</span></div>
+      <div className="pdfv-footer"><span>{selectedEvidenceOnPage ? <><span className="pdfv-evidence-dot" />{t(locator?.kind==='translation'?'translationSource':'pdfvEvidenceLocation')} · {page} {t('page')}{highlightedRectangle ? '' : ` · ${t('pdfvWholePage')}`}</> : t('pdfvSelectHint')}</span><span>{document ? `${document.numPages} ${t('page')} · ${t('pdfvOriginal')}` : t('pdfvLocal')}</span></div>
     </section>
   )
 }

@@ -33,6 +33,10 @@ export interface Analysis {
   model_version?:string|null; prompt_version?:string|null
 }
 export interface Translation { id:string;chunk_id:string;text:string;source_text:string;provider:string;mode:string;model_version:string|null;prompt_version:string;created_at:string }
+export interface ReadingAnchor { chunk_id:string;page:number;bbox:number[]|null;page_width:number|null;page_height:number|null }
+export interface ReadingParagraph { id:string;text:string;source_text:string;section:string|null;kind:'prose'|'caption';anchors:ReadingAnchor[] }
+export interface ReadingTranslation { text:string;model?:string|null }
+export interface ReadingDocument { paragraphs:ReadingParagraph[];translations:Record<string,ReadingTranslation> }
 export interface CardItem { content: string; evidence_ids: string[]; section?: string | null }
 export type CardField = 'one_sentence_summary'|'problem'|'motivation'|'background'|'core_idea'|'method'|'main_results'|'limitations'|'contributions'|'datasets'|'metrics'|'baselines'|'ablation_findings'|'future_work'|'claims'|'related_methods'|'prerequisite_concepts'|'abstract_zh'|'abstract_en'|'tldr'|'section_summaries'
 export type PaperCard = Partial<Record<CardField, CardItem | CardItem[] | null>> & {title?:string}

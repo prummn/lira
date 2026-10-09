@@ -41,6 +41,10 @@
 
 书目信息可以在列表或阅读器中修改。重新识别会保留已经保存的手动修正、原文块、笔记和集合。没有来源的卡片字段保持空白，不用占位内容猜测。
 
+需要中文辅助时，切换「中英对照」，把鼠标移到英文段落上，再点击浮框中的「翻译此段」。原始 PDF 的排版、公式和图表始终保留；译文在右侧打开，也可移到底部，窄窗口会自动采用底部布局。中文用衬线正文与 KaTeX 排版公式，可收起、重新展开或切换前后段。触屏和键盘用户可从旁注中选择当前页段落。
+
+每次只翻译主动选择的段落，已保存的译文再次展开不调用模型；不配置模型也能阅读已有译文。顶部可以收起导航侧栏，留出更多阅读空间。PDF 中无法准确提取的数学结构不会凭空补全，需要结合原版公式核对。
+
 ### 4. 选择智能分析
 
 列表和阅读器会明确显示以下状态：
@@ -132,8 +136,8 @@ npm --prefix frontend run dev
 
 ## 当前范围
 
-已实现：实际 PDF 解析与阅读、公开 PDF 链接导入、arXiv/Crossref 书目补全、手动元数据修正、可定位证据、持久化笔记、高亮、集合、SQLite 全文搜索、分窗口智能分析、分析任务恢复与缓存、带来源的跨论文 AI 文献员、单篇问答、选区解释、段落翻译缓存、基础比较、关系图和作者视图。
+已实现：实际 PDF 解析与阅读、公开 PDF 链接导入、arXiv/Crossref 书目补全、手动元数据修正、可定位证据、持久化笔记、高亮、集合、SQLite 全文搜索、分窗口智能分析、分析任务恢复与缓存、带来源的跨论文 AI 文献员、单篇问答、选区解释、段落翻译旁注与公式排版、应用内模型配置、基础比较、关系图和作者视图。
 
 暂未实现：OCR、embedding 语义搜索、OpenAlex/Semantic Scholar 作者与引用网络补全、自动引用网络解析、任意 DOI 全文下载、Zotero 导入和 Tauri 安装包。关系图只显示已记录的关系；比较矩阵只对已有字段做对照。
 
-真实论文和 GitHub RAG 批量导入记录见 [真实论文验证](docs/real-paper-import-validation.md) 与 [GitHub RAG 导入测试](docs/github-rag-import-validation.md)。更多数据边界和验证范围见 [智能分析验证](docs/intelligence-validation.md)。
+真实论文和 GitHub RAG 批量导入记录见 [真实论文验证](docs/real-paper-import-validation.md) 与 [GitHub RAG 导入测试](docs/github-rag-import-validation.md)。更多数据边界和验证范围见 [智能分析验证](docs/intelligence-validation.md) 与 [对照阅读验证](docs/translation-reading-validation.md)。

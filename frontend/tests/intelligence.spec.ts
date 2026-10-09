@@ -219,28 +219,26 @@ test('reader bilingual mode uses the configured model and keeps reading chrome c
   let translateCalls=0
   await page.route(`**/api/papers/${paper.id}/translate`,route=>{
     translateCalls++
-    expect(route.request().postDataJSON()).toHaveProperty('chunk_id')
+    expect(route.request().postDataJSON()).toHaveProperty('paragraph_id')
     return route.fulfill({json:{text:translated,provider:'FixtureProvider',cached:false}})
   })
   await page.goto('/')
   await page.locator('.paper-row').filter({hasText:paper.title}).locator('.paper-name > button').click()
   await expect(page.locator('.pdfv-canvas')).toBeVisible()
   await page.getByRole('button',{name:'中英对照',exact:true}).click()
-  await expect(page.locator('.paragraph-reader')).toBeVisible()
-  await expect(page.locator('.paragraph-block')).not.toHaveCount(0)
-  await expect(page.locator('.paragraph-block').first()).toContainText('翻译')
-  await page.locator('.paragraph-block').first().getByRole('button',{name:'翻译此段',exact:true}).click()
+  await expect(page.locator('.pdfv-canvas')).toBeVisible()
+  await expect(page.locator('.translation-panel')).toBeVisible()
+  await page.locator('.translation-paragraph-list button').first().click()
+  await page.locator('.translation-panel').getByRole('button',{name:'翻译此段',exact:true}).click()
   await expect(page.locator('.translated-text').first()).toContainText(translated)
   expect(translateCalls).toBe(1)
   await expect.poll(()=>page.locator('.topbar').evaluate(element=>getComputedStyle(element).display)).toBe('none')
-  const typography=await page.locator('.paragraph-block').first().evaluate(element=>{
-    const source=element.querySelector('p:not(.translated-text)') as HTMLElement
-    const translated=element.querySelector('.translated-text') as HTMLElement
-    return {sourceSize:parseFloat(getComputedStyle(source).fontSize),sourceColor:getComputedStyle(source).color,sourceBackground:getComputedStyle(source).backgroundColor,translatedColor:getComputedStyle(translated).color,translatedBackground:getComputedStyle(translated).backgroundColor}
+  const typography=await page.locator('.translated-text').evaluate(element=>{
+    const style=getComputedStyle(element)
+    return {size:parseFloat(style.fontSize),color:style.color,background:style.backgroundColor}
   })
-  expect(typography.sourceSize).toBeGreaterThanOrEqual(14)
-  expect(typography.sourceColor).not.toBe(typography.sourceBackground)
-  expect(typography.translatedColor).not.toBe(typography.translatedBackground)
+  expect(typography.size).toBeGreaterThanOrEqual(16)
+  expect(typography.color).not.toBe(typography.background)
 })
 
 for(const locale of [

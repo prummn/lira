@@ -1,0 +1,86 @@
+/* Translation is a margin note on the original paper, not a replacement document. */
+.reader-research-panel[hidden] { display: none; }
+.reader-layout.translation-layout { grid-template-columns: minmax(0, 1fr) minmax(330px, 390px); gap: 0; }
+.translation-reading .pdf-panel { border: 0; border-right: 1px solid var(--border); border-radius: 0; }
+.app-shell.reader-active .translation-reading .reading-modes { min-height: 34px; padding: 3px 12px; }
+.translation-reading .pdfv-toolbar { min-height: 39px; padding-block: 4px; }
+.translation-reading .pdfv-footer { min-height: 25px; padding-block: 5px; }
+.translation-reading .pdfv-evidence-overlay { background: transparent; border: 0; box-shadow: none; }
+.translation-panel { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; background: var(--surface); color: var(--text); }
+.translation-panel-head { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 16px; min-height: 49px; padding: 9px 22px; border-bottom: 1px solid var(--border); }
+.translation-panel-head > div:first-child { display: flex; align-items: center; gap: 9px; }
+.translation-panel-head h2 { font-size: 13px; font-weight: 550; margin: 0; letter-spacing: .04em; }
+.translation-panel-head svg { color: var(--text-2); }
+.translation-layout-toggle { display: flex; align-items: center; gap: 3px; }
+.translation-layout-toggle button { width: 29px; height: 28px; display: grid; place-items: center; border-radius: 4px; color: var(--text-3); }
+.translation-layout-toggle button[aria-pressed=true] { background: var(--surface-muted); color: var(--text); }
+.translation-layout-toggle button:hover { background: var(--surface-muted); }
+.translation-layout-toggle button:disabled { opacity: .35; cursor: default; }
+.translation-panel-scroll { flex: 1; min-height: 0; overflow: auto; padding: 25px 28px 32px; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.translation-context { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding-bottom: 16px; margin-bottom: 12px; border-bottom: 1px solid var(--border); }
+.translation-context > span { font-size: 11px; color: var(--text-2); line-height: 1.7; }
+.scientific-text { font-family: 'KaTeX_Main', 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', 'SimSun', Georgia, serif; white-space: pre-wrap; overflow-wrap: break-word; }
+.translated-text { font-size: 17px; line-height: 2; color: var(--text); text-align: justify; letter-spacing: .015em; }
+.translated-text::selection { background: var(--accent-soft); }
+.translation-source { font-family: 'KaTeX_Main', Georgia, 'Times New Roman', serif; font-size: 15px; line-height: 1.8; text-align: left; letter-spacing: 0; color: var(--text-2); }
+.scientific-inline-math { white-space: normal; }
+.scientific-text .katex { font-size: 1.05em; line-height: 1.2; letter-spacing: 0; text-align: initial; }
+.scientific-display-math { display: block; overflow-x: auto; overflow-y: hidden; padding-block: 4px; white-space: normal; max-width: 100%; }
+.scientific-display-math .katex-display { margin: .5em 0; }
+.scientific-math-fallback { font-size: .85em; overflow-wrap: anywhere; }
+.translation-footnote { margin-top: 25px; font-size: 10px; color: var(--text-3); line-height: 1.7; }
+.translation-footnote span { display: block; }
+.translation-original { margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--border); }
+.translation-original summary { cursor: pointer; color: var(--text-2); font-size: 11px; }
+.translation-original .translation-source { margin-top: 17px; }
+.translation-loading { display: flex; align-items: flex-start; gap: 10px; color: var(--text-2); padding-block: 18px; font-size: 13px; line-height: 1.8; }
+.translation-loading svg { flex: 0 0 auto; margin-top: 3px; color: var(--accent); }
+.translation-loading p { margin: 0; }
+.translation-start { margin-top: 24px; display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); border-radius: 5px; padding: 8px 14px; font-size: 12px; }
+.translation-start:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.translation-error { padding: 12px 0; color: var(--accent); font-size: 12px; line-height: 1.8; }
+.translation-error p { margin: 0 0 6px; }
+.translation-model-hint { color: var(--text-2); font-size: 12px; line-height: 1.8; margin: 20px 0; }
+.translation-nav { flex: 0 0 auto; display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 12px 22px; border-top: 1px solid var(--border); }
+.translation-nav button { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-2); }
+.translation-nav > span { font-size: 10px; font-variant-numeric: tabular-nums; color: var(--text-3); }
+.translation-intro { margin: 12px 0 36px; }
+.translation-intro-glyph { display: block; font-family: 'Songti SC','SimSun',serif; font-size: 38px; line-height: 1; color: var(--accent); margin-bottom: 22px; }
+.translation-intro h3 { font-size: 14px; line-height: 1.7; font-weight: 550; margin: 0 0 8px; }
+.translation-intro p { color: var(--text-2); font-size: 12px; line-height: 1.8; margin: 0; }
+.translation-paragraph-list h3 { display: flex; justify-content: space-between; font-size: 10px; font-weight: 500; color: var(--text-3); margin: 0 0 9px; letter-spacing: .04em; }
+.translation-paragraph-list > button { display: flex; align-items: flex-start; gap: 14px; width: 100%; padding: 14px 0; text-align: left; border-bottom: 1px solid var(--border); }
+.translation-paragraph-list > button:hover { color: var(--accent); }
+.translation-paragraph-list > button > span:last-child { font-family: Georgia,'Times New Roman',serif; font-size: 13px; line-height: 1.6; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.paragraph-number { font-size: 10px; color: var(--text-3); margin-top: 3px; font-variant-numeric: tabular-nums; }
+.pdfv-paragraph-marker { position: absolute; z-index: 3; pointer-events: none; border: 1px solid transparent; border-radius: 3px; transition: border-color 140ms ease, box-shadow 140ms ease; }
+.pdfv-paragraph-marker.hovered { border-color: rgba(164,95,56,.36); box-shadow: 0 2px 12px rgba(70,44,28,.08), 0 0 0 5px rgba(164,95,56,.035); }
+.pdfv-paragraph-marker.selected { border-left: 2px solid #a45f38; box-shadow: -4px 0 0 rgba(164,95,56,.12); }
+.pdfv-paragraph-actions { position: absolute; z-index: 6; padding: 4px; border: 1px solid #dfd9d0; border-radius: 7px; color: #363029; background: #fffdf9; box-shadow: 0 5px 19px rgba(38,30,20,.16); animation: paragraph-toolbar-enter 130ms ease-out; }
+.pdfv-paragraph-actions button { display: flex; align-items: center; justify-content: center; gap: 7px; min-width: 116px; padding: 5px 8px; font-size: 11px; border-radius: 3px; white-space: nowrap; }
+.pdfv-paragraph-actions button:hover { color: #8c4f2d; background: #f7ece0; }
+@keyframes paragraph-toolbar-enter { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+.reader-layout.translation-bottom { grid-template-columns: minmax(0,1fr); grid-template-rows: minmax(0,1fr) minmax(260px,36%); }
+.translation-bottom .translation-panel { border-top: 1px solid var(--border-strong); }
+.translation-bottom .translation-panel-head { min-height: 39px; padding-block: 5px; }
+.translation-bottom .translation-panel-scroll { padding: 16px 34px 26px; }
+.translation-bottom .translation-panel-scroll > .translated-text { max-width: 1000px; margin-inline: auto; }
+.translation-bottom .translation-context { padding: 0; margin-bottom: 12px; border: 0; }
+.translation-bottom .translation-intro { display: none; }
+.translation-bottom .translation-paragraph-list { max-width: 1000px; margin-inline: auto; }
+.app-shell.reading-focus .sidebar { display: none; }
+.app-shell.reading-focus .main-shell { margin-left: 0; }
+@media (max-width: 1050px) {
+  .reader-layout.translation-side { grid-template-columns: minmax(0,1fr) 325px; }
+  .translation-panel-scroll { padding-inline: 22px; }
+}
+@media (max-width: 760px) {
+  .reader-layout.translation-layout { grid-template-columns: minmax(0,1fr); grid-template-rows: minmax(0,1fr) minmax(260px,36%); }
+  .translation-layout .pdf-panel { height: auto; min-height: 0; }
+  .translation-panel { border-top: 1px solid var(--border-strong); }
+  .translation-panel-head { min-height: 38px; padding-block: 5px; }
+  .translation-panel-scroll { padding: 15px 20px 22px; }
+  .translation-context { padding-bottom: 7px; margin-bottom: 8px; }
+  .translation-intro { display: none; }
+  .translated-text { font-size: 16px; }
+}

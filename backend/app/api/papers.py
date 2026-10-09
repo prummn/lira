@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session, selectinload
 from starlette.concurrency import run_in_threadpool
 
 from ..db import get_db
-from ..models import Author, Collection, CollectionPaper, Edge, IntelligenceTask, Note, Paper, PaperAuthor, Translation
+from ..models import Author, Collection, CollectionPaper, Edge, IntelligenceTask, Note, Paper, PaperAuthor, PaperChunk, Translation
 from ..providers import get_model_provider
 from ..providers.base import ProviderError, VerifiedCitation
 from ..providers.mock import body
@@ -54,6 +54,7 @@ from ..services.intelligence import queue_tasks
 from ..services.importing import MAX_PDF_BYTES, import_pdf_bytes, metadata_sources, refresh_metadata, replace_authors, sync_card_title
 from ..services.downloads import download_pdf
 from ..services.search import search_chunks
+from ..services.reading_paragraphs import paragraphs_for, reading_payload
 from ..services.serialization import (
     collection_read,
     evidence_read,
@@ -323,12 +324,24 @@ def ask(
     )
 
 
+@router.get('/papers/{paper_id}/reading-paragraphs')
+def reading_paragraphs(paper_id: str, session: Session = Depends(get_db)) -> dict:
+    return reading_payload(require_paper(session, paper_id), get_model_provider())
+
+
 @router.post("/papers/{paper_id}/translate", response_model=TranslationResponse)
 def translate(
     paper_id: str, payload: TranslateRequest, session: Session = Depends(get_db)
 ) -> TranslationResponse:
     paper = require_paper(session, paper_id)
-    chunk = next((c for c in paper.chunks if c.id == payload.chunk_id), None)
+    if payload.paragraph_id:
+        paragraph = next((item for item in paragraphs_for(paper) if item['id'] == payload.paragraph_id), None)
+        if paragraph is None:
+            raise HTTPException(404, '未找到当前论文中的段落，请重新打开论文')
+        chunk = PaperChunk(id=paragraph['refs'][0]['chunk_id'], paper_id=paper.id,
+                          content=paragraph['source_text'], section=paragraph['section'])
+    else:
+        chunk = next((c for c in paper.chunks if c.id == payload.chunk_id), None)
     if chunk is None:
         raise HTTPException(404, "未找到这篇论文中的原文块")
     provider = get_model_provider()
@@ -349,7 +362,7 @@ def translate(
         )
     cached = session.scalar(statement.order_by(Translation.created_at.desc(), Translation.id).limit(1))
     if cached is not None and not payload.force:
-        return TranslationResponse(**translation_read(cached).model_dump(), cached=True)
+        return TranslationResponse(**translation_read(cached).model_dump(), cached=True, paragraph_id=payload.paragraph_id)
     if not provider.translation_available:
         raise HTTPException(503, "翻译需要配置模型，原文已保留")
     text = provider.translate(chunk)
@@ -374,7 +387,7 @@ def translate(
     ))
     session.commit()
     persisted = session.scalar(statement.execution_options(populate_existing=True))
-    return TranslationResponse(**translation_read(persisted).model_dump(), cached=False)
+    return TranslationResponse(**translation_read(persisted).model_dump(), cached=False, paragraph_id=payload.paragraph_id)
 
 
 @router.post('/papers/{paper_id}/explain',response_model=AskResponse)

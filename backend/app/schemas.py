@@ -182,6 +182,7 @@ class TranslationRead(BaseModel):
 
 class TranslationResponse(TranslationRead):
     cached: bool
+    paragraph_id: str | None = None
 
 
 class PaperSummary(BaseModel):
@@ -359,7 +360,8 @@ class AskResponse(BaseModel):
 
 
 class TranslateRequest(BaseModel):
-    chunk_id: str = Field(min_length=1)
+    chunk_id: str | None = Field(default=None, min_length=1)
+    paragraph_id: str | None = Field(default=None, min_length=1)
     force: bool = False
 
 
