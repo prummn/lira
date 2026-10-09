@@ -84,7 +84,7 @@ PAPER_READER_MODEL_TIMEOUT=600
 也支持 Responses 协议。已确认的 SpacetimeAI profile：
 
 ```dotenv
-PAPER_READER_MODEL_BASE_URL=https://spacetimeai.cc
+PAPER_READER_MODEL_BASE_URL=https://spacetimeai.cc/v1
 PAPER_READER_MODEL_NAME=gpt-6.1-sol
 PAPER_READER_MODEL_WIRE_API=responses
 PAPER_READER_MODEL_REASONING_EFFORT=xhigh

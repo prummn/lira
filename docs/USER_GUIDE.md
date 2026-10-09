@@ -117,7 +117,7 @@ PAPER_READER_MODEL_TIMEOUT=600
 
 模型请求超时默认为 600 秒，允许范围为 1–1800 秒；长篇 Responses 合成可按需使用更长时限。
 
-支持 Chat Completions 或 Responses 协议，内容需能返回有效 JSON。已确认的 SpacetimeAI profile 为 `PAPER_READER_MODEL_BASE_URL=https://spacetimeai.cc`、`PAPER_READER_MODEL_NAME=gpt-6.1-sol`、`PAPER_READER_MODEL_WIRE_API=responses`、`PAPER_READER_MODEL_REASONING_EFFORT=xhigh`；长篇分析建议 `PAPER_READER_MODEL_TIMEOUT=600`。Key 由你在环境变量或被 Git 忽略的 `.env` 中提供，示例不含真实凭证。Responses 采用流式传输并使用 `store: false`，连接结束或被截断的片段不会发布为完成结果。
+支持 Chat Completions 或 Responses 协议，内容需能返回有效 JSON。已确认的 SpacetimeAI profile 为 `PAPER_READER_MODEL_BASE_URL=https://spacetimeai.cc/v1`、`PAPER_READER_MODEL_NAME=gpt-6.1-sol`、`PAPER_READER_MODEL_WIRE_API=responses`、`PAPER_READER_MODEL_REASONING_EFFORT=xhigh`；长篇分析建议 `PAPER_READER_MODEL_TIMEOUT=600`。注意 base URL 必须包含 `/v1`，否则请求会落到网站页面路由而不是模型 API。Key 由你在环境变量或被 Git 忽略的 `.env` 中提供，示例不含真实凭证。Responses 采用流式传输并使用 `store: false`，连接结束或被截断的片段不会发布为完成结果。
 
 普通模型默认使用 `PAPER_READER_MODEL_REASONING_EFFORT=disabled`，省略推理参数并覆盖分析阶段的 effort；支持推理的模型可显式配置 high/xhigh 等值。`none` 是发给服务的实际 effort 值，不能用于省略参数。部分 Chat Completions 服务需 `PAPER_READER_MODEL_COMPLETION_PARAMETER=max_tokens`；不接受 JSON mode 时可设 `PAPER_READER_MODEL_JSON_MODE=none`，应用仍会校验返回 JSON 和原文引用。修改后停止并重新启动工作台，在「设置 → 分析与模型」查看 Provider、协议及 reasoning effort；显示“已配置”只是配置状态，不等于真实连接或模型质量验收通过。设置页只读，不保存 key。
 

@@ -189,6 +189,37 @@ test('Notebook keeps PDF and cached card available, reports coverage honestly, a
   await page.screenshot({path:'test-artifacts/intelligence-notebook-1440.png'})
 })
 
+test('reader bilingual mode uses the configured model and keeps reading chrome compact',async({page})=>{
+  const paper=await realPaper(page,'Bilingual Reading Fixture','bilingual reading fixture')
+  await settings(page)
+  const translated='这是一个用于验证中英对照阅读的模型译文。'
+  let translateCalls=0
+  await page.route(`**/api/papers/${paper.id}/translate`,route=>{
+    translateCalls++
+    expect(route.request().postDataJSON()).toHaveProperty('chunk_id')
+    return route.fulfill({json:{text:translated,provider:'FixtureProvider',cached:false}})
+  })
+  await page.goto('/')
+  await page.locator('.paper-row').filter({hasText:paper.title}).locator('.paper-name > button').click()
+  await expect(page.locator('.pdfv-canvas')).toBeVisible()
+  await page.getByRole('button',{name:'中英对照',exact:true}).click()
+  await expect(page.locator('.paragraph-reader')).toBeVisible()
+  await expect(page.locator('.paragraph-block')).not.toHaveCount(0)
+  await expect(page.locator('.paragraph-block').first()).toContainText('翻译')
+  await page.locator('.paragraph-block').first().getByRole('button',{name:'翻译此段',exact:true}).click()
+  await expect(page.locator('.translated-text').first()).toContainText(translated)
+  expect(translateCalls).toBe(1)
+  await expect.poll(()=>page.locator('.topbar').evaluate(element=>getComputedStyle(element).display)).toBe('none')
+  const typography=await page.locator('.paragraph-block').first().evaluate(element=>{
+    const source=element.querySelector('p:not(.translated-text)') as HTMLElement
+    const translated=element.querySelector('.translated-text') as HTMLElement
+    return {sourceSize:parseFloat(getComputedStyle(source).fontSize),sourceColor:getComputedStyle(source).color,sourceBackground:getComputedStyle(source).backgroundColor,translatedColor:getComputedStyle(translated).color,translatedBackground:getComputedStyle(translated).backgroundColor}
+  })
+  expect(typography.sourceSize).toBeGreaterThanOrEqual(14)
+  expect(typography.sourceColor).not.toBe(typography.sourceBackground)
+  expect(typography.translatedColor).not.toBe(typography.translatedBackground)
+})
+
 for(const locale of [
   {language:'zh-CN',completed:'智能分析完成',partial:'部分完成',repaired:'已纠正的条目',rejected:'未通过核验的条目',format:'条目格式不符合要求',quote:'原文引句未匹配',section:'章节标签与证据不符'},
   {language:'en-US',completed:'AI analyzed',partial:'Partially analyzed',repaired:'Corrected entries',rejected:'Entries rejected by verification',format:'Invalid entry format',quote:'Quote did not match source',section:'Section differs from evidence'},

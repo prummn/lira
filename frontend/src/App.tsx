@@ -47,7 +47,7 @@ function WorkspaceApp() {
     try { const created = await api.createCollection(name.trim(), description.trim()); await workspace.reload(); setCollectionId(created.id); setCreating(false); setName(''); setDescription(''); setPage('library'); notify(t('saved')) }
     catch (error) { setFormError(errorMessage(error)) } finally { setBusy(false) }
   }
-  return <div className="app-shell">
+  return <div className={'app-shell ' + (page === 'reader' ? 'reader-active' : '')}>
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark"><BookOpen size={19}/></span><div><strong>{t('brand')}</strong><small>RESEARCH INTELLIGENCE</small></div></div>
       <div className="workspace-label"><span className="workspace-dot"/>{t('workspace')}</div>
