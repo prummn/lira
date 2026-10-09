@@ -459,7 +459,7 @@ body { background: var(--bg); }
 .back-btn { color:var(--accent); transition:color var(--motion-fast) ease, transform var(--motion-fast) ease; }
 .back-btn:hover { color:#814627; }
 .back-btn:active { transform:translateX(-2px); }
-.reader-research-panel { min-width:0; display:block; }
+.reader-research-panel { min-width:0; min-height:0; display:block; overflow:hidden; }
 .reader-research-panel > .notebook-panel { height:100%; }
 .reading-modes { background:var(--surface); border-bottom-color:var(--border); }
 .reading-modes button.active { color:var(--accent); border-color:var(--accent); }

@@ -71,6 +71,60 @@ test('real PDF import, evidence location, notes and collection survive refresh',
   expect(errors).toEqual([])
 })
 
+test('reader next page advances the rendered PDF page', async ({page})=>{
+  await page.goto('/')
+  await expect(page.locator('.paper-row')).not.toHaveCount(0)
+  const row = page.locator('.paper-row').filter({hasText:'Evidence Integration Test'})
+  if (await row.count() === 0) {
+    await page.locator('input[type=file]').setInputFiles(path.resolve('test-artifacts/import-fixture.pdf'))
+    await page.getByRole('dialog',{name:'确认批量导入'}).getByRole('button',{name:'开始导入',exact:true}).click()
+  }
+  await expect(row).toBeVisible()
+  await row.locator('.paper-name > button').click()
+  await expect(page.locator('.pdfv-canvas')).toBeVisible()
+
+  const pageInput = page.getByRole('textbox',{name:'页码',exact:true})
+  await expect(pageInput).toHaveValue('1')
+  await expect(page.getByRole('button',{name:'下一页',exact:true})).toBeEnabled()
+  await page.getByRole('button',{name:'下一页',exact:true}).click()
+  await expect(pageInput).toHaveValue('2')
+  await expect(page.getByRole('region',{name:'PDF 阅读器'}).getByText('Method',{exact:true})).toBeVisible()
+  await expect(page.getByRole('button',{name:'上一页',exact:true})).toBeEnabled()
+  await expect(page.getByRole('button',{name:'下一页',exact:true})).toBeDisabled()
+})
+
+test('long notebook content stays inside the reader viewport', async ({page})=>{
+  await page.goto('/')
+  await expect(page.locator('.paper-row')).not.toHaveCount(0)
+  const row = page.locator('.paper-row').filter({hasText:'Evidence Integration Test'})
+  if (await row.count() === 0) {
+    await page.locator('input[type=file]').setInputFiles(path.resolve('test-artifacts/import-fixture.pdf'))
+    await page.getByRole('dialog',{name:'确认批量导入'}).getByRole('button',{name:'开始导入',exact:true}).click()
+  }
+  await expect(row).toBeVisible()
+  const library = await (await page.request.get('/api/papers?limit=200')).json()
+  const paperId = library.items.find((item:{title:string})=>item.title==='Evidence Integration Test').id
+  const paper = await (await page.request.get(`/api/papers/${paperId}`)).json()
+  paper.evidence = Array.from({length:80},(_,index)=>({
+    ...(paper.evidence[index % Math.max(1,paper.evidence.length)] ?? {source_text:'Evidence fixture'}),
+    id:`long-reader-evidence-${index}`,
+    claim:`Long notebook evidence item ${index + 1}`,
+    source_text:`Evidence source text ${index + 1} keeps the notebook content long enough to exercise its scroll container.`,
+    page: index % 2 + 1,
+  }))
+  await page.route(`**/api/papers/${paperId}`,route=>route.fulfill({json:paper}))
+  await row.locator('.paper-name > button').click()
+  await expect(page.locator('.pdfv-canvas')).toBeVisible()
+  await page.getByRole('button',{name:'原文证据',exact:true}).click()
+  await expect(page.locator('.evidence-item')).toHaveCount(80)
+  await expect.poll(() => page.locator('.reader-page').evaluate(el => {
+    const layout = el.querySelector('.reader-layout')!.getBoundingClientRect()
+    const pdf = el.querySelector('.pdf-panel')!.getBoundingClientRect()
+    const notebook = el.querySelector('.reader-research-panel')!.getBoundingClientRect()
+    return Math.max(pdf.height, notebook.height) - layout.height
+  })).toBeLessThanOrEqual(1)
+})
+
 test('mock answers cite current source and refuse unsupported questions', async ({page})=>{
   await page.goto('/')
   await page.locator('.paper-row .paper-name > button').first().click()
