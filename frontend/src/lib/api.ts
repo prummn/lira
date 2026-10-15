@@ -1,4 +1,4 @@
-import type { Answer, Collection, ExplainStyle, Graph, HistoryItem, IntelligenceTask, LibraryAnswer, ModelSettings, ModelProfile, ModelProfiles, ModelProfileInput, ModelRouting, Note, NoteKind, Paper, PaperDetail, PaperMetadataUpdate, ReadingDocument, ReadingStatus, ReadingTranslation, SearchHit } from '../types'
+import type { Answer, CodexAccountStatus, Collection, ExplainStyle, Graph, HistoryItem, IntelligenceTask, LibraryAnswer, ModelSettings, ModelProfile, ModelProfiles, ModelProfileInput, ModelRouting, Note, NoteKind, Paper, PaperDetail, PaperMetadataUpdate, ReadingDocument, ReadingStatus, ReadingTranslation, SearchHit } from '../types'
 
 export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); this.name = 'ApiError' }
@@ -52,6 +52,10 @@ export const api = {
   search: (query: string, collectionId='') => request<{items: SearchHit[]}>(`/search?query=${encodeURIComponent(query)}${collectionId?'&collection_id='+encodeURIComponent(collectionId):''}`),
   settings: () => request<ModelSettings>('/settings'),
   modelProfiles: () => request<ModelProfiles>('/settings/profiles'),
+  codexAccount: () => request<CodexAccountStatus>('/settings/codex'),
+  codexLogin: () => request<CodexAccountStatus>('/settings/codex/login', {method:'POST'}),
+  codexCancelLogin: () => request<CodexAccountStatus>('/settings/codex/login', {method:'DELETE'}),
+  codexLogout: () => request<CodexAccountStatus>('/settings/codex/logout', {method:'POST'}),
   saveModelProfile: (id:string|null,body:ModelProfileInput) => request<ModelProfile>(`/settings/profiles${id?'/'+encodeURIComponent(id):''}`, {method:id?'PUT':'POST',...json(body)}),
   deleteModelProfile: (id:string) => request<ModelProfiles>(`/settings/profiles/${encodeURIComponent(id)}`,{method:'DELETE'}),
   modelRouting: (body:ModelRouting) => request<ModelProfiles>('/settings/routing',{method:'PUT',...json(body)}),

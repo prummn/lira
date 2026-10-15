@@ -55,6 +55,7 @@ def create_app(
             yield
         finally:
             worker.stop()
+            profiles.codex.close()
             database.engine.dispose()
 
     application = FastAPI(

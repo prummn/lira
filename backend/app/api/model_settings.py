@@ -5,6 +5,26 @@ from ..schemas import ModelProfileUpdate, ModelRoutingUpdate
 router = APIRouter(prefix='/settings')
 
 
+@router.get('/codex')
+def codex_status(request: Request):
+    return request.app.state.model_profiles.codex.status(refresh=True)
+
+
+@router.post('/codex/login')
+def codex_login(request: Request):
+    return request.app.state.model_profiles.codex.login()
+
+
+@router.delete('/codex/login')
+def codex_cancel_login(request: Request):
+    return request.app.state.model_profiles.codex.cancel_login()
+
+
+@router.post('/codex/logout')
+def codex_logout(request: Request):
+    return request.app.state.model_profiles.codex.logout()
+
+
 def change(action):
     try:
         return action()

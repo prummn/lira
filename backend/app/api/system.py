@@ -84,7 +84,7 @@ def _settings_payload() -> dict[str, object]:
         "timeout": getattr(provider, 'timeout', None),
         "profile_id": getattr(provider, 'profile_id', None),
         "profile_name": getattr(provider, 'profile_name', None),
-        "api_key_configured": bool(getattr(provider, '_api_key', '') or os.getenv('PAPER_READER_MODEL_API_KEY','').strip()) if provider.configured else False,
+        "api_key_configured": False if provider.name == 'CodexSubscriptionProvider' else bool(getattr(provider, '_api_key', '') or os.getenv('PAPER_READER_MODEL_API_KEY','').strip()) if provider.configured else False,
         "configuration_error": getattr(provider,'configuration_error',None),
     }
 

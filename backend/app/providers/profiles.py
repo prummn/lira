@@ -14,6 +14,7 @@ import uuid
 
 from .base import ProviderError
 from .openai_compatible import OpenAICompatibleProvider
+from .codex_account import CodexAccount
 
 current_store: ContextVar[ProfileStore | None] = ContextVar('model_profile_store', default=None)
 
@@ -21,6 +22,7 @@ current_store: ContextVar[ProfileStore | None] = ContextVar('model_profile_store
 class ProfileStore:
     def __init__(self, path: Path):
         self.path = path
+        self.codex = CodexAccount(path.with_name(path.name + '.codex'))
         self._lock = threading.RLock()
         self._condition = threading.Condition()
         self._in_use: dict[str, int] = {}
@@ -102,6 +104,7 @@ class ProfileStore:
         state = self._snapshot()
         state.pop('version')
         state['profiles'] = [{**{k: v for k, v in p.items() if k != 'api_key'},
+                              'provider_kind': p.get('provider_kind', 'api'),
                               'api_key_configured': bool(p.get('api_key'))} for p in state['profiles']]
         return state
 
@@ -112,15 +115,19 @@ class ProfileStore:
             if profile_id and old is None:
                 raise ProviderError('未找到这份模型配置', 404)
             key = (payload.api_key or '').strip() or (old or {}).get('api_key', '')
-            if not key:
+            if payload.provider_kind == 'api' and not key:
                 raise ValueError('请输入这份配置的 API key')
             values = payload.model_dump(exclude={'test_connection'})
             values.update(api_key=key, base_url=payload.base_url.strip(), model=payload.model.strip())
+            if payload.provider_kind == 'codex':
+                values.pop('api_key', None)
+                values.update(base_url='https://chatgpt.com', max_concurrency=1)
             provider = self._build(values)
         # A network test must not block switching or unrelated model work.
         if payload.test_connection:
-            if profile_id:
-                provider._capacity = lambda: self.capacity(profile_id, values['max_concurrency'])
+            if profile_id or payload.provider_kind == 'codex':
+                gate_id = 'codex-subscription' if payload.provider_kind == 'codex' else profile_id
+                provider._capacity = lambda: self.capacity(gate_id, values['max_concurrency'])
             provider.test_connection()
         with self._lock:
             latest = self._snapshot(ignore_invalid_legacy=profile_id is None)
@@ -172,8 +179,11 @@ class ProfileStore:
             self._commit(state)
             return self.public()
 
-    @staticmethod
-    def _build(values: dict) -> OpenAICompatibleProvider:
+    def _build(self, values: dict) -> OpenAICompatibleProvider:
+        if values.get('provider_kind') == 'codex':
+            from .codex_subscription import CodexSubscriptionProvider
+            return CodexSubscriptionProvider(account=self.codex, **{key: values[key] for key in (
+                'model', 'reasoning_effort', 'timeout')})
         return OpenAICompatibleProvider(**{key: values[key] for key in (
             'api_key', 'base_url', 'model', 'wire_api', 'reasoning_effort', 'timeout', 'completion_parameter', 'json_mode')})
 
@@ -184,7 +194,9 @@ class ProfileStore:
             raise ProviderError('模型配置已被删除，请重新选择', 409)
         provider = self._build(profile)
         provider.profile_id, provider.profile_name = profile['id'], profile['name']
-        provider._capacity = lambda: self.capacity(profile_id, profile['max_concurrency'])
+        subscription = profile.get('provider_kind') == 'codex'
+        provider._capacity = lambda: self.capacity('codex-subscription' if subscription else profile_id,
+            1 if subscription else profile['max_concurrency'])
         return provider
 
     def selected(self):

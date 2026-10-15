@@ -418,6 +418,28 @@ blockquote { margin: 10px 0; padding: 8px 11px; border-left: 2px solid var(--bor
 .model-profile-editor .model-config-actions .btn { font-size:12px; min-height:36px; }
 .model-profile-editor .model-save-success { font-size:12px; line-height:1.6; }
 .model-delete-confirm { flex-basis:100%; display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding-top:10px; color:var(--text-2); font-size:12px; }
+.codex-account { margin:0 22px 22px; padding:22px; border:1px solid var(--border); border-radius:10px; background:var(--surface); font-size:13px; line-height:1.8; }
+.codex-account-heading { display:flex; gap:18px; justify-content:space-between; align-items:flex-start; }
+.codex-account-heading strong { color:var(--text); font-size:15px; font-weight:600; }
+.codex-account p { margin:6px 0 16px; color:var(--text-2); }
+.codex-account .codex-muted { margin:16px 0 0; font-size:12px; }
+.codex-account .codex-error { color:var(--danger, #b84838); }
+.codex-account code { display:inline-block; padding:2px 8px; background:var(--surface-muted); border-radius:4px; user-select:all; overflow-wrap:anywhere; }
+.codex-account-identity { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin:12px 0 18px; }
+.codex-account-identity > svg { color:var(--accent); }
+.codex-account-identity > span:first-of-type { font-weight:500; overflow-wrap:anywhere; }
+.codex-account-identity > button { margin-left:auto; }
+.codex-plan { font-size:11px; text-transform:uppercase; padding:1px 8px; border:1px solid var(--border); border-radius:4px; color:var(--text-2); letter-spacing:.07em; }
+.codex-limits { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:24px; }
+.codex-limit > div { display:flex; justify-content:space-between; gap:12px; font-size:12px; }
+.codex-limit strong { font-weight:500; }
+.codex-limit progress { display:block; appearance:none; border:0; height:5px; margin:10px 0; width:100%; border-radius:4px; background:var(--surface-muted); accent-color:var(--accent); overflow:hidden; }
+.codex-limit progress::-webkit-progress-bar { background:var(--surface-muted); border-radius:4px; }
+.codex-limit progress::-webkit-progress-value { background:var(--accent); border-radius:4px; }
+.codex-limit progress::-moz-progress-bar { background:var(--accent); border-radius:4px; }
+.codex-limit small { color:var(--text-2); font-size:11px; }
+.codex-login-pending > div { display:flex; align-items:center; gap:18px; flex-wrap:wrap; }
+.codex-login-pending a { text-decoration:none; }
 @media(max-width:850px) { .model-section-heading { align-items:flex-start; }.model-profile-row { padding:17px; }.model-profile-actions { flex-wrap:wrap; gap:10px; }.model-profile-info { flex-basis:100%; } }
 .setting-row { display: flex; justify-content: space-between; gap: 20px; align-items: center; padding: 18px; border-bottom: 1px solid var(--border); font-size: 12px; }
 .setting-row:last-child { border: 0; }

@@ -53,6 +53,7 @@ export interface Graph {
 export interface SearchHit { paper_id: string; title: string; chunk_id: string; page: number; section: string | null; content: string; match_type: string }
 export interface ModelSettings { provider: string; mode: string; configured: boolean; translation_available: boolean; model?:string|null; base_url?:string|null; api_key_configured?:boolean; configuration_error?:string|null; wire_api?:string|null; reasoning_effort?:string|null; intelligence_available?:boolean; quality?:Record<string,unknown> }
 export interface ModelProfile {
+  provider_kind?:'api'|'codex'
   id:string; name:string; base_url:string; model:string; api_key_configured:boolean
   wire_api:'chat_completions'|'responses'; reasoning_effort:'disabled'|'none'|'minimal'|'low'|'medium'|'high'|'xhigh'
   timeout:number; max_concurrency:number; completion_parameter:'max_tokens'|'max_completion_tokens'; json_mode:'json_object'|'none'
@@ -60,6 +61,11 @@ export interface ModelProfile {
 export interface ModelRouting { active_id:string|null; fallback_ids:string[]; auto_fallback:boolean }
 export interface ModelProfiles extends ModelRouting { profiles:ModelProfile[]; configuration_error?:string }
 export type ModelProfileInput = Omit<ModelProfile,'id'|'api_key_configured'> & { api_key:string|null; test_connection:boolean }
+export interface CodexAccountStatus {
+  available:boolean; authenticated:boolean; pending:boolean; email:string|null; plan:string|null
+  login_url:string|null; error?:string|null; error_code?:string; retryable?:boolean; limits_error?:string
+  limits:{name:string;used_percent:number;window_minutes:number|null;resets_at:number|null}[]
+}
 export type IntelligenceStatus = 'unanalyzed'|'queued'|'running'|'completed'|'partial'|'failed'|'cancelled'
 export interface Usage { input_tokens?:number|null; output_tokens?:number|null; total_tokens?:number|null; model_calls?:number; remote_calls?:number; cache_hits?:number;unknown_usage_calls?:number; calls?:{cached:boolean;model:string;provider?:{profile_id?:string;profile_name?:string;failure?:{code:string}}}[] }
 export interface IntelligenceReport { coverage?:Record<string,unknown>; usage?:Usage; [key:string]:unknown }
