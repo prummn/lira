@@ -57,7 +57,7 @@ export interface ModelSettings { provider: string; mode: string; configured: boo
 export interface ModelProfile {
   provider_kind?:'api'|'codex'
   id:string; name:string; base_url:string; model:string; api_key_configured:boolean
-  wire_api:'chat_completions'|'responses'; reasoning_effort:'disabled'|'none'|'minimal'|'low'|'medium'|'high'|'xhigh'
+  wire_api:'chat_completions'|'responses'; reasoning_effort:'disabled'|'none'|'minimal'|'low'|'medium'|'high'|'xhigh'|'max'|'ultra'
   timeout:number; max_concurrency:number; completion_parameter:'max_tokens'|'max_completion_tokens'; json_mode:'json_object'|'none'
 }
 export interface ModelRouting { active_id:string|null; fallback_ids:string[]; auto_fallback:boolean }
@@ -68,6 +68,12 @@ export interface CodexAccountStatus {
   login_url:string|null; error?:string|null; error_code?:string; retryable?:boolean; limits_error?:string
   limits:{name:string;used_percent:number;window_minutes:number|null;resets_at:number|null}[]
 }
+export interface CodexModel {
+  id:string;model:string;display_name:string;description:string;is_default:boolean
+  default_reasoning_effort:Exclude<ModelProfile['reasoning_effort'],'disabled'>|null
+  supported_reasoning_efforts:{effort:Exclude<ModelProfile['reasoning_effort'],'disabled'>;description:string}[]
+}
+export interface CodexModels {models:CodexModel[];default_model:string|null}
 export type IntelligenceStatus = 'unanalyzed'|'queued'|'running'|'completed'|'partial'|'failed'|'cancelled'
 export interface Usage { input_tokens?:number|null; output_tokens?:number|null; total_tokens?:number|null; model_calls?:number; remote_calls?:number; cache_hits?:number;unknown_usage_calls?:number; calls?:{cached:boolean;model:string;provider?:{profile_id?:string;profile_name?:string;failure?:{code:string}}}[] }
 export interface IntelligenceReport { coverage?:Record<string,unknown>; usage?:Usage; [key:string]:unknown }

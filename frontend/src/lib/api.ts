@@ -1,5 +1,5 @@
 import type { Answer, CodexAccountStatus, Collection, ExplainStyle, Graph, HistoryItem, IntelligenceTask, LibraryAnswer, ModelSettings, ModelProfile, ModelProfiles, ModelProfileInput, ModelRouting, Note, NoteKind, Paper, PaperDetail, PaperMetadataUpdate, ReadingDocument, ReadingStatus, ReadingTranslation, SearchHit } from '../types'
-import type { NoteInput } from '../types'
+import type { CodexModels, NoteInput } from '../types'
 
 export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); this.name = 'ApiError' }
@@ -55,6 +55,7 @@ export const api = {
   settings: () => request<ModelSettings>('/settings'),
   modelProfiles: () => request<ModelProfiles>('/settings/profiles'),
   codexAccount: () => request<CodexAccountStatus>('/settings/codex'),
+  codexModels: (refresh=false) => request<CodexModels>(`/settings/codex/models${refresh?'?refresh=true':''}`),
   codexLogin: () => request<CodexAccountStatus>('/settings/codex/login', {method:'POST'}),
   codexCancelLogin: () => request<CodexAccountStatus>('/settings/codex/login', {method:'DELETE'}),
   codexLogout: () => request<CodexAccountStatus>('/settings/codex/logout', {method:'POST'}),

@@ -80,9 +80,11 @@ LIRA 是一个本地优先的论文阅读与科研知识管理工具。名字取
 2. 使用 API key 时，填写地址、模型和密钥，再选择 Responses / Chat Completions、推理强度、超时和同时请求上限。兼容性较弱的接口还可以关闭 JSON mode 或调整 Chat 输出预算参数；
 3. 点击「测试连接并保存」，或「仅保存」稍后再用。第一份连接自动启用；之后点击某份连接的「启用」即可切换，无需重启。
 
-**使用 ChatGPT Plus / Pro 等订阅里的 Codex 额度**：选择「Codex 订阅」，点击「登录 ChatGPT」，再打开官方登录页完成授权。账户、计划、已用额度和重置时间会在设置页显示；没有返回额度时会如实提示。登录后填写模型名称（默认 `gpt-6.1-sol`，以账户实际开放的模型为准），测试并保存，再启用该连接。此方式不需要 API key，也不使用 OpenAI Platform 的 API 余额。
+**使用 ChatGPT Plus / Pro 等订阅里的 Codex 额度**：选择「Codex 订阅」，点击「登录 ChatGPT」，再打开官方登录页完成授权。账户、计划、已用额度和重置时间会在设置页显示；没有返回额度时会如实提示。登录后从官方模型下拉列表中选择，推理强度会随模型更新，也可以「跟随官方默认」。新连接自动选择官方默认模型；旧配置中不再提供的模型会提示重新选择。点击「刷新官方模型」可重新读取当前账户的选项，刷新账户与额度时也会同步更新。最后「测试连接并保存」，再启用该连接。此方式不需要 API key，也不使用 OpenAI Platform 的 API 余额。
 
 本机需安装[官方 Codex CLI](https://developers.openai.com/codex/cli/)：`npm install -g @openai/codex`。LIRA 通过官方 CLI 完成登录和调用；账户单独保存在被 Git 忽略的 `.env.models.json.codex/`，不会修改 Codex 桌面应用或终端的登录。退出仅退出 LIRA，所有 Codex 连接共用这个账户和额度，每次执行一个请求。调用不提供项目文件或工具权限，论文内容通过标准输入传入。订阅调用的输出 token 预算是目标值；CLI 不提供 HTTP API 式的硬输出上限，单次时限和任务调用次数仍受限制。登录机制见[官方认证说明](https://developers.openai.com/codex/auth/)。
+
+模型和推理选项来自官方 CLI 的 [`model/list`](https://developers.openai.com/codex/app-server/)，不固定某个型号；列表会因客户端和账户而变化，实际可用性由「测试连接并保存」验证。研究请求通过 CLI 的 HTTPS 传输访问官方 ChatGPT 服务，避免部分网络中 WebSocket 重试后才回退的长时间等待。登录、凭证和授权仍由官方 CLI 管理。
 
 每份连接保留自己的密钥，编辑时留空会沿用这一份配置的 key。API key 只提交到本机后端，不会返回浏览器或写入 SQLite。连接保存在项目根目录被 Git 忽略的 `.env.models.json`；删除连接会移除该文件中的对应密钥。原来的单连接会自动迁移，旧 `.env` 可继续作为首次启动的初始配置，旧文件中的密钥需单独清除。
 

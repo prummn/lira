@@ -10,6 +10,11 @@ def codex_status(request: Request):
     return request.app.state.model_profiles.codex.status(refresh=True)
 
 
+@router.get('/codex/models')
+def codex_models(request: Request, refresh: bool = False):
+    return request.app.state.model_profiles.codex.models(refresh=refresh)
+
+
 @router.post('/codex/login')
 def codex_login(request: Request):
     return request.app.state.model_profiles.codex.login()

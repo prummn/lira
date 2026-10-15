@@ -4,15 +4,15 @@ import { api, errorMessage } from '../lib/api'
 import { useUi } from '../lib/i18n'
 import type { CodexAccountStatus } from '../types'
 
-export function CodexAccountSettings({ onChange, onReady, disabled = false }: {
-  onChange:()=>void; onReady:(ready:boolean)=>void; disabled?:boolean
+export function CodexAccountSettings({ onChange, onReady, onModelsRefresh, disabled = false }: {
+  onChange:()=>void; onReady:(ready:boolean)=>void; onModelsRefresh?:()=>void; disabled?:boolean
 }) {
   const { t, language } = useUi()
   const [account, setAccount] = useState<CodexAccountStatus|null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const callbacks = useRef({onChange,onReady})
-  callbacks.current = {onChange,onReady}
+  const callbacks = useRef({onChange,onReady,onModelsRefresh})
+  callbacks.current = {onChange,onReady,onModelsRefresh}
   const alive = useRef(false)
   const inFlight = useRef(false)
   const ready = useRef<boolean|null>(null)
@@ -21,6 +21,7 @@ export function CodexAccountSettings({ onChange, onReady, disabled = false }: {
     if (!alive.current) return
     setAccount(next)
     callbacks.current.onReady(next.authenticated)
+    if(next.authenticated)callbacks.current.onModelsRefresh?.()
     if (ready.current !== null && ready.current !== next.authenticated) callbacks.current.onChange()
     ready.current = next.authenticated
   }

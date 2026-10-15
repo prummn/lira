@@ -115,6 +115,15 @@ if 'app-server' in sys.argv:
   elif method=='account/login/cancel':result={}
   elif method=='account/logout':
    (home/'signed-in').unlink(missing_ok=True);result={}
+  elif method=='model/list':
+   with (home/'catalog-requests').open('a') as log:log.write(json.dumps(request.get('params',{}))+'\\n')
+   if (home/'catalog-failure').exists():
+    send({'id':identifier,'error':{'code':-1,'message':'NEVER-RETURN-THIS'}});continue
+   if (home/'catalog-empty').exists():result={'data':[],'nextCursor':None}
+   elif request.get('params',{}).get('cursor'):
+    result={'data':[{'id':'limited','model':'limited-model','displayName':'Limited','description':'Limited effort choices','defaultReasoningEffort':'medium','supportedReasoningEfforts':[{'reasoningEffort':'medium','description':'Balanced'},{'reasoningEffort':'high','description':'Thorough'}],'isDefault':False}],'nextCursor':None}
+   else:
+    result={'data':[{'id':'gpt-6.1-sol','model':'gpt-6.1-sol','displayName':'Official Sol','description':'Research model','defaultReasoningEffort':'medium','supportedReasoningEfforts':[{'reasoningEffort':value,'description':value} for value in ('low','medium','high','xhigh','max','ultra')],'isDefault':True,'accessToken':'NEVER-RETURN-THIS'},{'id':'hidden','model':'hidden','hidden':True}],'nextCursor':'next'}
   elif method=='account/rateLimits/read':result={'rateLimits':{'primary':{'usedPercent':25,'windowDurationMins':300,'resetsAt':1800000000,'accessToken':'NEVER-RETURN-THIS'},'secondary':None},'accessToken':'NEVER-RETURN-THIS'}
   else:result={}
   send({'id':identifier,'result':result})
@@ -176,6 +185,98 @@ def test_missing_cli_is_reported_without_launching_a_model(tmp_path, monkeypatch
     with pytest.raises(ProviderError) as caught:
         account.login()
     assert caught.value.code == 'codex_unavailable'
+
+
+def test_model_catalog_paginates_filters_and_refreshes_with_account_bound_cache(tmp_path, fake_cli):
+    account = account_for(tmp_path, fake_cli)
+    account.home.mkdir()
+    (account.home / 'signed-in').touch()
+    try:
+        catalog = account.models()
+        assert [model['model'] for model in catalog['models']] == ['gpt-6.1-sol', 'limited-model']
+        assert catalog['default_model'] == 'gpt-6.1-sol'
+        assert catalog['models'][0]['supported_reasoning_efforts'][-1]['effort'] == 'ultra'
+        assert 'NEVER-RETURN-THIS' not in json.dumps(catalog)
+        requests = lambda: (account.home / 'catalog-requests').read_text().splitlines()
+        assert len(requests()) == 2
+        assert account.models() == catalog
+        assert len(requests()) == 2
+        account.models(refresh=True)
+        assert len(requests()) == 4
+        account.logout()
+        with pytest.raises(ProviderError) as caught: account.models()
+        assert caught.value.code == 'authentication'
+        (account.home / 'signed-in').touch()
+        account.status(refresh=True)
+        account.models()
+        assert len(requests()) == 6
+    finally: account.close()
+
+
+def test_catalog_endpoint_and_unsupported_parameters_fail_before_a_generation_request(client, tmp_path, fake_cli):
+    from app.providers.codex_subscription import CodexSubscriptionProvider
+    account = account_for(tmp_path, fake_cli)
+    account.home.mkdir()
+    (account.home / 'signed-in').touch()
+    client.app.state.model_profiles.codex.close()
+    client.app.state.model_profiles.codex = account
+    response = client.get('/api/settings/codex/models')
+    assert response.status_code == 200
+    assert response.json()['default_model'] == 'gpt-6.1-sol'
+    for model, effort in [('not-a-model', 'high'), ('limited-model', 'ultra')]:
+        provider = CodexSubscriptionProvider(account=account, model=model, reasoning_effort=effort)
+        with pytest.raises(ProviderError) as caught: provider.test_connection()
+        assert caught.value.code == 'invalid_request'
+        assert caught.value.diagnostics['request_sent'] is False
+        assert not (account.home / 'last-exec.json').exists()
+
+
+@pytest.mark.parametrize('effort', ['max', 'ultra', 'disabled'])
+def test_subscription_test_uses_selected_effort_and_stage_hints_resolve_supported_levels(tmp_path, fake_cli, effort):
+    from app.providers.codex_subscription import CodexSubscriptionProvider
+    from app.schemas import ModelProfileUpdate
+    account = account_for(tmp_path, fake_cli)
+    account.home.mkdir()
+    (account.home / 'signed-in').touch()
+    try:
+        body = codex_profile();body['reasoning_effort'] = effort
+        assert ModelProfileUpdate(**body).reasoning_effort == effort
+        provider = CodexSubscriptionProvider(account=account, model='gpt-6.1-sol', reasoning_effort=effort)
+        provider.test_connection()
+        captured = json.loads((account.home / 'last-exec.json').read_text())
+        expected = 'medium' if effort == 'disabled' else effort
+        assert 'model_reasoning_effort="' + expected + '"' in captured['argv']
+        limited = CodexSubscriptionProvider(account=account, model='limited-model', reasoning_effort='high')
+        assert limited.effective_reasoning_effort('minimal') == 'medium'
+        assert limited.effective_reasoning_effort('high') == 'high'
+    finally: account.close()
+
+
+def test_catalog_errors_are_safe_and_do_not_fall_back_to_guessed_models(tmp_path, fake_cli):
+    account = account_for(tmp_path, fake_cli)
+    account.home.mkdir()
+    (account.home / 'signed-in').touch()
+    try:
+        (account.home / 'catalog-failure').touch()
+        with pytest.raises(ProviderError) as caught: account.models()
+        assert 'NEVER-RETURN-THIS' not in str(caught.value)
+        (account.home / 'catalog-failure').unlink()
+        (account.home / 'catalog-empty').touch()
+        catalog = account.models(refresh=True)
+        assert catalog['models'] == []
+        assert catalog['default_model'] is None
+    finally: account.close()
+
+
+def test_catalog_recovers_when_app_server_exits_during_cached_account_status(tmp_path, fake_cli):
+    account = account_for(tmp_path, fake_cli)
+    account.home.mkdir()
+    (account.home / 'signed-in').touch()
+    try:
+        assert account.status()['authenticated']
+        account.stop(account._process)
+        assert account.models(refresh=True)['default_model'] == 'gpt-6.1-sol'
+    finally: account.close()
 
 
 @pytest.mark.parametrize('outcome', ['complete', 'failed'])
@@ -255,7 +356,10 @@ def test_subscription_exec_uses_stdin_no_tools_and_reports_real_usage(tmp_path, 
         assert 'private paper passage' not in ' '.join(captured['argv'])
         assert '--ephemeral' in captured['argv'] and '--ignore-user-config' in captured['argv']
         assert 'shell_tool' in captured['argv'] and 'multi_agent' in captured['argv']
-        assert 'model_provider="openai"' in captured['argv']
+        assert 'model_provider="lira_chatgpt_https"' in captured['argv']
+        assert 'model_providers.lira_chatgpt_https.base_url="https://chatgpt.com/backend-api/codex"' in captured['argv']
+        assert 'model_providers.lira_chatgpt_https.requires_openai_auth=true' in captured['argv']
+        assert 'model_providers.lira_chatgpt_https.supports_websockets=false' in captured['argv']
         assert 'web_search="disabled"' in captured['argv']
         assert captured['env'] == {'CODEX_HOME':str(account.home)}
     finally:
@@ -340,7 +444,7 @@ def test_account_shutdown_stops_its_inflight_exec_child(tmp_path, fake_cli, monk
             account.close()
 
 
-@pytest.mark.parametrize('failure_mode,expected_code', [('quota', 'rate_limit'), ('account-timeout', 'transport_timeout')])
+@pytest.mark.parametrize('failure_mode,expected_code', [('quota', 'rate_limit'), ('account-timeout', 'transport_timeout'), ('catalog-unavailable', 'codex_account_error')])
 def test_subscription_quota_can_route_to_a_saved_http_backup(client, tmp_path, fake_cli, monkeypatch, failure_mode, expected_code):
     from app.providers import get_model_provider
     from app.providers.profiles import current_store
@@ -355,6 +459,8 @@ def test_subscription_quota_can_route_to_a_saved_http_backup(client, tmp_path, f
     if failure_mode == 'account-timeout':
         monkeypatch.setattr(account, 'status', lambda **kwargs: dict(available=True, authenticated=False,
             pending=False, error='Codex account service timed out', error_code='transport_timeout', retryable=True))
+    if failure_mode == 'catalog-unavailable':
+        (account.home / 'catalog-failure').touch()
     subscription = client.post('/api/settings/profiles',json=codex_profile()).json()
     backup = client.post('/api/settings/profiles',json=dict(name='Relay',base_url='https://relay.example/v1',model='backup',api_key='fixture-secret',test_connection=False)).json()
     client.put('/api/settings/routing',json=dict(active_id=subscription['id'],fallback_ids=[backup['id']],auto_fallback=True))
@@ -372,7 +478,11 @@ def test_subscription_quota_can_route_to_a_saved_http_backup(client, tmp_path, f
         assert result.data == {'answer':'backup'}
         assert result.provenance['profile_id'] == backup['id']
         assert result.attempts[0].provenance['failure']['code'] == expected_code
-        if failure_mode == 'account-timeout':
+        if failure_mode in {'account-timeout', 'catalog-unavailable'}:
             assert result.attempts[0].request_sent is False
+            from app.providers.harness import _usage
+            usage = _usage(list(result.attempts))
+            assert usage['remote_calls'] == usage['unknown_usage_calls'] == 0
+            assert not (account.home / 'last-exec.json').exists()
     finally:
         current_store.reset(token)

@@ -33,6 +33,7 @@ class ModelSettingsUpdate(BaseModel):
 
 class ModelProfileUpdate(ModelSettingsUpdate):
     provider_kind: Literal['api', 'codex'] = 'api'
+    reasoning_effort: Literal['disabled', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] = 'disabled'
     name: str = Field(min_length=1, max_length=80)
     max_concurrency: int = Field(default=1, ge=1, le=16)
     completion_parameter: Literal['max_tokens', 'max_completion_tokens'] = 'max_completion_tokens'

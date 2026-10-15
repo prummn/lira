@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 import math
 import os
 from pathlib import Path
@@ -31,6 +32,8 @@ class CodexAccount:
         self._login_error = None
         self._cached = None
         self._cached_at = 0.0
+        self._model_cache = None
+        self._model_cache_at = 0.0
 
     def environment(self) -> dict[str, str]:
         # Only the child receives this home. Never inherit the desktop agent's
@@ -41,9 +44,19 @@ class CodexAccount:
         return result
 
     @staticmethod
-    def options() -> list[str]:
-        return ['-c', 'model_provider="openai"', '-c', 'forced_login_method="chatgpt"',
-                '-c', 'cli_auth_credentials_store="file"']
+    def options(*, https=False) -> list[str]:
+        options = ['-c', 'forced_login_method="chatgpt"', '-c', 'cli_auth_credentials_store="file"']
+        if not https:
+            return [*options, '-c', 'model_provider="openai"']
+        # Batch research requests gain no benefit from WebSockets. The built-in
+        # provider cannot be overridden; use the CLI's supported provider config
+        # to go straight to its official HTTPS endpoint, with CLI-owned OAuth.
+        return [*options, '-c', 'model_provider="lira_chatgpt_https"',
+            '-c', 'model_providers.lira_chatgpt_https.name="ChatGPT HTTPS"',
+            '-c', 'model_providers.lira_chatgpt_https.base_url="https://chatgpt.com/backend-api/codex"',
+            '-c', 'model_providers.lira_chatgpt_https.wire_api="responses"',
+            '-c', 'model_providers.lira_chatgpt_https.requires_openai_auth=true',
+            '-c', 'model_providers.lira_chatgpt_https.supports_websockets=false']
 
     def spawn(self, arguments: list[str], *, cwd: Path):
         if not self.command:
@@ -129,11 +142,13 @@ class CodexAccount:
             return
         method, params = value.get('method'), value.get('params') or {}
         if method == 'account/login/completed' and params.get('loginId') == self._login_id:
+            self._model_cache = None
             self._login_id = self._login_url = None
             self._login_error = None if params.get('success') else '登录未完成，请重新登录'
             self._cached_at = 0
         elif method in {'account/updated', 'account/rateLimits/updated'}:
             self._cached_at = 0
+            if method == 'account/updated': self._model_cache = None
 
     def _request(self, method, params=None):
         self._sequence += 1
@@ -216,6 +231,7 @@ class CodexAccount:
     def login(self):
         with self._lock:
             self._start()
+            self._model_cache = None
             if self._login_id:
                 return self.status()
             data = self._request('account/login/start', {'type': 'chatgpt'})
@@ -244,13 +260,69 @@ class CodexAccount:
             if self._login_id:
                 self.cancel_login()
             self._request('account/logout')
+            self._model_cache = None
             self._cached_at = 0
             return self.status(refresh=True)
+
+    def models(self, *, refresh=False):
+        """The official catalog is the sole source of picker models and efforts."""
+        with self._lock:
+            state = self.status()
+            if state.get('error_code'):
+                raise ProviderError(state['error'], 503, code=state['error_code'],
+                    retryable=bool(state.get('retryable')), diagnostics={'request_sent': False})
+            if not state['authenticated']:
+                raise ProviderError('请先登录 ChatGPT，再读取官方模型列表', 409,
+                    code='authentication', diagnostics={'request_sent': False})
+            # status() may be cached when an idle app-server has exited.
+            self._start()
+            identity = (state.get('email'), state.get('plan'))
+            if (not refresh and self._model_cache is not None
+                    and self._model_cache[0] == identity and time.monotonic() - self._model_cache_at < 60):
+                return deepcopy(self._model_cache[1])
+            models, seen, cursors = [], set(), set()
+            cursor = None
+            for _ in range(20):
+                params = {'limit': 100, 'includeHidden': False}
+                if cursor: params['cursor'] = cursor
+                data = self._request('model/list', params)
+                if not isinstance(data.get('data'), list):
+                    raise ProviderError('官方 CLI 未返回模型列表，请更新 CLI 后重试', 502, code='codex_catalog_error')
+                for item in data['data']:
+                    if not isinstance(item, dict) or item.get('hidden'): continue
+                    model = item.get('model')
+                    if not isinstance(model, str) or not model or len(model) > 200 or any(ord(c) < 32 for c in model) or model in seen: continue
+                    efforts = []
+                    for option in item.get('supportedReasoningEfforts') or []:
+                        if not isinstance(option, dict): continue
+                        value = option.get('reasoningEffort')
+                        if value not in {'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'}: continue
+                        if any(entry['effort'] == value for entry in efforts): continue
+                        efforts.append({'effort': value, 'description': str(option.get('description') or '')[:500]})
+                    default = item.get('defaultReasoningEffort')
+                    if default not in {option['effort'] for option in efforts}: default = None
+                    models.append({'id': model, 'model': model,
+                        'display_name': str(item.get('displayName') or model)[:200],
+                        'description': str(item.get('description') or '')[:1000],
+                        'default_reasoning_effort': default, 'supported_reasoning_efforts': efforts,
+                        'is_default': item.get('isDefault') is True})
+                    seen.add(model)
+                cursor = data.get('nextCursor')
+                if cursor is None: break
+                if not isinstance(cursor, str) or not cursor or cursor in cursors:
+                    raise ProviderError('官方模型目录分页无效，请刷新后重试', 502, code='codex_catalog_error')
+                cursors.add(cursor)
+            else:
+                raise ProviderError('官方模型目录过大，请更新 CLI 后重试', 502, code='codex_catalog_error')
+            result = {'models': models, 'default_model': next((m['model'] for m in models if m['is_default']), None)}
+            self._model_cache, self._model_cache_at = (identity, result), time.monotonic()
+            return deepcopy(result)
 
     def _stop_server(self):
         process, self._process = self._process, None
         self.stop(process)
         self._cached_at = 0
+        self._model_cache = None
         self._login_id = self._login_url = None
 
     def close(self):

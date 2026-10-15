@@ -22,7 +22,7 @@ class CodexSubscriptionProvider(OpenAICompatibleProvider):
     def __init__(self, *, account: CodexAccount, model: str, reasoning_effort='high', timeout=600):
         if not model.strip() or any(ord(c) < 32 for c in model):
             raise ValueError('请输入有效的 Codex 模型名称')
-        if reasoning_effort not in {'disabled', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh'}:
+        if reasoning_effort not in {'disabled', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'}:
             raise ValueError('Codex 推理强度无效')
         if not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or not 1 <= timeout <= 1800:
             raise ValueError('Codex 请求时限无效')
@@ -54,8 +54,37 @@ class CodexSubscriptionProvider(OpenAICompatibleProvider):
         if any(term in message for term in ('unauthorized', 'log in', 'login', 'authentication', '401', '403')):
             return ProviderError('Codex 登录已失效，请在设置中重新登录 ChatGPT', 401, code='authentication')
         if any(term in message for term in ('not supported', 'invalid model', 'invalid_request', 'model_not_found')):
-            return ProviderError('Codex 不支持当前模型或参数，请检查模型配置', 422, code='invalid_request')
+            return ProviderError('官方拒绝了当前模型或参数。请在设置中刷新官方模型列表，重新选择后测试；无需重复登录', 422, code='invalid_request')
         return ProviderError('Codex 请求未完成，请重试或切换连接；已有结果已保留', 502, code='upstream_error', retryable=True)
+
+    def effective_reasoning_effort(self, requested=None):
+        try:
+            catalog = self.account.models()
+        except ProviderError as error:
+            # Catalog RPCs do not generate tokens. Cache lookup also resolves
+            # capabilities here, so preserve accurate fallback usage on failure.
+            error.diagnostics = {**error.diagnostics, 'request_sent': False}
+            raise
+        model = next((item for item in catalog['models'] if item['model'] == self.model), None)
+        if model is None:
+            raise ProviderError(f'模型 {self.model} 不在当前官方可选列表中，请刷新模型列表后重新选择',
+                422, code='invalid_request', diagnostics={'request_sent': False})
+        supported = [item['effort'] for item in model['supported_reasoning_efforts']]
+        if self.reasoning_effort != 'disabled' and self.reasoning_effort not in supported:
+            raise ProviderError(f'{model["display_name"]} 不支持推理强度 {self.reasoning_effort}，请从该模型的可选项中选择',
+                422, code='invalid_request', diagnostics={'request_sent': False})
+        default = model['default_reasoning_effort']
+        if self.reasoning_effort == 'disabled' or not requested: return default if self.reasoning_effort == 'disabled' else self.reasoning_effort
+        if requested in supported: return requested
+        # Stage hints can request minimal reasoning; map to a supported level.
+        order = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
+        if requested not in order or not supported: return default
+        target = order.index(requested)
+        return min(supported, key=lambda value: abs(order.index(value) - target))
+
+    def test_connection(self):
+        # Verify the user's selected settings, not the HTTP adapter's minimal hint.
+        self._complete('Reply with the single word OK.', 'OK', json_output=False, max_output_tokens=8)
 
     def _complete_request(self, system, user, *, json_output, max_output_tokens=3000, reasoning_effort=None):
         state = self.account.status()
@@ -66,14 +95,12 @@ class CodexSubscriptionProvider(OpenAICompatibleProvider):
         if not state['authenticated']:
             raise ProviderError('请先在设置中登录 ChatGPT，使用 Codex 订阅额度', 409, code='authentication', diagnostics={'request_sent': False})
         effort = self.effective_reasoning_effort(reasoning_effort)
-        if effort in {'none', 'minimal'}:
-            effort = 'low'
         with tempfile.TemporaryDirectory(prefix='lira-codex-') as directory:
             cwd = Path(directory)
             schema = cwd / 'output.json'
             schema.write_text(json.dumps({'type': 'object', 'properties': {'text': {'type': 'string'}},
                 'required': ['text'], 'additionalProperties': False}), encoding='utf-8')
-            args = ['exec', *self.account.options(), '--ignore-user-config', '--ignore-rules',
+            args = ['exec', *self.account.options(https=True), '--ignore-user-config', '--ignore-rules',
                 '--ephemeral', '--json', '--skip-git-repo-check', '--sandbox', 'read-only',
                 '-c', 'web_search="disabled"', '--model', self.model, '--output-schema', str(schema)]
             for feature in ('shell_tool', 'multi_agent', 'apps', 'plugins', 'browser_use',
