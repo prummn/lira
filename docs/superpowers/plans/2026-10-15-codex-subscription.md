@@ -15,5 +15,6 @@
 - [x] Add Playwright subscription login/metadata/no-key/routing cases before implementing the UI. Extend types/API/locales and add a focused `CodexAccountSettings.tsx` component within the existing profile editor.
 - [x] Run backend tests, subscription and existing profile E2E, then full frontend regressions and build. Obtain focused independent code review and resolve findings. Final backend 552 passed; full browser 62 passed/1 skipped plus final profile/subscription 6 passed; build passed.
 - [x] Update README, restart the backend when idle, prepare an inactive Codex profile and official account login in the working UI. Existing primary stays selected.
-- [ ] User completes OAuth. Load final backend code, test one small real request and inspect official account/limit status before marking live setup complete.
+- [x] Load final backend code after the first pending OAuth session ended without signing in; confirm health, saved inactive subscription and CLI availability.
+- [ ] User completes OAuth. Test one small real request and inspect official account/limit status before marking live setup complete.
 - [x] Commit scoped source/docs/tests; keep account storage, runtime files and the user's `test_papers/` out of version control.
