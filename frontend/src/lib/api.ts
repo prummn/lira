@@ -1,4 +1,5 @@
 import type { Answer, CodexAccountStatus, Collection, ExplainStyle, Graph, HistoryItem, IntelligenceTask, LibraryAnswer, ModelSettings, ModelProfile, ModelProfiles, ModelProfileInput, ModelRouting, Note, NoteKind, Paper, PaperDetail, PaperMetadataUpdate, ReadingDocument, ReadingStatus, ReadingTranslation, SearchHit } from '../types'
+import type { NoteInput } from '../types'
 
 export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); this.name = 'ApiError' }
@@ -46,7 +47,8 @@ export const api = {
   analyze: (id: string) => request<PaperDetail>(`/papers/${encodeURIComponent(id)}/analyze`, { method: 'POST' }),
   ask: (id: string, question: string) => request<Answer>(`/papers/${encodeURIComponent(id)}/ask`, { method: 'POST', ...json({ question }) }),
   explain: (id:string, body:{chunk_id:string;selected_text:string;style:ExplainStyle}) => request<Answer>(`/papers/${encodeURIComponent(id)}/explain`, {method:'POST',...json(body)}),
-  note: (id: string, body: {content: string; kind: NoteKind; page?: number | null; source_text?: string | null; bbox?: number[] | null}) => request<Note>(`/papers/${encodeURIComponent(id)}/notes`, { method: 'POST', ...json(body) }),
+  note: (id: string, body: NoteInput) => request<Note>(`/papers/${encodeURIComponent(id)}/notes`, { method: 'POST', ...json(body) }),
+  updateNote: (id:string,noteId:string,body:{content:string;kind:NoteKind}) => request<Note>(`/papers/${encodeURIComponent(id)}/notes/${encodeURIComponent(noteId)}`,{method:'PATCH',...json(body)}),
   deleteNote: (id: string, noteId: string) => request<unknown>(`/papers/${encodeURIComponent(id)}/notes/${encodeURIComponent(noteId)}`, { method: 'DELETE' }),
   graph: (collectionId: string) => request<Graph>(`/graph${collectionId ? `?collection_id=${encodeURIComponent(collectionId)}` : ''}`),
   search: (query: string, collectionId='') => request<{items: SearchHit[]}>(`/search?query=${encodeURIComponent(query)}${collectionId?'&collection_id='+encodeURIComponent(collectionId):''}`),

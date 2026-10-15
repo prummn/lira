@@ -41,7 +41,7 @@ def test_unversioned_legacy_database_upgrades_without_losing_notes(
         ).one() == (0, 0)
         assert (
             connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-            == "0007_intelligence"
+            == "0008_note_anchors"
         )
         assert connection.execute(text("SELECT one_liner,findings,card_json FROM paper_analysis WHERE paper_id='legacy'")).one() == ('Preserve old analysis','Original finding','{}')
         assert connection.execute(text("SELECT source_url,metadata_sources_json,metadata_warnings_json FROM papers WHERE id='legacy'")).one() == (None, '{}', '[]')
@@ -50,6 +50,8 @@ def test_unversioned_legacy_database_upgrades_without_losing_notes(
         c["name"] for c in inspect(database.engine).get_columns("papers")
     }
     assert "translations" in inspect(database.engine).get_table_names()
+    with database.engine.connect() as connection:
+        assert connection.execute(text("SELECT anchors_json FROM notes WHERE id='old-note'")).scalar() == '[]'
     database.engine.dispose()
     engine.dispose()
 

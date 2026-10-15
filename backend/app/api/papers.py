@@ -39,6 +39,7 @@ from ..schemas import (
     CollectionRead,
     NoteCreate,
     NoteRead,
+    NoteUpdate,
     PaperCreate,
     PaperDetail,
     PaperListResponse,
@@ -423,11 +424,19 @@ def create_note(
     paper = require_paper(session, paper_id)
     if payload.page is not None and payload.page > paper.page_count:
         raise HTTPException(422, f"页码必须在 1 至 {paper.page_count} 之间")
+    for anchor in payload.anchors:
+        if anchor.page > paper.page_count:
+            raise HTTPException(422, '引用页码超出 PDF 范围')
+        chunk = next((c for c in paper.chunks if c.page == anchor.page), None)
+        width = anchor.page_width or (chunk.page_width if chunk else None)
+        height = anchor.page_height or (chunk.page_height if chunk else None)
+        if width is not None and anchor.bbox[2] > width + .02 or height is not None and anchor.bbox[3] > height + .02:
+            raise HTTPException(422, '标记超出 PDF 页面范围')
     if payload.bbox is not None:
         if payload.page is None:
             raise HTTPException(422, "保存定位框时必须指定页码")
         page_chunk = next((c for c in paper.chunks if c.page == payload.page), None)
-        if page_chunk and (
+        if not payload.anchors and page_chunk and (
             payload.bbox[2] > (page_chunk.page_width or float("inf"))
             or payload.bbox[3] > (page_chunk.page_height or float("inf"))
         ):
@@ -440,8 +449,21 @@ def create_note(
         page=payload.page,
         source_text=payload.source_text,
         bbox_json=json.dumps(payload.bbox) if payload.bbox else None,
+        anchors_json=json.dumps([anchor.model_dump() for anchor in payload.anchors]),
     )
     session.add(note)
+    session.commit()
+    return note_read(note)
+
+
+@router.patch('/papers/{paper_id}/notes/{note_id}', response_model=NoteRead)
+def update_note(paper_id: str, note_id: str, payload: NoteUpdate, session: Session = Depends(get_db)) -> NoteRead:
+    require_paper(session, paper_id)
+    note = session.get(Note, note_id)
+    if note is None or note.paper_id != paper_id:
+        raise HTTPException(404, '未找到这篇论文中的笔记')
+    note.content, note.kind = payload.content, payload.kind
+    note.updated_at = datetime.now(timezone.utc)
     session.commit()
     return note_read(note)
 

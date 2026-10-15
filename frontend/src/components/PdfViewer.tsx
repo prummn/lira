@@ -6,7 +6,9 @@ import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { useUi } from '../lib/i18n'
-import type { ReadingParagraph } from '../types'
+import type { NoteAnchor, ReadingParagraph } from '../types'
+import { capturePdfSelection } from '../lib/pdfAnnotations'
+import type { PdfAnnotation } from '../lib/pdfAnnotations'
 import { PdfPage, clamp, evidenceRectangle, normalizeText, sourceTextRectangle } from './PdfPage'
 import type { PageGeometry, Rectangle, Viewport } from './PdfPage'
 import './pdf-viewer.css'
@@ -24,7 +26,7 @@ export interface PdfLocator {
   /** Increment to revisit an already selected piece of evidence. */
   nonce?: number
 }
-export interface PdfSelection { page: number; text: string; bbox: number[] }
+export interface PdfSelection { page: number; text: string; bbox: number[]; anchors?:NoteAnchor[] }
 export interface PdfViewerProps {
   url: string
   initialPage?: number
@@ -35,6 +37,9 @@ export interface PdfViewerProps {
   activeParagraphId?: string | null
   translatedParagraphIds?: string[]
   onTranslateParagraph?: (paragraph: ReadingParagraph) => void
+  annotations?:PdfAnnotation[]
+  activeNoteId?:string|null
+  onOpenAnnotation?:(annotation:PdfAnnotation)=>void
 }
 type Destination = string | unknown[] | null
 interface OutlineEntry { title: string; destination: Destination; depth: number; id: string }
@@ -44,6 +49,7 @@ interface ReadingAnchor { page: number; fraction: number; horizontal: number }
 interface PendingTarget { page: number; source: string; locator?:PdfLocator }
 const PAGE_GAP = 20, READING_LINE = 100
 const EMPTY_PARAGRAPHS: ReadingParagraph[] = [], EMPTY_IDS: string[] = []
+const EMPTY_ANNOTATIONS:PdfAnnotation[]=[]
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error)
 
 function readableError(error: unknown, t: ReturnType<typeof useUi>['t']): string {
@@ -61,7 +67,7 @@ function flattenOutline(entries: Awaited<ReturnType<PDFDocumentProxy['getOutline
   })
 }
 
-export function PdfViewer({ url, initialPage = 1, locator, onSelection, onPageChange, paragraphs = EMPTY_PARAGRAPHS, activeParagraphId, translatedParagraphIds = EMPTY_IDS, onTranslateParagraph }: PdfViewerProps) {
+export function PdfViewer({ url, initialPage = 1, locator, onSelection, onPageChange, paragraphs = EMPTY_PARAGRAPHS, activeParagraphId, translatedParagraphIds = EMPTY_IDS, onTranslateParagraph, annotations=EMPTY_ANNOTATIONS,activeNoteId,onOpenAnnotation }: PdfViewerProps) {
   const { t } = useUi()
   const [document, setDocument] = useState<PDFDocumentProxy | null>(null)
   const [measures, setMeasures] = useState<PageMeasure[]>([])
@@ -107,6 +113,17 @@ export function PdfViewer({ url, initialPage = 1, locator, onSelection, onPageCh
   const tRef = useRef(t)
   locatorRef.current = locator; initialPageRef.current = initialPage
   callbacksRef.current = { onSelection, onPageChange }; tRef.current = t
+  const captureSelection=()=>{
+    const selection=window.getSelection(),scroller=scrollRef.current
+    if(!selection||selection.isCollapsed||!selection.rangeCount||!scroller)return
+    if(!selection.anchorNode?.parentElement?.closest('.pdfv-text-layer')||!selection.focusNode?.parentElement?.closest('.pdfv-text-layer')||!scroller.contains(selection.anchorNode)||!scroller.contains(selection.focusNode))return
+    const pages=layoutRef.current.flatMap(({geometry})=>{
+      const container=readyTextRef.current.get(geometry.page)
+      return container?.isConnected?[{geometry,container}]:[]
+    })
+    const selected=capturePdfSelection(selection.getRangeAt(0),pages)
+    if(selected?.text)callbacksRef.current.onSelection?.(selected)
+  }
   const locatorKey = locator ? JSON.stringify([locator.page, locator.bbox, locator.page_width, locator.page_height, locator.source_text, locator.nonce, locator.kind]) : ''
 
   const layout = useMemo(() => {
@@ -396,11 +413,11 @@ export function PdfViewer({ url, initialPage = 1, locator, onSelection, onPageCh
           <div className="pdfv-outline-heading"><strong>{t('pdfvOutline')}</strong><button className="pdfv-icon-button" type="button" aria-label={t('pdfvCloseOutline')} onClick={() => { captureAnchor(); setOutlineOpen(false) }}><X size={14} /></button></div>
           {outlineError ? <p className="pdfv-outline-message" role="alert">{outlineError}</p> : !outline.length ? <p className="pdfv-outline-message">{loading ? t('pdfvOutlineLoading') : t('pdfvNoOutline')}</p> : outline.map(entry => <button type="button" key={entry.id} className="pdfv-outline-entry" style={{ paddingLeft: `${12 + Math.min(entry.depth, 5) * 12}px` }} disabled={!entry.destination} onClick={() => void jumpToOutline(entry)} title={entry.title}><ChevronDown size={11} /><span>{entry.title || t('pdfvUnnamed')}</span></button>)}
         </aside>}
-        <div ref={scrollRef} className="pdfv-scroll" tabIndex={0} aria-busy={loading} onScroll={() => { cancelAnimationFrame(frameRef.current); frameRef.current = requestAnimationFrame(inspectScroll) }}>
+        <div ref={scrollRef} className="pdfv-scroll" tabIndex={0} aria-busy={loading} onMouseUp={captureSelection} onKeyUp={event=>{if(event.key.startsWith('Arrow'))captureSelection()}} onScroll={() => { cancelAnimationFrame(frameRef.current); frameRef.current = requestAnimationFrame(inspectScroll) }}>
           {loading && <div className="pdfv-state" role="status"><LoaderCircle size={24} className="pdfv-spin" /><strong>{t('pdfvLoading')}</strong><span>{progress === null ? t('pdfvLoadingHint') : `${t('pdfvLoaded')} ${progress}%`}</span></div>}
           {!loading && loadError && <div className="pdfv-state pdfv-error-state" role="alert"><AlertCircle size={26} /><strong>{t('pdfvUnavailable')}</strong><p>{loadError}</p><button className="pdfv-retry" type="button" onClick={() => setRetry(value => value + 1)}><RotateCcw size={14} />{t('retry')}</button></div>}
           <div className={`pdfv-page-area ${!document ? 'pdfv-hidden' : ''}`}>
-            {document && layout.map(({ geometry }) => <PdfPage key={geometry.page} document={document} geometry={geometry} active={activePages.includes(geometry.page)} maxPixels={maxPixels} locator={locator?.page === geometry.page ? locator : null} query={searchOpen ? query : ''} paragraphs={paragraphs} activeParagraphId={activeParagraphId} translatedParagraphIds={translatedParagraphIds} onTranslateParagraph={onTranslateParagraph} onSelection={onSelection} onText={onText} onReady={onReady} />)}
+            {document && layout.map(({ geometry }) => <PdfPage key={geometry.page} document={document} geometry={geometry} active={activePages.includes(geometry.page)} maxPixels={maxPixels} locator={locator?.page === geometry.page ? locator : null} query={searchOpen ? query : ''} paragraphs={paragraphs} activeParagraphId={activeParagraphId} translatedParagraphIds={translatedParagraphIds} onTranslateParagraph={onTranslateParagraph} annotations={annotations} activeNoteId={activeNoteId} onOpenAnnotation={onOpenAnnotation} onText={onText} onReady={onReady} />)}
           </div>
         </div>
       </div>

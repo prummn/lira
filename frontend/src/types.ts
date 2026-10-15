@@ -25,7 +25,9 @@ export interface Evidence {
   page_width?: number | null; page_height?: number | null
 }
 export type NoteKind = 'note' | 'idea' | 'question' | 'todo' | 'highlight'
-export interface Note { id: string; content: string; page: number | null; kind: NoteKind; source_text: string | null; bbox: number[] | null; created_at: string }
+export interface NoteAnchor { page:number; bbox:number[]; page_width?:number|null; page_height?:number|null; rects:number[][] }
+export interface Note { id: string; content: string; page: number | null; kind: NoteKind; source_text: string | null; bbox: number[] | null; anchors?:NoteAnchor[]; created_at: string; updated_at?:string }
+export interface NoteInput {content:string;kind:NoteKind;page?:number|null;source_text?:string|null;bbox?:number[]|null;anchors?:NoteAnchor[]}
 export interface Analysis {
   one_liner: string | null; problem: string | null; method: string | null; findings: string | null
   limitations: string | null; concepts: string[]; provider?: string; mode?: string

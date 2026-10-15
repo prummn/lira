@@ -246,6 +246,7 @@ class Note(Base, TimestampMixin):
     kind: Mapped[str] = mapped_column(String(32), default="note", nullable=False)
     source_text: Mapped[Optional[str]] = mapped_column(Text)
     bbox_json: Mapped[Optional[str]] = mapped_column(Text)
+    anchors_json: Mapped[str] = mapped_column(Text, default='[]', nullable=False)
     paper: Mapped[Paper] = relationship(back_populates="notes")
 
 

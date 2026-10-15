@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, Languages, LoaderCircle, RotateCcw } from 'lucide-react'
+import { AlertCircle, Languages, LoaderCircle, MessageSquare, RotateCcw } from 'lucide-react'
 import { TextLayer } from 'pdfjs-dist'
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist'
 import { useUi } from '../lib/i18n'
 import type { ReadingParagraph } from '../types'
-import type { PdfLocator, PdfSelection } from './PdfViewer'
+import type { PdfLocator } from './PdfViewer'
+import { quoteRectangles } from '../lib/pdfAnnotations'
+import type { PdfAnnotation } from '../lib/pdfAnnotations'
 
 export type Viewport = ReturnType<PDFPageProxy['getViewport']>
 export interface PageGeometry { page: number; viewport: Viewport; canonical: Viewport }
@@ -80,13 +82,15 @@ interface PdfPageProps {
   activeParagraphId?: string | null
   translatedParagraphIds: string[]
   onTranslateParagraph?: (paragraph: ReadingParagraph) => void
-  onSelection?: (selection: PdfSelection) => void
+  annotations:PdfAnnotation[]
+  activeNoteId?:string|null
+  onOpenAnnotation?:(annotation:PdfAnnotation)=>void
   onText: (page: number, text: string) => void
   onReady: (page: number, container: HTMLElement, hasText: boolean) => void
 }
 
 /** Only this component owns page resources; shells retain their measured size. */
-export function PdfPage({ document, geometry, active, maxPixels, locator, query, paragraphs, activeParagraphId, translatedParagraphIds, onTranslateParagraph, onSelection, onText, onReady }: PdfPageProps) {
+export function PdfPage({ document, geometry, active, maxPixels, locator, query, paragraphs, activeParagraphId, translatedParagraphIds, onTranslateParagraph, annotations, activeNoteId, onOpenAnnotation, onText, onReady }: PdfPageProps) {
   const { t } = useUi()
   const hostRef = useRef<HTMLDivElement>(null)
   const textRef = useRef<HTMLDivElement | null>(null)
@@ -96,8 +100,9 @@ export function PdfPage({ document, geometry, active, maxPixels, locator, query,
   const [retry, setRetry] = useState(0)
   const [source, setSource] = useState<Rectangle | null>(null)
   const [hoveredKey, setHoveredKey] = useState<string | null>(null)
+  const [hoveredNote,setHoveredNote]=useState<string|null>(null)
   callbacks.current = { onText, onReady }
-  const { page, viewport, canonical } = geometry
+  const { page, viewport } = geometry
   const locatorKey = locator ? JSON.stringify(locator) : ''
 
   useEffect(() => {
@@ -175,30 +180,33 @@ export function PdfPage({ document, geometry, active, maxPixels, locator, query,
     return rect ? [{ paragraph, rect, key: `${paragraph.id}-${page}-${index}` }] : []
   })), [paragraphs, geometry, active, ready, page])
   const hovered = regions.find(region => region.key === hoveredKey)
+  const noteRegions=useMemo(()=>!active||!ready?[]:annotations.flatMap(annotation=>annotation.anchors.filter(anchor=>anchor.page===page).flatMap(anchor=>{
+    const box=evidenceRectangle(anchor,geometry)
+    const legacy=!anchor.rects.length&&annotation.notes[0].source_text&&textRef.current?quoteRectangles(annotation.notes[0].source_text,textRef.current,box):[]
+    const rects=anchor.rects.length?anchor.rects.map(bbox=>evidenceRectangle({...anchor,bbox},geometry)).filter((rect):rect is Rectangle=>!!rect):legacy.length?legacy:box?[box]:[]
+    return rects.length?[{annotation,rects}]:[]
+  })),[active,ready,annotations,geometry,page])
+  const noteAt=(x:number,y:number)=>noteRegions.filter(region=>region.rects.some(rect=>x>=rect.left&&x<=rect.left+rect.width&&y>=rect.top&&y<=rect.top+rect.height))
+    .sort((a,b)=>a.rects.reduce((sum,rect)=>sum+rect.width*rect.height,0)-b.rects.reduce((sum,rect)=>sum+rect.width*rect.height,0))[0]
   const inspect: React.PointerEventHandler<HTMLDivElement> = event => {
     if ((event.target as HTMLElement).closest('.pdfv-paragraph-actions')) return
     const bounds = event.currentTarget.getBoundingClientRect()
     const x = event.clientX - bounds.left, y = event.clientY - bounds.top
+    setHoveredNote(noteAt(x,y)?.annotation.id??null)
     const found = regions.filter(({ rect }) => x >= rect.left && x <= rect.left + rect.width && y >= rect.top && y <= rect.top + rect.height).sort((a, b) => a.rect.width * a.rect.height - b.rect.width * b.rect.height)[0]
     if (found) setHoveredKey(found.key)
     else if (!hovered || x < hovered.rect.left - 8 || x > hovered.rect.left + hovered.rect.width + 8 || y < hovered.rect.top - 40 || y > hovered.rect.top + hovered.rect.height + 8) setHoveredKey(null)
   }
-  const captureSelection = () => {
-    const selection = window.getSelection(), container = textRef.current
-    if (!selection || selection.isCollapsed || !selection.rangeCount || !container || !container.contains(selection.anchorNode) || !container.contains(selection.focusNode)) return
-    const text = selection.toString().trim(), origin = container.getBoundingClientRect()
-    const rects = Array.from(selection.getRangeAt(0).getClientRects()).filter(rect => rect.width > 0 && rect.height > 0)
-    if (!text || !rects.length) return
-    const points = rects.flatMap(rect => [[rect.left - origin.left, rect.top - origin.top], [rect.right - origin.left, rect.top - origin.top], [rect.left - origin.left, rect.bottom - origin.top], [rect.right - origin.left, rect.bottom - origin.top]]).map(([x, y]) => {
-      const [pdfX, pdfY] = viewport.convertToPdfPoint(x * viewport.width / origin.width, y * viewport.height / origin.height)
-      return canonical.convertToViewportPoint(pdfX, pdfY)
-    })
-    const rect = rectangleFromPoints(points)
-    onSelection?.({ page, text, bbox: [clamp(rect.left, 0, canonical.width), clamp(rect.top, 0, canonical.height), clamp(rect.left + rect.width, 0, canonical.width), clamp(rect.top + rect.height, 0, canonical.height)].map(value => Math.round(value * 100) / 100) })
-  }
-
-  return <div className="pdfv-page-shell pdfv-paper" data-page-number={page} data-rendered={active && ready ? 'true' : 'false'} style={{ width: viewport.width, height: viewport.height }} onPointerMove={inspect} onPointerDown={inspect} onPointerLeave={() => setHoveredKey(null)}>
-    <div ref={hostRef} className="pdfv-layers" onMouseUp={captureSelection} onKeyUp={event => { if (event.key.startsWith('Arrow')) captureSelection() }} />
+  return <div className={`pdfv-page-shell pdfv-paper ${hoveredNote?'pdfv-over-note':''}`} data-page-number={page} data-rendered={active && ready ? 'true' : 'false'} style={{ width: viewport.width, height: viewport.height }} onPointerMove={inspect} onPointerDown={inspect} onPointerLeave={() => {setHoveredKey(null);setHoveredNote(null)}} onClick={event=>{
+    if(!(event.target as HTMLElement).closest('.pdfv-layers')||!window.getSelection()?.isCollapsed)return
+    const origin=event.currentTarget.getBoundingClientRect(),region=noteAt(event.clientX-origin.left,event.clientY-origin.top)
+    if(region)onOpenAnnotation?.(region.annotation)
+  }}>
+    <div ref={hostRef} className="pdfv-layers" />
+    {noteRegions.map(({annotation,rects})=><div className={`pdfv-note-group ${annotation.notes.some(note=>note.id===activeNoteId)?'is-active':''} ${hoveredNote===annotation.id?'is-hovered':''}`} key={annotation.id}>
+      {rects.map((rect,index)=><div key={index} className="pdfv-note-highlight" data-note-id={annotation.id} style={rect} aria-hidden="true"/>)}
+      <button type="button" className="pdfv-note-marker" aria-label={t('openLinkedNotes')} title={annotation.notes.map(note=>note.kind==='highlight'?t('annotationAddThought'):note.content).join('\n').slice(0,180)} aria-pressed={annotation.notes.some(note=>note.id===activeNoteId)} style={{left:Math.max(3,rects[0].left-25),top:Math.max(3,rects[0].top-4)}} onClick={()=>onOpenAnnotation?.(annotation)}><MessageSquare size={13}/>{annotation.notes.length>1&&<span>{annotation.notes.length}</span>}</button>
+    </div>)}
     {active && ready && highlighted && <div className="pdfv-evidence-overlay" style={highlighted} aria-label={`${t('pdfvEvidenceRegion')} · ${page} ${t('page')}`} />}
     {regions.map(({ paragraph, rect, key }) => <div key={key} className={`pdfv-paragraph-marker ${key === hoveredKey ? 'hovered' : ''} ${paragraph.id === activeParagraphId ? 'selected' : ''}`} style={rect} aria-hidden="true" />)}
     {hovered && <div className="pdfv-paragraph-actions" style={{ top: Math.max(4, hovered.rect.top - 36), left: Math.max(4, Math.min(hovered.rect.left + hovered.rect.width - 124, viewport.width - 132)) }}><button type="button" onClick={() => onTranslateParagraph?.(hovered.paragraph)}><Languages size={14} />{t(translatedParagraphIds.includes(hovered.paragraph.id) ? 'expandTranslation' : 'translate')}</button></div>}

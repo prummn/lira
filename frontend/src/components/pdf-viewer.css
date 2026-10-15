@@ -101,6 +101,14 @@
 .pdfv-text-layer br::selection { background: transparent; }
 .pdfv-text-layer .pdfv-search-match { background: rgba(250, 191, 55, .32); box-shadow: 0 0 0 1px rgba(213, 160, 42, .32); }
 .pdfv-evidence-overlay { position: absolute; z-index: 3; pointer-events: none; border: 1px solid #c5a754; border-radius: 2px; background: rgba(255, 212, 94, .22); box-shadow: 0 0 0 2px rgba(227, 187, 69, .1); }
+.pdfv-note-group { pointer-events:none; }
+.pdfv-note-highlight { position:absolute; z-index:1; border-radius:2px; background:rgba(255, 214, 87, .34); mix-blend-mode:multiply; pointer-events:none; transition:background .15s ease, box-shadow .15s ease; }
+.pdfv-note-group:is(.is-active, .is-hovered) .pdfv-note-highlight { background:rgba(255, 202, 52, .48); box-shadow:0 1px 0 rgba(170, 122, 18, .48); }
+.pdfv-note-marker { position:absolute; z-index:4; display:inline-flex; align-items:center; justify-content:center; gap:2px; min-width:23px; height:24px; padding:3px; border:1px solid #dec88e; border-radius:5px; color:#86621d; background:#fff9e6; cursor:pointer; pointer-events:auto; box-shadow:0 1px 3px #79612c10; font-size:10px; }
+.pdfv-note-marker:hover, .pdfv-note-marker[aria-pressed="true"] { border-color:#b98d35; background:#ffedb8; color:#624307; }
+.pdfv-note-marker:focus-visible { outline:2px solid #946e26; outline-offset:3px; }
+.pdfv-over-note .pdfv-text-layer :is(span, br) { cursor:pointer; }
+@media (prefers-reduced-motion: reduce) { .pdfv-note-highlight { transition:none; } }
 .pdfv-state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 270px; height: 100%; padding: 30px; color: var(--text-3, #8995a6); text-align: center; }
 .pdfv-state > svg { flex: 0 0 auto; }
 .pdfv-state strong { color: var(--text-2, #506074); font-size: 13px; font-weight: 600; }

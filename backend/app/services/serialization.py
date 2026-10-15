@@ -153,7 +153,9 @@ def note_read(note: Note) -> NoteRead:
         kind=note.kind,
         source_text=note.source_text,
         bbox=values(note.bbox_json) or None,
+        anchors=values(note.anchors_json),
         created_at=utc(note.created_at),
+        updated_at=utc(note.updated_at),
     )
 
 

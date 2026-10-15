@@ -1,12 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, Highlighter, Info, MessageSquare, PanelLeftClose, PanelLeftOpen, Sparkles, X } from 'lucide-react'
-import type { Collection, NotebookTab, PaperDetail, ReadingDocument, ReadingParagraph, ReadingTranslation } from '../types'
+import type { Collection, Note, NotebookTab, PaperDetail, ReadingDocument, ReadingParagraph, ReadingTranslation } from '../types'
 import { api, errorMessage } from '../lib/api'
 import { useUi } from '../lib/i18n'
 import { Empty, ErrorBanner, Loading } from '../components/Shared'
 import { PdfViewer } from '../components/PdfViewer'
 import type { PdfLocator, PdfSelection } from '../components/PdfViewer'
 import { Notebook } from '../components/Notebook'
+import type { NoteComposeRequest, NoteFocusRequest } from '../components/NotesPanel'
+import { paperAnnotations } from '../lib/pdfAnnotations'
+import type { PdfAnnotation } from '../lib/pdfAnnotations'
 import { TranslationPanel } from '../components/TranslationPanel'
 import { ExplainPanel } from '../components/ExplainPanel'
 import { MetadataDialog } from '../components/MetadataDialog'
@@ -20,6 +23,13 @@ export function ReaderPage({paperId,collections,reloadWorkspace,back,notify,init
   const [error,setError] = useState('')
   const [locator,setLocator] = useState<PdfLocator|null>(initialLocator??null)
   const [selection,setSelection] = useState<PdfSelection|null>(null)
+  const selectionRef=useRef(selection)
+  selectionRef.current=selection
+  const [composeRequest,setComposeRequest]=useState<NoteComposeRequest|null>(null)
+  const [noteFocus,setNoteFocus]=useState<NoteFocusRequest|null>(null)
+  const [activeNoteId,setActiveNoteId]=useState<string|null>(null)
+  const noteSequence=useRef(0)
+  const annotations=useMemo(()=>paperAnnotations(paper?.notes??[]),[paper?.notes])
   const [explaining,setExplaining] = useState(false)
   const [page,setPage] = useState(()=>Math.max(1,Number(localStorage.getItem('riw-page-'+paperId))||1))
   const [tab,setTab] = useState<NotebookTab>(initialTab)
@@ -40,17 +50,22 @@ export function ReaderPage({paperId,collections,reloadWorkspace,back,notify,init
   const readerRef = useRef<HTMLDivElement>(null)
   const requests = useRef(new Map<string,AbortController>())
   const generation = useRef(0)
+  const noteRevision=useRef(0)
   const readingInFlight = useRef(false)
   const reload = useCallback(async()=>{
-    try { setPaper(await api.paper(paperId));setError('') }
-    catch(e) { setError(errorMessage(e)) }
+    const token=generation.current,revision=noteRevision.current
+    try {
+      const next=await api.paper(paperId)
+      if(generation.current!==token)return
+      setPaper(current=>current&&noteRevision.current!==revision?{...next,notes:current.notes}:next);setError('')
+    } catch(e) { if(generation.current===token)setError(errorMessage(e)) }
   },[paperId])
   const workspacePaper=workspace.papers.find(item=>item.id===paperId)
   const taskStamp=workspacePaper?.intelligence_task?.updated_at??workspacePaper?.intelligence_status
   useEffect(()=>{if(workspacePaper?.intelligence_task&&!isActiveTask(workspacePaper.intelligence_status))void reload()},[taskStamp,reload])
   useEffect(()=>{
-    const token = ++generation.current
-    api.paper(paperId).then(p=>{if(generation.current===token)setPaper(p)}).catch(e=>{if(generation.current===token)setError(errorMessage(e))})
+    const token = ++generation.current,revision=noteRevision.current
+    api.paper(paperId).then(p=>{if(generation.current===token)setPaper(current=>current&&noteRevision.current!==revision?{...p,notes:current.notes}:p)}).catch(e=>{if(generation.current===token)setError(errorMessage(e))})
     api.settings().then(s=>{if(generation.current===token)setTranslationAvailable(s.translation_available)}).catch(e=>{if(generation.current===token)setError(errorMessage(e))})
     return ()=>{generation.current++;requests.current.forEach(controller=>controller.abort());requests.current.clear()}
   },[paperId])
@@ -111,13 +126,39 @@ export function ReaderPage({paperId,collections,reloadWorkspace,back,notify,init
   }
   const highlight = async()=>{
     if(!selection||saving)return
+    const selected=selection,token=generation.current,intent=noteSequence.current
     setSaving(true);setError('')
-    try { await api.note(paperId,{kind:'highlight',content:selection.text,source_text:selection.text,page:selection.page,bbox:selection.bbox});await reload();setTab('notes');setMode('original');setSelection(null);notify(t('saved')) }
-    catch(e) { setError(errorMessage(e)) }
-    finally { setSaving(false) }
+    try {
+      const saved=await api.note(paperId,{kind:'highlight',content:selected.text,source_text:selected.text,page:selected.page,bbox:selected.bbox,anchors:selected.anchors})
+      if(generation.current!==token)return
+      const focus=selectionRef.current===selected&&noteSequence.current===intent
+      saveNote(saved,focus)
+      if(focus){setMode('original');setSelection(null);window.getSelection()?.removeAllRanges()}
+      notify(t('saved'))
+    } catch(e) { if(generation.current===token)setError(errorMessage(e)) }
+    finally { if(generation.current===token)setSaving(false) }
   }
   const changeLayout=(value:'side'|'bottom')=>{setLayout(value);localStorage.setItem('riw-translation-layout',value)}
-  const takeNote=()=>{setMode('original');setTab('notes')}
+  const saveNote=(note:Note,focus=true)=>{
+    noteRevision.current++
+    setPaper(current=>current?{...current,notes:current.notes.some(item=>item.id===note.id)?current.notes.map(item=>item.id===note.id?note:item):[...current.notes,note]}:current)
+    if(focus){setTab('notes');setActiveNoteId(note.id);setNoteFocus({ids:[note.id],nonce:++noteSequence.current})}
+  }
+  const deleteNote=(id:string)=>{
+    noteRevision.current++
+    setPaper(current=>current?{...current,notes:current.notes.filter(note=>note.id!==id)}:current)
+    setNoteFocus(current=>current?{...current,ids:current.ids.filter(noteId=>noteId!==id)}:null)
+    setActiveNoteId(current=>current===id?null:current)
+  }
+  const openAnnotation=(annotation:PdfAnnotation)=>{
+    setMode('original');setTab('notes');setSelection(null);window.getSelection()?.removeAllRanges()
+    setActiveNoteId(annotation.notes[0].id);setNoteFocus({ids:annotation.notes.map(note=>note.id),nonce:++noteSequence.current})
+  }
+  const takeNote=()=>{
+    if(!selection)return
+    setComposeRequest({selection:structuredClone(selection),nonce:++noteSequence.current})
+    setNoteFocus(null);setActiveNoteId(null);setMode('original');setTab('notes');setSelection(null);window.getSelection()?.removeAllRanges()
+  }
   if(!paper)return error?<ErrorBanner error={error} retry={()=>void reload()}/>:<Loading text={t('paperLoading')}/>
   return <div ref={readerRef} className={`reader-page ${mode==='bilingual'?'translation-reading':''}`}>
     <div className="reader-toolbar">
@@ -134,12 +175,12 @@ export function ReaderPage({paperId,collections,reloadWorkspace,back,notify,init
         <div className="reading-modes">{(['original','bilingual'] as const).map(item=><button key={item} className={mode===item?'active':''} aria-pressed={mode===item} onClick={()=>switchMode(item)}>{t(item)}</button>)}</div>
         {selection&&<div className="selection-actions"><strong>{t('selection')}</strong><span>{selection.text.slice(0,70)}</span><button disabled={saving} onClick={()=>void highlight()}><Highlighter size={14}/>{t('addHighlight')}</button><button onClick={takeNote}><MessageSquare size={14}/>{t('addNote')}</button><button onClick={()=>setExplaining(true)}><Sparkles size={14}/>{t('explainSelection')}</button><button className="icon-btn" aria-label={t('close')} onClick={()=>setSelection(null)}><X size={14}/></button></div>}
         {paper.pdf_available ? <PdfViewer key={paper.id} initialPage={page} url={'/api/papers/'+encodeURIComponent(paper.id)+'/pdf'} locator={locator} onSelection={setSelection} onPageChange={rememberPage}
-          paragraphs={mode==='bilingual'?reading?.paragraphs:undefined} activeParagraphId={selected?.id} translatedParagraphIds={Object.keys(translations)} onTranslateParagraph={paragraph=>void translate(paragraph)}/>
+          paragraphs={mode==='bilingual'?reading?.paragraphs:undefined} activeParagraphId={selected?.id} translatedParagraphIds={Object.keys(translations)} onTranslateParagraph={paragraph=>void translate(paragraph)} annotations={annotations} activeNoteId={activeNoteId} onOpenAnnotation={openAnnotation}/>
           : <Empty title={t('noPdf')} text={t('noPdfHint')}/>}
       </section>
       {mode==='bilingual'&&<TranslationPanel paragraphs={reading?.paragraphs??[]} selected={selected} translation={selected?translations[selected.id]:undefined} pending={!!(selected&&pending[selected.id])} error={selected?translationErrors[selected.id]??'':readingError} available={translationAvailable} page={page} layout={effectiveLayout} sideAvailable={sideAvailable} setLayout={changeLayout} choose={choose} translate={()=>{if(selected)void translate(selected)}} close={()=>{setSelected(null);setLocator(null)}} loading={readingLoading} retry={()=>void loadReading()}/>}
       <section className="reader-research-panel" hidden={mode==='bilingual'} aria-label={t('researchPanel')}>
-        <Notebook paper={paper} setPaper={setPaper} tab={tab} setTab={setTab} selection={selection} clearSelection={()=>setSelection(null)} page={page} locate={locate} reload={reload} notify={notify} collections={collections} reloadWorkspace={reloadWorkspace} workspace={workspace} intelligencePaper={workspacePaper??paper} openMetadata={()=>setMetadataOpen(true)}/>
+        <Notebook paper={paper} setPaper={next=>setPaper(current=>current?{...next,notes:current.notes}:next)} tab={tab} setTab={setTab} page={page} locate={locate} reload={reload} notify={notify} collections={collections} reloadWorkspace={reloadWorkspace} workspace={workspace} intelligencePaper={workspacePaper??paper} openMetadata={()=>setMetadataOpen(true)} composeRequest={composeRequest} focusRequest={noteFocus} onNoteSaved={saveNote} onNoteDeleted={deleteNote} onNoteFocus={setActiveNoteId} clearNoteFocus={()=>{setNoteFocus(null);setActiveNoteId(null)}}/>
       </section>
     </div>
     {explaining&&selection&&<ExplainPanel paper={paper} selection={selection} close={()=>setExplaining(false)} locate={e=>locate({page:e.page??1,bbox:e.bbox,page_width:e.page_width,page_height:e.page_height,source_text:e.source_text})}/>}

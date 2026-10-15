@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 import math
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from .services.downloads import normalize_arxiv_id
 from .services.metadata import normalize_doi
 
@@ -170,11 +170,43 @@ class AnalysisRead(BaseModel):
     prompt_version: str | None = None
 
 
+class NoteAnchor(GeometryModel):
+    page: int = Field(ge=1)
+    bbox: BBox
+    page_width: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    page_height: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    rects: list[BBox] = Field(default_factory=list, max_length=1000)
+
+    @model_validator(mode='after')
+    def valid_regions(self):
+        x0, y0, x1, y1 = self.bbox
+        if self.page_width is not None and x1 > self.page_width + .02 or self.page_height is not None and y1 > self.page_height + .02:
+            raise ValueError('标记超出页面范围')
+        for rect in self.rects:
+            GeometryModel.valid_bbox(rect)
+            if rect[0] < x0 - .02 or rect[1] < y0 - .02 or rect[2] > x1 + .02 or rect[3] > y1 + .02:
+                raise ValueError('逐行标记必须位于选区范围内')
+        return self
+
+
 class NoteCreate(GeometryModel):
     content: str = Field(min_length=1, max_length=100000)
     page: int | None = Field(default=None, ge=1)
     kind: NoteKind = "note"
     source_text: str | None = None
+    anchors: list[NoteAnchor] = Field(default_factory=list, max_length=64)
+
+    @model_validator(mode='after')
+    def consistent_anchors(self):
+        if self.anchors:
+            first = self.anchors[0]
+            pages = [anchor.page for anchor in self.anchors]
+            if pages != sorted(set(pages)):
+                raise ValueError('引用页码必须递增且不重复')
+            if self.page is not None and self.page != first.page or self.bbox is not None and self.bbox != first.bbox:
+                raise ValueError('引用首页与定位信息不一致')
+            self.page, self.bbox = first.page, first.bbox
+        return self
 
     @field_validator("content")
     @classmethod
@@ -187,6 +219,18 @@ class NoteCreate(GeometryModel):
 class NoteRead(NoteCreate):
     id: str
     created_at: datetime
+    updated_at: datetime
+
+
+class NoteUpdate(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    content: str = Field(min_length=1, max_length=100000)
+    kind: NoteKind = 'note'
+
+    @field_validator('content')
+    @classmethod
+    def nonempty(cls, value):
+        return NoteCreate.nonempty_content(value)
 
 
 class TranslationRead(BaseModel):
