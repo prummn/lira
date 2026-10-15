@@ -34,6 +34,9 @@
 .analysis-report summary { color:var(--text-2); cursor:pointer; }
 .coverage-summary { display:grid; gap:6px; padding:10px 0 0; color:var(--text-2); font-size:10px; line-height:1.7; }
 .intelligence-usage { display:flex; flex-wrap:wrap; gap:4px 12px; font-size:9px; color:var(--text-3); line-height:1.8; }
+.model-call-history { font-size:11px; color:var(--text-2); line-height:1.8; margin-top:7px; }
+.model-call-history summary { cursor:pointer; overflow-wrap:anywhere; }
+.model-call-history ul { padding-left:18px; margin:6px 0; }
 .intelligence-answer .provider-line { margin:0 0 16px; }
 .intelligence-claim { border-bottom:1px solid var(--border); padding:0 0 16px; margin:0 0 16px; }
 .intelligence-claim > p { font-size:12px; line-height:1.9; margin:8px 0 11px; white-space:pre-wrap; }

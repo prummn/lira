@@ -17,6 +17,7 @@ from .api.librarian import router as librarian_router
 from .db import BACKEND_DIR, DATABASE_URL, Database
 from .providers.base import ProviderError
 from .services.intelligence import IntelligenceWorker
+from .providers.profiles import ProfileStore, current_store
 
 
 def create_app(
@@ -26,11 +27,19 @@ def create_app(
     seed_demo: bool = True,
 ) -> FastAPI:
     database = Database(database_url or DATABASE_URL)
-    worker = IntelligenceWorker(database)
     storage = storage_dir or Path(
         os.getenv("PAPER_READER_STORAGE_DIR", str(BACKEND_DIR / "storage"))
     )
     config_path = model_config_path or Path(os.getenv("PAPER_READER_MODEL_CONFIG_PATH", str(BACKEND_DIR.parent / ".env")))
+    profiles = ProfileStore(config_path.with_name(config_path.name + '.models.json'))
+    def choose_provider():
+        from .providers import get_model_provider
+        token = current_store.set(profiles)
+        try:
+            return get_model_provider()
+        finally:
+            current_store.reset(token)
+    worker = IntelligenceWorker(database, provider_factory=choose_provider)
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
@@ -55,6 +64,15 @@ def create_app(
     application.state.intelligence_worker = worker
     application.state.storage_dir = storage
     application.state.model_config_path = config_path
+    application.state.model_profiles = profiles
+
+    @application.middleware('http')
+    async def model_profile_context(request: Request, call_next):
+        token = current_store.set(profiles)
+        try:
+            return await call_next(request)
+        finally:
+            current_store.reset(token)
     application.add_middleware(
         CORSMiddleware,
         allow_origins=[

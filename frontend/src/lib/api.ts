@@ -1,4 +1,4 @@
-import type { Answer, Collection, ExplainStyle, Graph, HistoryItem, IntelligenceTask, LibraryAnswer, ModelSettings, Note, NoteKind, Paper, PaperDetail, PaperMetadataUpdate, ReadingDocument, ReadingStatus, ReadingTranslation, SearchHit } from '../types'
+import type { Answer, Collection, ExplainStyle, Graph, HistoryItem, IntelligenceTask, LibraryAnswer, ModelSettings, ModelProfile, ModelProfiles, ModelProfileInput, ModelRouting, Note, NoteKind, Paper, PaperDetail, PaperMetadataUpdate, ReadingDocument, ReadingStatus, ReadingTranslation, SearchHit } from '../types'
 
 export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); this.name = 'ApiError' }
@@ -51,6 +51,10 @@ export const api = {
   graph: (collectionId: string) => request<Graph>(`/graph${collectionId ? `?collection_id=${encodeURIComponent(collectionId)}` : ''}`),
   search: (query: string, collectionId='') => request<{items: SearchHit[]}>(`/search?query=${encodeURIComponent(query)}${collectionId?'&collection_id='+encodeURIComponent(collectionId):''}`),
   settings: () => request<ModelSettings>('/settings'),
+  modelProfiles: () => request<ModelProfiles>('/settings/profiles'),
+  saveModelProfile: (id:string|null,body:ModelProfileInput) => request<ModelProfile>(`/settings/profiles${id?'/'+encodeURIComponent(id):''}`, {method:id?'PUT':'POST',...json(body)}),
+  deleteModelProfile: (id:string) => request<ModelProfiles>(`/settings/profiles/${encodeURIComponent(id)}`,{method:'DELETE'}),
+  modelRouting: (body:ModelRouting) => request<ModelProfiles>('/settings/routing',{method:'PUT',...json(body)}),
   readingParagraphs: (id:string) => request<ReadingDocument>(`/papers/${encodeURIComponent(id)}/reading-paragraphs`),
   translateParagraph: (id:string,paragraphId:string,signal?:AbortSignal) => request<ReadingTranslation & {model_version?:string;cached:boolean}>(`/papers/${encodeURIComponent(id)}/translate`, {method:'POST',...json({paragraph_id:paragraphId}),signal}),
   updateModelSettings: (body: {base_url:string;model:string;api_key?:string|null;wire_api:'chat_completions'|'responses';reasoning_effort:'disabled'|'none'|'minimal'|'low'|'medium'|'high'|'xhigh';timeout:number;test_connection:boolean}) => request<ModelSettings>('/settings/model', {method:'PUT', ...json(body)}),

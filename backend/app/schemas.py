@@ -31,6 +31,26 @@ class ModelSettingsUpdate(BaseModel):
         return value
 
 
+class ModelProfileUpdate(ModelSettingsUpdate):
+    name: str = Field(min_length=1, max_length=80)
+    max_concurrency: int = Field(default=1, ge=1, le=16)
+    completion_parameter: Literal['max_tokens', 'max_completion_tokens'] = 'max_completion_tokens'
+    json_mode: Literal['json_object', 'none'] = 'json_object'
+
+    @field_validator('name')
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        if not value.strip() or any(ord(c) < 32 or ord(c) == 127 for c in value):
+            raise ValueError('请输入有效的配置名称')
+        return value.strip()
+
+
+class ModelRoutingUpdate(BaseModel):
+    active_id: str | None = None
+    fallback_ids: list[str] = Field(default_factory=list, max_length=20)
+    auto_fallback: bool = False
+
+
 class TaskRead(BaseModel):
     id: str
     paper_id: str

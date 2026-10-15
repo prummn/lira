@@ -480,11 +480,12 @@ def validate_answer(data: dict, sources: list[Source]) -> tuple[list[LibraryAnsw
 
 
 def _usage(calls: list) -> dict:
+    calls = [attempt for call in calls for attempt in (*getattr(call, 'attempts', ()), call)]
     input_tokens = output_tokens = 0
     reported = True
     actual_calls = 0
     for call in calls:
-        if call.cached:
+        if call.cached or not getattr(call, 'request_sent', True):
             continue
         actual_calls += 1
         usage = call.usage or {}
@@ -499,7 +500,9 @@ def _usage(calls: list) -> dict:
             'output_tokens': output_tokens if reported else None,
             'total_tokens': input_tokens + output_tokens if reported else None,
             'usage_reported': reported, 'model_calls': actual_calls,
-            'cache_hits': sum(call.cached for call in calls)}
+            'cache_hits': sum(call.cached for call in calls),
+            'calls': [{'model': call.model, 'cached': call.cached, 'usage': call.usage,
+                       'provider': getattr(call, 'provenance', {})} for call in calls]}
 
 
 def unmatched_technical_terms(item: LibraryAnswerItem) -> list[str]:
@@ -589,7 +592,7 @@ def review_terminology(database: Database, provider, items: list[LibraryAnswerIt
                 accepted[index] = verified[0]
     rejected = len(flagged) - len(accepted)
     if rejected:
-        evict_call(database, provider, system, payload, **options)
+        evict_call(database, response.actual_provider or provider, system, payload, **options)
     report.update(checked_items=len(accepted), rejected_items=rejected)
     return [accepted[index] if index in flagged else item for index, item in enumerate(items)
         if index not in flagged or index in accepted], rejected, [response], report
@@ -614,7 +617,7 @@ def answer_library(database: Database, provider, payload: LibraryQuestion) -> Li
     if (not isinstance(planner.data.get('queries'), list) or not isinstance(planner.data.get('paper_ids'), list)
             or not isinstance(planner.data.get('intent'), str)
             or planner.data['intent'] not in {'metadata', 'research', 'notes', 'comparison'}):
-        evict_call(database, provider, planner_system, planner_payload, **planner_options)
+        evict_call(database, planner.actual_provider or provider, planner_system, planner_payload, **planner_options)
         raise ProviderError('模型检索计划格式无效，请重试；论文和笔记已保留')
     sources, retrieval = collect_sources(database, records, planner.data, payload.question)
     original_ids = {f'S{index:05d}': source.id for index, source in enumerate(sources, 1)}
@@ -627,12 +630,12 @@ def answer_library(database: Database, provider, payload: LibraryQuestion) -> Li
     answer_options = {'operation': 'library_answer_v1', 'max_output_tokens': 10000, 'reasoning_effort': 'high'}
     answer = json_call(database, provider, answer_system, answer_payload, **answer_options)
     if not isinstance(answer.data.get('insufficient_evidence'), bool) or not isinstance(answer.data.get('items'), list):
-        evict_call(database, provider, answer_system, answer_payload, **answer_options)
+        evict_call(database, answer.actual_provider or provider, answer_system, answer_payload, **answer_options)
         raise ProviderError('模型回答格式无效，请重试；论文和笔记已保留')
     items, rejected = validate_answer(answer.data, sources)
     _restore_citation_ids(items, original_ids)
     if not items and not answer.data['insufficient_evidence']:
-        evict_call(database, provider, answer_system, answer_payload, **answer_options)
+        evict_call(database, answer.actual_provider or provider, answer_system, answer_payload, **answer_options)
         raise ProviderError('模型回答没有通过来源核验，请重试或缩小问题范围')
     items, term_rejected, checks, term_report = review_terminology(database, provider, items)
     rejected += term_rejected
@@ -640,7 +643,7 @@ def answer_library(database: Database, provider, payload: LibraryQuestion) -> Li
     limitations = [s[:1000] for s in answer.data.get('limitations', [])[:8]
                    if isinstance(s, str)] if isinstance(answer.data.get('limitations', []), list) else []
     if rejected:
-        evict_call(database, provider, answer_system, answer_payload, **answer_options)
+        evict_call(database, answer.actual_provider or provider, answer_system, answer_payload, **answer_options)
         limitations.append(f'{rejected} 条未通过来源或论断核验的模型条目已排除。')
     comparison_source_type = 'external_metadata' if planner.data['intent'] == 'metadata' else 'paper'
     cited_papers = {c.paper_id for item in items for c in item.citations if c.source_type == comparison_source_type}

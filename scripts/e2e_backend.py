@@ -31,5 +31,5 @@ if __name__ == '__main__':
     document.close()
     with tempfile.TemporaryDirectory(prefix='riw-browser-') as temporary:
         directory = Path(temporary)
-        app = create_app('sqlite:///' + (directory / 'test.db').as_posix(), directory / 'pdfs')
+        app = create_app('sqlite:///' + (directory / 'test.db').as_posix(), directory / 'pdfs', model_config_path=directory / 'model.env')
         uvicorn.run(app, host='127.0.0.1', port=8010)

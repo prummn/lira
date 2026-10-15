@@ -6,8 +6,12 @@ export function UsageLine({usage,cached=false}:{usage?:Usage|null;cached?:boolea
   const {t}=useUi()
   const total=usage?.total_tokens??(usage?.input_tokens!=null&&usage.output_tokens!=null?usage.input_tokens+usage.output_tokens:null)
   const calls=usage?.model_calls??usage?.remote_calls
-  return <div className="intelligence-usage"><span>{total!=null?`${t(usage?.unknown_usage_calls?'reportedTokens':'tokenUsage')} · ${total.toLocaleString()}`:t('usageUnknown')}</span>
+  const connections=new Map<string,{name:string;model:string;failed:number}>()
+  for(const call of usage?.calls??[]){const info=call.provider;if(!info?.profile_id)continue;const key=info.profile_id+':'+call.model;const item=connections.get(key)??{name:info.profile_name??info.profile_id,model:call.model,failed:0};if(info.failure)item.failed++;connections.set(key,item)}
+  return <><div className="intelligence-usage"><span>{total!=null?`${t(usage?.unknown_usage_calls?'reportedTokens':'tokenUsage')} · ${total.toLocaleString()}`:t('usageUnknown')}</span>
     {calls!=null&&<span>{t('modelCalls')} · {calls}</span>}{usage?.cache_hits!=null&&<span>{t('cacheHits')} · {usage.cache_hits}</span>}{!!usage?.unknown_usage_calls&&<span>{t('usagePartial')} · {usage.unknown_usage_calls}</span>}{cached&&<span>{t('cachedResponse')}</span>}</div>
+    {connections.size>0&&<details className="model-call-history"><summary>{t('modelConnectionsUsed')} · {Array.from(connections.values(),p=>p.name).join(' / ')}</summary><ul>{Array.from(connections.entries(),([key,p])=><li key={key}>{p.name} · {p.model}{p.failed>0&&` · ${t('modelConnectionFailure')} ${p.failed}`}</li>)}</ul></details>}
+  </>
 }
 export function CoverageSummary({report}:{report?:IntelligenceReport|null}) {
   const {t}=useUi();const coverage=report?.coverage??report??{}

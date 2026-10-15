@@ -52,8 +52,16 @@ export interface Graph {
 }
 export interface SearchHit { paper_id: string; title: string; chunk_id: string; page: number; section: string | null; content: string; match_type: string }
 export interface ModelSettings { provider: string; mode: string; configured: boolean; translation_available: boolean; model?:string|null; base_url?:string|null; api_key_configured?:boolean; configuration_error?:string|null; wire_api?:string|null; reasoning_effort?:string|null; intelligence_available?:boolean; quality?:Record<string,unknown> }
+export interface ModelProfile {
+  id:string; name:string; base_url:string; model:string; api_key_configured:boolean
+  wire_api:'chat_completions'|'responses'; reasoning_effort:'disabled'|'none'|'minimal'|'low'|'medium'|'high'|'xhigh'
+  timeout:number; max_concurrency:number; completion_parameter:'max_tokens'|'max_completion_tokens'; json_mode:'json_object'|'none'
+}
+export interface ModelRouting { active_id:string|null; fallback_ids:string[]; auto_fallback:boolean }
+export interface ModelProfiles extends ModelRouting { profiles:ModelProfile[]; configuration_error?:string }
+export type ModelProfileInput = Omit<ModelProfile,'id'|'api_key_configured'> & { api_key:string|null; test_connection:boolean }
 export type IntelligenceStatus = 'unanalyzed'|'queued'|'running'|'completed'|'partial'|'failed'|'cancelled'
-export interface Usage { input_tokens?:number|null; output_tokens?:number|null; total_tokens?:number|null; model_calls?:number; remote_calls?:number; cache_hits?:number;unknown_usage_calls?:number }
+export interface Usage { input_tokens?:number|null; output_tokens?:number|null; total_tokens?:number|null; model_calls?:number; remote_calls?:number; cache_hits?:number;unknown_usage_calls?:number; calls?:{cached:boolean;model:string;provider?:{profile_id?:string;profile_name?:string;failure?:{code:string}}}[] }
 export interface IntelligenceReport { coverage?:Record<string,unknown>; usage?:Usage; [key:string]:unknown }
 export interface IntelligenceTask { id:string;paper_id:string;status:Exclude<IntelligenceStatus,'unanalyzed'>;phase:string;completed_steps:number;total_steps:number;report:IntelligenceReport;error:string|null;created_at?:string;updated_at?:string }
 export interface LibraryCitation { id:string;paper_id:string;title:string;source_id:string;source_text:string;source_type:'paper'|'external_metadata'|'user'|'ai';page?:number|null;section?:string|null;chunk_id?:string|null;bbox?:number[]|null;page_width?:number|null;page_height?:number|null }

@@ -111,8 +111,9 @@ def recover_interrupted(database: Database) -> None:
 
 
 class IntelligenceWorker:
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: Database, provider_factory=None) -> None:
         self.database = database
+        self.provider_factory = provider_factory or get_model_provider
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._lock = threading.Lock()
@@ -157,7 +158,7 @@ class IntelligenceWorker:
         if not self._lock.acquire(blocking=wait):
             return False
         try:
-            chosen = provider or get_model_provider()
+            chosen = provider or self.provider_factory()
             if chosen.mode != 'remote' or not chosen.configured:
                 return False
             with self.database.sessions() as session:

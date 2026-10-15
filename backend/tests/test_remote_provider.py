@@ -145,7 +145,7 @@ def test_interrupted_responses_stream_never_accepts_partial_json_and_preserves_o
     ('rate_limit_error', 'rate_limit', True),
     ('invalid_api_key', 'authentication', False),
     ('invalid_request_error', 'invalid_request', False),
-    ('private-test-secret-error', 'upstream_error', False),
+    ('private-test-secret-error', 'upstream_error', True),
 ])
 def test_responses_stream_failure_classifies_only_known_error_codes(event_type, upstream_code, code, retryable):
     from app.providers.base import ProviderError
@@ -529,6 +529,23 @@ def test_responses_stream_truncation_and_error_are_safe_failures(events):
     assert 'private upstream details' not in str(error.value)
     if events[0]['type'] == 'response.incomplete':
         assert provider.last_usage['output_tokens'] == 99
+
+
+@pytest.mark.parametrize('event', [
+    {'type': 'error', 'code': 'private-provider-code', 'message': 'private-secret'},
+    {'type': 'response.failed', 'response': {'status': 'failed', 'error': {'code': 'private-provider-code', 'message': 'private-secret'}}},
+])
+def test_unknown_terminal_error_after_http_acceptance_is_retryable_without_leaking_details(event):
+    from app.providers.base import ProviderError
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+    provider = OpenAICompatibleProvider(api_key='private-secret', wire_api='responses', transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, headers={'content-type': 'text/event-stream'},
+            content=('data: ' + json.dumps(event) + '\n\n').encode())))
+    with pytest.raises(ProviderError) as caught:
+        provider.complete_json('JSON', {}, max_output_tokens=300)
+    assert caught.value.retryable is True
+    assert caught.value.diagnostics['event_type'] == event['type']
+    assert 'private-' not in json.dumps(caught.value.diagnostics)
 
 
 def test_unknown_sse_error_from_successful_stream_is_retryable():

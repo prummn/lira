@@ -37,6 +37,8 @@ def analysis_fingerprint(provider, chunks: list[PaperChunk], *, prompts: dict[st
         'json_mode': getattr(provider, 'json_mode', ''), 'completion_parameter': getattr(provider, 'completion_parameter', ''),
         'window_chars': WINDOW_CHARS, 'source_chars': SOURCE_CHARS, 'max_window_parts': 128, 'reduce_chars': REDUCE_CHARS, 'max_reduction_facts': MAX_REDUCTION_FACTS, 'extract_output_tokens': 6000, 'synthesis_output_tokens': 10000, 'transport_retries': MAX_TRANSPORT_RETRIES, 'recovery_calls': MAX_RECOVERY_CALLS,
         'science_review_batches': MAX_BATCHES, 'science_review_items': MAX_ITEMS, 'science_review_chars': MAX_PAYLOAD_CHARS}
+    if identity := getattr(provider, 'routing_identity', None):
+        value['routing'] = identity
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
@@ -349,15 +351,16 @@ def _card(data: dict, facts: list[dict], parts: dict[str, SourcePart], chunks: l
 
 
 def _usage(calls: list[CallResult]) -> dict:
-    remote = [call for call in calls if not call.cached]
+    remote = [call for call in calls if not call.cached and call.request_sent]
     unknown = sum(call.usage.get('input_tokens', call.usage.get('prompt_tokens')) is None
         or call.usage.get('output_tokens', call.usage.get('completion_tokens')) is None for call in remote)
     def total(primary: str, alternate: str) -> int | float | None:
         values = [call.usage.get(primary, call.usage.get(alternate)) for call in remote]
         return None if any(value is None for value in values) else sum(values)
-    return {'remote_calls': len(remote), 'cache_hits': len(calls) - len(remote), 'unknown_usage_calls': unknown,
+    return {'remote_calls': len(remote), 'cache_hits': sum(call.cached for call in calls), 'unknown_usage_calls': unknown,
         'input_tokens': total('input_tokens', 'prompt_tokens'), 'output_tokens': total('output_tokens', 'completion_tokens'),
-        'calls': [{'cached': call.cached, 'model': call.model, 'usage': call.usage} for call in calls]}
+        'calls': [{'cached': call.cached, 'model': call.model, 'usage': call.usage,
+                   **({'provider': call.provenance} if call.provenance else {})} for call in calls]}
 
 
 def analyze_full_paper(database: Database, provider, chunks: list[PaperChunk], *, progress: Callable[[str, int, int, dict], None] | None = None, cancelled: Callable[[], bool] | None = None) -> StagedAnalysis:
@@ -372,7 +375,7 @@ def analyze_full_paper(database: Database, provider, chunks: list[PaperChunk], *
     prompt_version = 'staged:' + hashlib.sha256(json.dumps(prompts, sort_keys=True).encode()).hexdigest()[:64]
     report = {'prompt_version': prompt_version, 'coverage': {'total_chars': sum(len(part.content) for part in parts.values()), 'processed_chars': 0, 'total_windows': len(windows), 'processed_windows': 0, 'complete': False}, 'invalid_entries': 0, 'repaired_entries': 0, 'rejections': [], 'recoveries': [], 'structure': extract_structure(chunks)}
     calls: list[CallResult] = []
-    descriptors: list[tuple[str, dict, str, int, str]] = []
+    descriptors: list[tuple] = []
     facts: list[dict] = []
     completed, total = 0, len(windows) + 1
     def check():
@@ -405,7 +408,10 @@ def analyze_full_paper(database: Database, provider, chunks: list[PaperChunk], *
                 response = json_call(database, provider, system, payload, operation, budget, effort)
                 break
             except ProviderError as error:
-                calls.append(CallResult({}, sanitize_usage(getattr(provider, 'last_usage', {})), False, getattr(provider, 'response_model', None) or getattr(provider, 'model', '')))
+                attempts = getattr(error, 'call_attempts', None)
+                calls.extend(attempts or [CallResult({}, sanitize_usage(getattr(provider, 'last_usage', {})), False,
+                    getattr(provider, 'response_model', None) or getattr(provider, 'model', ''),
+                    request_sent=error.diagnostics.get('request_sent') is not False)])
                 report.setdefault('failures', []).append({'phase': current_phase, 'operation': operation,
                     'attempt': attempt + 1, 'code': error.code, 'retryable': error.retryable,
                     'diagnostics': getattr(error, 'diagnostics', {})})
@@ -423,8 +429,12 @@ def analyze_full_paper(database: Database, provider, chunks: list[PaperChunk], *
                     time.sleep(step)
                     delay -= step
                 check()
+        calls.extend(response.attempts)
+        for failed in response.attempts:
+            report['recoveries'].append({'phase': current_phase, 'operation': operation,
+                'kind': 'provider_fallback', 'from': failed.provenance, 'to': response.provenance})
         calls.append(response)
-        descriptors.append((system, payload, operation, budget, effort))
+        descriptors.append((response.actual_provider or provider, system, payload, operation, budget, effort))
         publish(current_phase)
         check()
         return response
@@ -440,10 +450,10 @@ def analyze_full_paper(database: Database, provider, chunks: list[PaperChunk], *
         try:
             verified, invalid = _facts(response.data.get('facts'), window_ids, sources=sources, reject=diagnostics('extract', window_index=index))
         except ProviderError:
-            evict_call(database, provider, *descriptors[-1])
+            evict_call(database, *descriptors[-1])
             raise
         if invalid:
-            evict_call(database, provider, *descriptors[-1])
+            evict_call(database, *descriptors[-1])
         facts.extend(verified)
         report['invalid_entries'] += invalid
         report['coverage']['processed_chars'] += sum(len(part.content) for part in window)
@@ -455,7 +465,7 @@ def analyze_full_paper(database: Database, provider, chunks: list[PaperChunk], *
     report['coverage']['complete'] = True
     if not facts:
         for descriptor in descriptors:
-            evict_call(database, provider, *descriptor)
+            evict_call(database, *descriptor)
         raise ProviderError('模型抽取没有可验证的事实，已有结果已保留')
     source_fact_ids = {fact['id'] for fact in facts}
     pool = _citation_pool(facts, parts)
@@ -479,12 +489,12 @@ def analyze_full_paper(database: Database, provider, chunks: list[PaperChunk], *
                     if checkpoint_invalid or _context_size(checkpoint_facts, pool) >= _context_size(group, pool):
                         raise ProviderError('已缓存归纳仍包含未验证条目')
                 except ProviderError:
-                    evict_call(database, provider, repair_prompt, payload, 'paper_corrected_reduce_v1', 6000, 'high')
+                    evict_call(database, checkpoint.actual_provider or provider, repair_prompt, payload, 'paper_corrected_reduce_v1', 6000, 'high')
                     checkpoint = None
             if checkpoint:
                 response = checkpoint
                 calls.append(response)
-                descriptors.append((repair_prompt, payload, 'paper_corrected_reduce_v1', 6000, 'high'))
+                descriptors.append((response.actual_provider or provider, repair_prompt, payload, 'paper_corrected_reduce_v1', 6000, 'high'))
                 publish('reduce')
                 check()
             else:
@@ -493,7 +503,7 @@ def analyze_full_paper(database: Database, provider, chunks: list[PaperChunk], *
             try:
                 verified, invalid = _reduce_facts(response.data.get('facts'), group, pool, parts, max_facts=max_facts, reject=diagnostics('reduce', level=level, group_index=group_index))
             except ProviderError:
-                evict_call(database, provider, *descriptors[-1])
+                evict_call(database, *descriptors[-1])
                 publish('reduce')
                 if not reserve_recovery():
                     raise
@@ -511,7 +521,7 @@ def analyze_full_paper(database: Database, provider, chunks: list[PaperChunk], *
                     verified, invalid = _reduce_facts(entries, group, pool, parts, max_facts=max_facts,
                         reject=diagnostics('repair_reduce', level=level, group_index=group_index))
                 except ProviderError:
-                    evict_call(database, provider, *descriptors[-1])
+                    evict_call(database, *descriptors[-1])
                     publish('reduce')
                     raise
                 for item in report['rejections'][rejection_start:]:
@@ -519,14 +529,14 @@ def analyze_full_paper(database: Database, provider, chunks: list[PaperChunk], *
                         item['resolved'] = True
                 if not invalid and _context_size(verified, pool) < _context_size(group, pool):
                     cache_validated_call(database, provider, repair_prompt, payload, 'paper_corrected_reduce_v1',
-                        CallResult({'facts': entries}, response.usage, response.cached, response.model), 6000, 'high')
+                        CallResult({'facts': entries}, response.usage, response.cached, response.model, response.provenance, actual_provider=response.actual_provider), 6000, 'high')
                 report['recoveries'].append({'phase': 'reduce', 'kind': 'group_correction',
                     'level': level, 'group_index': group_index, 'retained_parents': len(group)})
             if not verified:
-                evict_call(database, provider, *descriptors[-1])
+                evict_call(database, *descriptors[-1])
                 raise ProviderError('模型归纳没有可验证的事实，已有结果已保留')
             if invalid:
-                evict_call(database, provider, *descriptors[-1])
+                evict_call(database, *descriptors[-1])
             reduced.extend(verified)
             report['invalid_entries'] += invalid
             completed += 1
@@ -534,7 +544,7 @@ def analyze_full_paper(database: Database, provider, chunks: list[PaperChunk], *
         facts = list({fact['id']: fact for fact in reduced}.values())
         if _context_size(facts, pool) >= previous_size:
             for descriptor in descriptors[level_descriptors_start:]:
-                evict_call(database, provider, *descriptor)
+                evict_call(database, *descriptor)
             raise ProviderError('模型归纳未缩减上下文，已有结果已保留')
     if _context_size(facts, pool) > REDUCE_CHARS:
         raise ProviderError('论文超过本轮归纳预算，已保留阶段缓存和已有结果')
@@ -583,9 +593,9 @@ def analyze_full_paper(database: Database, provider, chunks: list[PaperChunk], *
             report['recoveries'].append({'phase': 'synthesize', 'kind': 'card_correction',
                 'requested_fields': [target['field'] for target in targets], 'resolved_fields': sorted(resolved)})
             if invalid or card_error:
-                evict_call(database, provider, *descriptors[-1])
+                evict_call(database, *descriptors[-1])
     if invalid or card_error:
-        evict_call(database, provider, *synth_descriptor)
+        evict_call(database, *synth_descriptor)
     if card_error:
         publish('synthesize')
         raise card_error
@@ -605,7 +615,7 @@ def analyze_full_paper(database: Database, provider, chunks: list[PaperChunk], *
     analysis, science = run_science_review(analysis, parts, science_call, science_validate)
     report['science_review'] = science
     for index in science['invalid_response_batches']:
-        evict_call(database, provider, *review_descriptors[index])
+        evict_call(database, *review_descriptors[index])
     for outcome in science['results']:
         for field, reason in outcome['rejection_reasons'].items():
             if len(report['rejections']) < 100:

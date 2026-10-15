@@ -5,6 +5,7 @@ import hashlib
 import math
 import time
 import ssl
+from contextlib import nullcontext
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
@@ -155,13 +156,27 @@ class OpenAICompatibleProvider:
     @classmethod
     def _response_failure(cls, data: dict) -> ProviderError:
         if data.get('status') == 'failed':
-            return cls._upstream_failure(data.get('error'))
+            return cls._accepted_failure(data.get('error'), 'response.failed')
         if data.get('status') == 'incomplete':
             details = data.get('incomplete_details')
             if isinstance(details, dict) and details.get('reason') == 'max_output_tokens':
                 return ProviderError('模型输出预算不足，请提高输出预算；已有结果已保留', code='output_budget')
             return ProviderError('模型输出未完整完成，已有结果已保留', code='output_incomplete')
         return ProviderError('模型服务响应格式无效，已有结果已保留', code='invalid_response')
+
+    @classmethod
+    def _accepted_failure(cls, error: object, event_type: str) -> ProviderError:
+        failure = cls._upstream_failure(error)
+        failure.diagnostics['event_type'] = event_type
+        # A terminal error in an accepted Responses request is a failed
+        # generation, even when a gateway uses its own error code. Retry it
+        # through the caller's existing bounded recovery budget. Known
+        # authentication/request errors retain their nonretryable classification.
+        if (failure.code == 'upstream_error'
+            and failure.diagnostics.get('upstream_code') in {'unknown', 'missing'}
+            and failure.diagnostics.get('upstream_type') in {'unknown', 'missing'}):
+            failure.retryable = True
+        return failure
 
     @staticmethod
     def _read_json_response(response: httpx.Response, deadline: float) -> bytes:
@@ -214,19 +229,7 @@ class OpenAICompatibleProvider:
                     self._record_response_metadata(event['response'])
                 if event_type == 'error':
                     self._record_response_metadata(event)
-                    failure = self._upstream_failure(event.get('error', event))
-                    # Some Responses gateways emit a 200 SSE envelope with an
-                    # error event whose code/type is absent or provider-specific.
-                    # The request was accepted and the stream failed upstream,
-                    # so retry this narrow case through the bounded caller
-                    # recovery path. Explicit HTTP/auth/request failures still
-                    # remain non-retryable.
-                    if (response.status_code == 200 and isinstance(event.get('error'), dict)
-                            and failure.code == 'upstream_error'
-                            and failure.diagnostics.get('upstream_code') in {'unknown', 'missing'}
-                            and failure.diagnostics.get('upstream_type') in {'unknown', 'missing'}):
-                        failure.retryable = True
-                    raise failure
+                    raise self._accepted_failure(event.get('error', event), 'error')
                 if event_type in ('response.completed', 'response.incomplete', 'response.failed'):
                     if not isinstance(event.get('response'), dict):
                         raise ProviderError('模型流式响应格式无效，已有结果已保留', code='invalid_response')
@@ -241,6 +244,14 @@ class OpenAICompatibleProvider:
         raise ProviderError('模型流式连接结束但未完成输出，请重试；已有结果已保留', code='stream_interrupted', retryable=True)
 
     def _complete(self, system: str, user: str, *, json_output: bool, max_output_tokens: int = 3000, reasoning_effort: str | None = None) -> str:
+        self.last_usage = {}
+        self.response_model = None
+        gate = self._capacity() if hasattr(self, '_capacity') else nullcontext()
+        with gate:
+            return self._complete_request(system, user, json_output=json_output,
+                max_output_tokens=max_output_tokens, reasoning_effort=reasoning_effort)
+
+    def _complete_request(self, system: str, user: str, *, json_output: bool, max_output_tokens: int = 3000, reasoning_effort: str | None = None) -> str:
         self.last_usage = {}
         self.response_model = None
         self.last_http_status = None

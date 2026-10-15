@@ -40,6 +40,7 @@ from ..schemas import (
     PaperSummary,
     PaperUpdate,
     ModelSettingsUpdate,
+    ModelProfileUpdate,
     TranslateRequest,
 )
 from ..services.analysis import analyze_paper, evidence_for
@@ -80,7 +81,10 @@ def _settings_payload() -> dict[str, object]:
         "base_url": getattr(provider,'base_url',None),
         "wire_api": getattr(provider,'wire_api',None),
         "reasoning_effort": getattr(provider,'reasoning_effort',None),
-        "api_key_configured": bool(os.getenv('PAPER_READER_MODEL_API_KEY','').strip()),
+        "timeout": getattr(provider, 'timeout', None),
+        "profile_id": getattr(provider, 'profile_id', None),
+        "profile_name": getattr(provider, 'profile_name', None),
+        "api_key_configured": bool(getattr(provider, '_api_key', '') or os.getenv('PAPER_READER_MODEL_API_KEY','').strip()) if provider.configured else False,
         "configuration_error": getattr(provider,'configuration_error',None),
     }
 
@@ -92,6 +96,17 @@ def settings() -> dict[str, object]:
 
 @router.put('/settings/model')
 def update_model_settings(payload: ModelSettingsUpdate, request: Request) -> dict[str, object]:
+    store = request.app.state.model_profiles
+    if store.migrated:
+        from .model_settings import change
+        state = store.public()
+        active = next((p for p in state['profiles'] if p['id'] == state['active_id']), None)
+        values = {**(active or {}), **payload.model_dump(), 'name': (active or {}).get('name', '当前配置')}
+        saved = change(lambda: store.save(ModelProfileUpdate(**values), state['active_id']))
+        if not state['active_id']:
+            from ..schemas import ModelRoutingUpdate
+            change(lambda: store.route(ModelRoutingUpdate(active_id=saved['id'], fallback_ids=state['fallback_ids'])))
+        return _settings_payload()
     current_key = os.getenv('PAPER_READER_MODEL_API_KEY', '').strip()
     api_key = payload.api_key.strip() if payload.api_key is not None and payload.api_key.strip() else current_key
     if not api_key:
@@ -134,6 +149,12 @@ def update_model_settings(payload: ModelSettingsUpdate, request: Request) -> dic
 
 @router.delete('/settings/model')
 def reset_model_settings(request: Request) -> dict[str, object]:
+    store = request.app.state.model_profiles
+    if store.migrated:
+        from .model_settings import change
+        state = store.public()
+        if state['active_id']:
+            change(lambda: store.delete(state['active_id']))
     for key in MODEL_ENV_KEYS:
         os.environ.pop(key, None)
     try:

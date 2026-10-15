@@ -8,6 +8,17 @@ from .openai_compatible import OpenAICompatibleProvider
 __all__ = ['ModelProvider','MetadataProvider','EmbeddingProvider','MockProvider','OpenAICompatibleProvider','get_model_provider']
 
 def get_model_provider() -> ModelProvider:
+    from .profiles import current_store
+    store = current_store.get()
+    if store is not None:
+        try:
+            selected = store.selected()
+            if selected is not None:
+                return selected
+        except (ValueError, TypeError, OSError):
+            local = MockProvider()
+            local.configuration_error = '本机模型配置无效或无法读取，请在设置中检查连接'
+            return local
     application_key = (os.getenv('PAPER_READER_MODEL_API_KEY') or '').strip()
     explicitly_configured = bool(application_key) or any(
         (os.getenv(name) or '').strip()
