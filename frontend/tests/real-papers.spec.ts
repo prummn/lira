@@ -52,10 +52,10 @@ test('official arXiv URL and three actual PDFs have accurate metadata and usable
       abstract_chars: detail.abstract.length, chunks: detail.chunks.length, evidence: detail.evidence.length,
       method: detail.analysis.card.method.content, findings: detail.analysis.card.main_results.content, source_url: detail.source_url })
     await row.locator('.paper-name > button').click()
-    await expect(page.locator('.pdfv-canvas')).toBeVisible()
+    await expect(page.locator('.pdfv-canvas').first()).toBeVisible()
     await page.getByRole('button', { name: '原文证据', exact: true }).click()
-    await expect(page.locator('.evidence-item')).not.toHaveCount(0)
-    await page.locator('.evidence-item').first().getByRole('button', { name: /定位原文/ }).click()
+    await expect(page.locator('.evidence-source-group')).not.toHaveCount(0)
+    await page.locator('.evidence-source-group').first().getByRole('button', { name: /在 PDF 中查看/ }).click()
     await expect(page.locator('.pdfv-evidence-overlay')).toBeVisible()
     await page.screenshot({ path: `test-artifacts/real-${fixture.arxiv_id}-reader.png` })
     await page.getByRole('button', { name: '返回文献库', exact: true }).click()

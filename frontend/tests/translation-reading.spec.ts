@@ -15,7 +15,7 @@ async function openPaper(page: Page) {
   await page.route('**/api/settings', route => route.fulfill({ json: { provider: 'Fixture', configured: true, mode: 'remote', translation_available: true } }))
   await page.goto('/')
   await page.locator('.paper-row').filter({ hasText: paper.title }).first().locator('.paper-name > button').click()
-  await expect(page.locator('.pdfv-canvas')).toBeVisible()
+  await expect(page.locator('.pdfv-canvas').first()).toBeVisible()
   return { paper, reading }
 }
 
@@ -28,7 +28,7 @@ test('PDF stays typeset while hovering a paragraph reveals translation actions',
     return route.fulfill({ json: { text: '注意力可以写作 $QK^T$，并保留原文中的引用 [12]。', provider: 'Fixture', cached: false } })
   })
   await page.getByRole('button', { name: '中英对照', exact: true }).click()
-  await expect(page.locator('.pdfv-canvas')).toBeVisible()
+  await expect(page.locator('.pdfv-canvas').first()).toBeVisible()
   expect(calls).toBe(0)
   const paragraph = page.locator('.pdfv-paragraph-marker').first()
   await expect(paragraph).toBeVisible()
@@ -38,7 +38,7 @@ test('PDF stays typeset while hovering a paragraph reveals translation actions',
   await page.locator('.pdfv-paragraph-actions').getByRole('button', { name: '翻译此段', exact: true }).click()
   await expect(page.locator('.translated-text')).toContainText('注意力')
   await expect(page.locator('.translated-text .katex')).toBeVisible()
-  await expect(page.locator('.pdfv-canvas')).toBeVisible()
+  await expect(page.locator('.pdfv-canvas').first()).toBeVisible()
   await page.screenshot({path:'test-artifacts/translation-side-1440.png'})
   await page.getByRole('button', { name: '译文放在下方', exact: true }).click()
   await expect(page.locator('.reader-layout')).toHaveClass(/translation-bottom/)
@@ -65,7 +65,7 @@ test('cached paragraph opens offline and formula output cannot execute HTML', as
   await expect(page.locator('.translated-text')).toContainText('本机缓存')
   await expect(page.locator('.translated-text .katex')).toBeVisible()
   await expect(page.locator('.translated-text img')).toHaveCount(0)
-  await expect(page.locator('.pdfv-canvas')).toBeVisible()
+  await expect(page.locator('.pdfv-canvas').first()).toBeVisible()
 })
 
 test('translation errors stay with their paragraph and moving to another page still works', async ({ page }) => {
@@ -78,7 +78,7 @@ test('translation errors stay with their paragraph and moving to another page st
   await page.getByRole('button', { name: '下一页', exact: true }).click()
   await expect(page.locator('.pdfv-page-input')).toHaveValue('2')
   await expect(page.locator('.translation-panel [role=alert]')).toHaveCount(0)
-  await expect(page.locator('.pdfv-canvas')).toBeVisible()
+  await expect(page.locator('.pdfv-page-shell[data-page-number="2"] .pdfv-canvas')).toBeVisible()
 })
 
 test('narrow reading space puts translation below the original and restores the wider layout', async ({ page }) => {
@@ -88,7 +88,7 @@ test('narrow reading space puts translation below the original and restores the 
   await page.setViewportSize({width:960,height:720})
   await expect(page.locator('.reader-layout')).toHaveClass(/translation-bottom/)
   await expect(page.getByRole('button', { name: '译文放在右侧', exact: true })).toBeDisabled()
-  await expect(page.locator('.pdfv-canvas')).toBeVisible()
+  await expect(page.locator('.pdfv-canvas').first()).toBeVisible()
   const panels = await page.evaluate(() => {
     const original=document.querySelector('.pdf-panel')!.getBoundingClientRect()
     const translation=document.querySelector('.translation-panel')!.getBoundingClientRect()

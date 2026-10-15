@@ -26,7 +26,7 @@ test('link import reports download errors, imports a PDF, and opens the reader',
   await dialog.getByRole('button', { name: '下载并导入', exact: true }).click()
   await expect(dialog).toContainText('Evidence Integration Test')
   await dialog.getByRole('button', { name: '打开论文', exact: true }).click()
-  await expect(page.locator('.pdfv-canvas')).toBeVisible()
+  await expect(page.locator('.pdfv-canvas').first()).toBeVisible()
 })
 
 test('metadata edits and refresh preserve favorite, reading state and notes', async ({ page, request }) => {

@@ -1,5 +1,13 @@
 import { expect, test } from '@playwright/test'
 
+test('workspace identifies itself as LIRA with a distinct brand mark', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.locator('.brand')).toContainText('LIRA')
+  await expect(page.locator('.brand')).toContainText('LITERATURE RESEARCH ATLAS')
+  await expect(page.locator('.lira-mark')).toBeVisible()
+  await expect(page).toHaveTitle(/LIRA/)
+})
+
 test('workspace scrolls inside the main content while navigation stays fixed', async ({ page }) => {
   await page.goto('/')
   const shell = page.locator('.page-wrap').first()

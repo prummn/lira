@@ -10,6 +10,7 @@ import { KnowledgePage } from './pages/KnowledgePage'
 import { ResearchersPage } from './pages/ResearchersPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { LibrarianPage } from './pages/LibrarianPage'
+import { BrandMark } from './components/BrandMark'
 import type { LibrarianThread, NotebookTab, Page } from './types'
 import type { PdfLocator } from './components/PdfViewer'
 import './styles.css'
@@ -49,7 +50,7 @@ function WorkspaceApp() {
   }
   return <div className={'app-shell ' + (page === 'reader' ? 'reader-active' : '')}>
     <aside className="sidebar">
-      <div className="brand"><span className="brand-mark"><BookOpen size={19}/></span><div><strong>{t('brand')}</strong><small>RESEARCH INTELLIGENCE</small></div></div>
+      <div className="brand"><span className="brand-mark"><BrandMark/></span><div><strong>{t('brand')}</strong><small>{t('brandCaption')}</small></div></div>
       <div className="workspace-label"><span className="workspace-dot"/>{t('workspace')}</div>
       <nav className="primary-nav" aria-label={t('workspace')}>{navigation.map(item => <button key={item.id} aria-label={t(item.id)} className={'nav-item ' + (page === item.id ? 'active' : '')} onClick={() => setPage(item.id)}><item.icon size={17}/><span>{t(item.id)}</span>{item.id === 'library' && <small>{workspace.papers.length}</small>}</button>)}</nav>
       <div className="sidebar-section-header"><span>{t('collections')}</span><button className="icon-btn" aria-label={t('newCollection')} onClick={() => setCreating(true)}><Plus size={16}/></button></div>
