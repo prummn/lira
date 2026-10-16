@@ -101,11 +101,25 @@
 .pdfv-text-layer br::selection { background: transparent; }
 .pdfv-text-layer .pdfv-search-match { background: rgba(250, 191, 55, .32); box-shadow: 0 0 0 1px rgba(213, 160, 42, .32); }
 .pdfv-evidence-overlay { position: absolute; z-index: 3; pointer-events: none; border: 1px solid #c5a754; border-radius: 2px; background: rgba(255, 212, 94, .22); box-shadow: 0 0 0 2px rgba(227, 187, 69, .1); }
-.pdfv-note-group { pointer-events:none; }
-.pdfv-note-highlight { position:absolute; z-index:1; border-radius:2px; background:rgba(255, 214, 87, .34); mix-blend-mode:multiply; pointer-events:none; transition:background .15s ease, box-shadow .15s ease; }
-.pdfv-note-group:is(.is-active, .is-hovered) .pdfv-note-highlight { background:rgba(255, 202, 52, .48); box-shadow:0 1px 0 rgba(170, 122, 18, .48); }
-.pdfv-note-marker { position:absolute; z-index:4; display:inline-flex; align-items:center; justify-content:center; gap:2px; min-width:23px; height:24px; padding:3px; border:1px solid #dec88e; border-radius:5px; color:#86621d; background:#fff9e6; cursor:pointer; pointer-events:auto; box-shadow:0 1px 3px #79612c10; font-size:10px; }
-.pdfv-note-marker:hover, .pdfv-note-marker[aria-pressed="true"] { border-color:#b98d35; background:#ffedb8; color:#624307; }
+.pdfv-note-group { --note-color:#b8791f; --note-ink:#86621d; --note-surface:#fff9e6; --note-hover:#ffedb8; --note-focus:#624307; pointer-events:none; }
+.pdfv-note-group-kind-note { --note-color:#5d7e9f; --note-ink:#536b82; --note-surface:#f1f6fb; --note-hover:#dceaf6; --note-focus:#38536d; }
+.pdfv-note-group-kind-idea { --note-color:#ac8d2d; --note-ink:#86702b; --note-surface:#fff9df; --note-hover:#f8edb6; --note-focus:#6f5b18; }
+.pdfv-note-group-kind-question { --note-color:#a36492; --note-ink:#7d4d72; --note-surface:#fbf0f8; --note-hover:#f2d9eb; --note-focus:#603652; }
+.pdfv-note-group-kind-todo { --note-color:#4d9a86; --note-ink:#3d7567; --note-surface:#edf8f4; --note-hover:#d4eee5; --note-focus:#285c4e; }
+.pdfv-note-highlight { position:absolute; z-index:1; border-radius:2px; background:color-mix(in srgb, var(--note-color) 28%, transparent); mix-blend-mode:multiply; pointer-events:none; transition:background .15s ease, box-shadow .15s ease; }
+.pdfv-note-group:is(.is-active, .is-hovered) .pdfv-note-highlight { background:color-mix(in srgb, var(--note-color) 44%, transparent); box-shadow:0 1px 0 color-mix(in srgb, var(--note-color) 70%, transparent); }
+.pdfv-note-marker { position:absolute; z-index:4; display:inline-flex; align-items:center; justify-content:center; gap:2px; min-width:23px; height:24px; padding:3px; border:1px solid color-mix(in srgb, var(--note-color) 55%, #fff); border-radius:5px; color:var(--note-ink); background:var(--note-surface); cursor:pointer; pointer-events:auto; box-shadow:0 1px 3px color-mix(in srgb, var(--note-color) 12%, transparent); font-size:10px; }
+.pdfv-note-marker:hover, .pdfv-note-marker[aria-pressed="true"] { border-color:var(--note-color); background:var(--note-hover); color:var(--note-focus); }
+.pdfv-note-marker-kind-question { color:#7d4d72; background:#fbf2f8; border-color:#d8b8d0; }
+.pdfv-note-marker-kind-question:hover, .pdfv-note-marker-kind-question[aria-pressed="true"] { color:#683c5e; background:#f3ddeb; border-color:#b98bad; }
+.pdfv-note-marker-kind-todo { color:#3d7567; background:#eef8f4; border-color:#acd2c5; }
+.pdfv-note-marker-kind-todo:hover, .pdfv-note-marker-kind-todo[aria-pressed="true"] { color:#2d5d51; background:#d8efe8; border-color:#7db8a7; }
+.pdfv-note-marker-kind-idea { color:#86702b; background:#fbf8e9; border-color:#dbcf99; }
+.pdfv-note-marker-kind-idea:hover, .pdfv-note-marker-kind-idea[aria-pressed="true"] { color:#6d5b1f; background:#f2eabe; border-color:#bca84f; }
+.pdfv-note-marker-kind-note { color:#536b82; background:#f0f5fa; border-color:#bdcddd; }
+.pdfv-note-marker-kind-note:hover, .pdfv-note-marker-kind-note[aria-pressed="true"] { color:#3f566b; background:#dde9f3; border-color:#8fa9c0; }
+.pdfv-note-marker-edge-left, .pdfv-note-marker-edge-right { width:18px; min-width:18px; height:22px; padding:0; border-radius:50%; }
+.pdfv-note-marker-edge-left span, .pdfv-note-marker-edge-right span { display:none; }
 .pdfv-note-marker:focus-visible { outline:2px solid #946e26; outline-offset:3px; }
 .pdfv-over-note .pdfv-text-layer :is(span, br) { cursor:pointer; }
 @media (prefers-reduced-motion: reduce) { .pdfv-note-highlight { transition:none; } }

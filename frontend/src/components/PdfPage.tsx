@@ -15,6 +15,36 @@ export const clamp = (value: number, min: number, max: number) => Math.min(max, 
 export const normalizeText = (value: string) => value.normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase()
 const cancelled = (error: unknown) => error instanceof Error && /^(RenderingCancelledException|AbortException)$/.test(error.name)
 
+// Keep the note affordance in the paper margin whenever there is room. When
+// an annotation touches both margins, put a compact marker in the page-area
+// gutter instead of clamping it over the first line of the selection.
+const NOTE_MARKER_WIDTH = 30
+const NOTE_MARKER_EDGE_WIDTH = 18
+const NOTE_MARKER_GAP = 6
+type NoteMarkerPlacement = { left: number; top: number; side: 'left' | 'right' | 'edge-left' | 'edge-right' }
+
+export function noteMarkerPlacement(rect: Rectangle, pageWidth: number, pageHeight: number): NoteMarkerPlacement {
+  const leftRoom = Math.max(0, rect.left)
+  const rightRoom = Math.max(0, pageWidth - (rect.left + rect.width))
+  let side: NoteMarkerPlacement['side']
+  let left: number
+  if (leftRoom >= NOTE_MARKER_WIDTH + NOTE_MARKER_GAP) {
+    side = 'left'
+    left = rect.left - NOTE_MARKER_WIDTH - NOTE_MARKER_GAP
+  } else if (rightRoom >= NOTE_MARKER_WIDTH + NOTE_MARKER_GAP) {
+    side = 'right'
+    left = rect.left + rect.width + NOTE_MARKER_GAP
+  } else if (leftRoom >= rightRoom) {
+    side = 'edge-left'
+    left = -NOTE_MARKER_EDGE_WIDTH
+  } else {
+    side = 'edge-right'
+    left = pageWidth
+  }
+  const markerHeight = side.startsWith('edge-') ? 22 : 28
+  return { left, top: clamp(rect.top - 1, 4, Math.max(4, pageHeight - markerHeight - 4)), side }
+}
+
 function rectangleFromPoints(points: number[][]): Rectangle {
   const xs = points.map(point => point[0]), ys = points.map(point => point[1])
   const left = Math.min(...xs), top = Math.min(...ys)
@@ -203,10 +233,18 @@ export function PdfPage({ document, geometry, active, maxPixels, locator, query,
     if(region)onOpenAnnotation?.(region.annotation)
   }}>
     <div ref={hostRef} className="pdfv-layers" />
-    {noteRegions.map(({annotation,rects})=><div className={`pdfv-note-group ${annotation.notes.some(note=>note.id===activeNoteId)?'is-active':''} ${hoveredNote===annotation.id?'is-hovered':''}`} key={annotation.id}>
+    {noteRegions.map(({annotation,rects})=>{
+      const marker = noteMarkerPlacement(rects[0], viewport.width, viewport.height)
+      const markerKinds = [...new Set(annotation.notes.map(note => note.kind))]
+      // If a highlight and a semantic note share an anchor, use the semantic
+      // note's accent. Pure highlights remain amber; the data attribute keeps
+      // all linked kinds inspectable for accessible styling and tests.
+      const markerKind = annotation.notes.find(note => note.kind !== 'highlight')?.kind ?? 'highlight'
+      return <div className={`pdfv-note-group pdfv-note-group-kind-${markerKind} ${annotation.notes.some(note=>note.id===activeNoteId)?'is-active':''} ${hoveredNote===annotation.id?'is-hovered':''}`} key={annotation.id}>
       {rects.map((rect,index)=><div key={index} className="pdfv-note-highlight" data-note-id={annotation.id} style={rect} aria-hidden="true"/>)}
-      <button type="button" className="pdfv-note-marker" aria-label={t('openLinkedNotes')} title={annotation.notes.map(note=>note.kind==='highlight'?t('annotationAddThought'):note.content).join('\n').slice(0,180)} aria-pressed={annotation.notes.some(note=>note.id===activeNoteId)} style={{left:Math.max(3,rects[0].left-25),top:Math.max(3,rects[0].top-4)}} onClick={()=>onOpenAnnotation?.(annotation)}><MessageSquare size={13}/>{annotation.notes.length>1&&<span>{annotation.notes.length}</span>}</button>
-    </div>)}
+        <button type="button" className={`pdfv-note-marker pdfv-note-marker-${marker.side} pdfv-note-marker-kind-${markerKind}`} data-marker-placement={marker.side} data-note-kinds={markerKinds.join(' ')} aria-label={t('openLinkedNotes')} title={annotation.notes.map(note=>note.kind==='highlight'?t('annotationAddThought'):note.content).join('\n').slice(0,180)} aria-pressed={annotation.notes.some(note=>note.id===activeNoteId)} style={{left:marker.left,top:marker.top}} onClick={()=>onOpenAnnotation?.(annotation)}><MessageSquare size={13}/>{annotation.notes.length>1&&<span>{annotation.notes.length}</span>}</button>
+      </div>
+    })}
     {active && ready && highlighted && <div className="pdfv-evidence-overlay" style={highlighted} aria-label={`${t('pdfvEvidenceRegion')} · ${page} ${t('page')}`} />}
     {regions.map(({ paragraph, rect, key }) => <div key={key} className={`pdfv-paragraph-marker ${key === hoveredKey ? 'hovered' : ''} ${paragraph.id === activeParagraphId ? 'selected' : ''}`} style={rect} aria-hidden="true" />)}
     {hovered && <div className="pdfv-paragraph-actions" style={{ top: Math.max(4, hovered.rect.top - 36), left: Math.max(4, Math.min(hovered.rect.left + hovered.rect.width - 124, viewport.width - 132)) }}><button type="button" onClick={() => onTranslateParagraph?.(hovered.paragraph)}><Languages size={14} />{t(translatedParagraphIds.includes(hovered.paragraph.id) ? 'expandTranslation' : 'translate')}</button></div>}

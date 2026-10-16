@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowUpLeft, Check, Highlighter, LoaderCircle, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { ArrowUpLeft, Check, CircleHelp, CheckCircle2, Highlighter, Lightbulb, LoaderCircle, Pencil, Plus, StickyNote, Trash2, X } from 'lucide-react'
 import type { Note, NoteKind } from '../types'
 import type { PdfLocator, PdfSelection } from './PdfViewer'
 import { noteAnchors } from '../lib/pdfAnnotations'
@@ -14,6 +14,38 @@ export interface NoteFocusRequest {ids:string[];nonce:number}
 type Action={type:'new'}|{type:'quote';selection:PdfSelection}|{type:'edit';note:Note}
 interface Draft {content:string;kind:NoteKind;source:PdfSelection|null;editingId:string|null;originalContent:string;originalKind:NoteKind}
 const blank=():Draft=>({content:'',kind:'note',source:null,editingId:null,originalContent:'',originalKind:'note'})
+type NoteFilter = 'all' | NoteKind
+type NoteSort = 'position' | 'updated'
+
+const noteKinds:NoteKind[]=['highlight','note','idea','question','todo']
+const noteIcons:Record<NoteKind, typeof Highlighter>={
+  highlight:Highlighter,
+  note:StickyNote,
+  idea:Lightbulb,
+  question:CircleHelp,
+  todo:CheckCircle2,
+}
+const parsedDate=(value?:string|null, fallback=0)=>{
+  const result=value?Date.parse(value):NaN
+  return Number.isFinite(result)?result:fallback
+}
+
+/** Return a stable document position for explicit anchors. Legacy page/bbox
+ * notes have no reliable line geometry and stay after anchored notes. */
+function notePosition(note:Note):[number,number,number,number,string] {
+  const anchor=note.anchors?.[0]
+  if(!anchor) return [Number.MAX_SAFE_INTEGER,Number.MAX_SAFE_INTEGER,Number.MAX_SAFE_INTEGER,parsedDate(note.created_at,Number.MAX_SAFE_INTEGER),note.id]
+  return [anchor.page,anchor.bbox?.[1]??Number.MAX_SAFE_INTEGER,anchor.bbox?.[0]??Number.MAX_SAFE_INTEGER,parsedDate(note.created_at,Number.MAX_SAFE_INTEGER),note.id]
+}
+
+function compareNotes(a:Note,b:Note,sort:NoteSort) {
+  if(sort==='updated') {
+    const aTime=parsedDate(a.updated_at??a.created_at),bTime=parsedDate(b.updated_at??b.created_at)
+    return bTime-aTime || b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id)
+  }
+  const ap=notePosition(a),bp=notePosition(b)
+  return ap[0]-bp[0] || ap[1]-bp[1] || ap[2]-bp[2] || ap[3]-bp[3] || ap[4].localeCompare(bp[4])
+}
 
 export function NotesPanel({paperId,notes,page,active,composeRequest,focusRequest,locate,onSaved,onDeleted,onFocus,clearFocus,notify}:{
   paperId:string;notes:Note[];page:number;active:boolean;composeRequest:NoteComposeRequest|null;focusRequest:NoteFocusRequest|null
@@ -26,6 +58,8 @@ export function NotesPanel({paperId,notes,page,active,composeRequest,focusReques
   const [error,setError]=useState('')
   const [pending,setPending]=useState<Action|null>(null)
   const [deleting,setDeleting]=useState<string|null>(null)
+  const [kindFilter,setKindFilter]=useState<NoteFilter>('all')
+  const [sortMode,setSortMode]=useState<NoteSort>('position')
   const textarea=useRef<HTMLTextAreaElement>(null)
   const form=useRef<HTMLFormElement>(null)
   const lastCompose=useRef<number>()
@@ -34,6 +68,7 @@ export function NotesPanel({paperId,notes,page,active,composeRequest,focusReques
   interaction.current={composeRequest,pending,active}
   const dirty=draft.content.trim()!==draft.originalContent.trim()||draft.kind!==draft.originalKind
   useEffect(()=>{mounted.current=true;return()=>{mounted.current=false}},[])
+  useEffect(()=>{setKindFilter('all');setSortMode('position')},[paperId])
 
   const focusEditor=()=>requestAnimationFrame(()=>{
     form.current?.scrollIntoView({block:'nearest'})
@@ -93,6 +128,9 @@ export function NotesPanel({paperId,notes,page,active,composeRequest,focusReques
     finally{if(mounted.current)setBusy('')}
   }
   const sourcePages=draft.source?.anchors?.length?draft.source.anchors.map(anchor=>anchor.page):draft.source?[draft.source.page]:[]
+  const visibleNotes=[...notes]
+    .filter(note=>kindFilter==='all'||note.kind===kindFilter)
+    .sort((a,b)=>compareNotes(a,b,sortMode))
   return <div className="notes-panel" hidden={!active}>
     <div className="notes-heading"><div><h3>{t('notesTitle')}</h3><p>{t('notesLinkedHint')}</p></div><button type="button" className="text-btn" disabled={!!busy} onClick={()=>request({type:'new'})}><Plus size={14}/>{t('newNote')}</button></div>
     {error&&<ErrorBanner error={error}/>}
@@ -104,10 +142,20 @@ export function NotesPanel({paperId,notes,page,active,composeRequest,focusReques
       <div className="note-editor-actions"><span>{t('noteSaveShortcut')}</span>{(draft.editingId||draft.source)&&<button type="button" className="text-btn" disabled={!!busy} onClick={()=>request({type:'new'})}>{t('cancel')}</button>}<button className="btn primary" disabled={!!busy||!draft.content.trim()}>{busy==='save'?<LoaderCircle size={14} className="spin"/>:<Check size={14}/>} {t(pending?'saveNoteAndSwitch':draft.editingId?'saveNoteChanges':'save')}</button></div>
     </form>
     {focusRequest?.ids.length?<div className="notes-source-context"><span>{t('linkedNotesLocated')} · {focusRequest.ids.length}</span><button className="text-btn" onClick={clearFocus}><X size={12}/>{t('clearNoteFocus')}</button></div>:null}
-    {notes.length===0?<div className="notes-empty"><Highlighter size={19}/><p>{t('notesEmptyHint')}</p></div>:<div className="saved-notes">{[...notes].sort((a,b)=>b.created_at.localeCompare(a.created_at)).map(note=>{
+    {notes.length>0&&<div className="notes-toolbar" aria-label={t('notesViewControls')}>
+      <label><span>{t('notesFilter')}</span><select aria-label={t('notesFilter')} value={kindFilter} onChange={event=>setKindFilter(event.target.value as NoteFilter)}>
+        <option value="all">{t('notesFilterAll')} · {notes.length}</option>
+        {noteKinds.map(kind=><option value={kind} key={kind}>{t(kind)} · {notes.filter(note=>note.kind===kind).length}</option>)}
+      </select></label>
+      <label><span>{t('notesSort')}</span><select aria-label={t('notesSort')} value={sortMode} onChange={event=>setSortMode(event.target.value as NoteSort)}>
+        <option value="position">{t('notesSortPosition')}</option><option value="updated">{t('notesSortUpdated')}</option>
+      </select></label>
+    </div>}
+    {notes.length===0?<div className="notes-empty"><Highlighter size={19}/><p>{t('notesEmptyHint')}</p></div>:visibleNotes.length===0?<div className="notes-filter-empty"><p>{t('notesFilterEmpty')}</p><button type="button" className="text-btn" onClick={()=>setKindFilter('all')}>{t('notesFilterAll')}</button></div>:<div className="saved-notes">{visibleNotes.map(note=>{
       const focused=focusRequest?.ids.includes(note.id),anchors=noteAnchors(note)
-      return <article className={`saved-note ${focused?'is-focused':''}`} id={`reading-note-${note.id}`} data-note-id={note.id} tabIndex={-1} key={note.id} onFocus={()=>onFocus(note.id)}>
-        <div className="saved-note-head"><span className={'note-kind note-kind-'+note.kind}>{t(note.kind)}</span><span className="note-date">{new Date(note.updated_at??note.created_at).toLocaleDateString(language)}</span><button type="button" className="icon-btn" aria-label={t('editNote')} title={t(note.kind==='highlight'?'annotationAddThought':'editNote')} disabled={!!busy} onClick={()=>request({type:'edit',note})}><Pencil size={14}/></button><button type="button" className="icon-btn" aria-label={t('deleteNote')} title={t('deleteNote')} disabled={!!busy} onClick={()=>setDeleting(note.id)}><Trash2 size={14}/></button></div>
+      const KindIcon=noteIcons[note.kind]
+      return <article className={`saved-note note-type-${note.kind} ${focused?'is-focused':''}`} id={`reading-note-${note.id}`} data-note-id={note.id} tabIndex={-1} key={note.id} onFocus={()=>onFocus(note.id)}>
+        <div className="saved-note-head"><span className={'note-kind note-kind-'+note.kind}><KindIcon size={12} strokeWidth={2} aria-hidden="true"/><span>{t(note.kind)}</span></span><span className="note-date">{new Date(note.updated_at??note.created_at).toLocaleDateString(language)}</span><button type="button" className="icon-btn" aria-label={t('editNote')} title={t(note.kind==='highlight'?'annotationAddThought':'editNote')} disabled={!!busy} onClick={()=>request({type:'edit',note})}><Pencil size={14}/></button><button type="button" className="icon-btn" aria-label={t('deleteNote')} title={t('deleteNote')} disabled={!!busy} onClick={()=>setDeleting(note.id)}><Trash2 size={14}/></button></div>
         {note.kind==='highlight'?<blockquote className="saved-highlight-text"><ScientificText text={note.source_text??note.content}/></blockquote>:<><ScientificText text={note.content}/>{note.source_text&&<blockquote><ScientificText text={note.source_text}/></blockquote>}</>}
         <footer>{note.page?<button className="text-btn" onClick={()=>{onFocus(note.id);locate({...anchors[0]??{page:note.page!,bbox:note.bbox},source_text:note.source_text??''})}}><ArrowUpLeft size={12}/>{t('page')} {anchors.length>1?`${anchors[0].page}–${anchors[anchors.length-1].page}`:note.page}</button>:<span>{t('paperNote')}</span>}{note.kind==='highlight'&&<button className="text-btn" disabled={!!busy} onClick={()=>request({type:'edit',note})}><Pencil size={12}/>{t('annotationAddThought')}</button>}</footer>
         {deleting===note.id&&<div className="note-delete-confirm" role="alert"><p>{t('deleteNoteHint')}</p><button className="text-btn" disabled={!!busy} onClick={()=>setDeleting(null)}>{t('cancel')}</button><button className="text-btn danger" disabled={!!busy} onClick={()=>void remove(note)}>{busy===note.id?<LoaderCircle size={13} className="spin"/>:null}{t('confirmDeleteNote')}</button></div>}

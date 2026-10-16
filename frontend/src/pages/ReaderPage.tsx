@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Highlighter, Info, MessageSquare, PanelLeftClose, PanelLeftOpen, Sparkles, X } from 'lucide-react'
+import { ArrowLeft, Highlighter, Info, Languages, MessageSquare, PanelLeftClose, PanelLeftOpen, Sparkles, X } from 'lucide-react'
 import type { Collection, Note, NotebookTab, PaperDetail, ReadingDocument, ReadingParagraph, ReadingTranslation } from '../types'
 import { api, errorMessage } from '../lib/api'
 import { useUi } from '../lib/i18n'
@@ -12,6 +12,7 @@ import { paperAnnotations } from '../lib/pdfAnnotations'
 import type { PdfAnnotation } from '../lib/pdfAnnotations'
 import { TranslationPanel } from '../components/TranslationPanel'
 import { ExplainPanel } from '../components/ExplainPanel'
+import { isShortTranslationSelection, QuickTranslationPopover } from '../components/QuickTranslationPopover'
 import { MetadataDialog } from '../components/MetadataDialog'
 import type { Workspace } from '../lib/useWorkspace'
 import { isActiveTask } from '../lib/intelligence'
@@ -23,6 +24,8 @@ export function ReaderPage({paperId,collections,reloadWorkspace,back,notify,init
   const [error,setError] = useState('')
   const [locator,setLocator] = useState<PdfLocator|null>(initialLocator??null)
   const [selection,setSelection] = useState<PdfSelection|null>(null)
+  const [quickTranslationOpen,setQuickTranslationOpen] = useState(false)
+  useEffect(()=>{setQuickTranslationOpen(false)},[selection?.text])
   const selectionRef=useRef(selection)
   selectionRef.current=selection
   const [composeRequest,setComposeRequest]=useState<NoteComposeRequest|null>(null)
@@ -173,8 +176,8 @@ export function ReaderPage({paperId,collections,reloadWorkspace,back,notify,init
     <div className={`reader-layout ${mode==='bilingual'?`translation-layout translation-${effectiveLayout}`:''}`}>
       <section className="pdf-panel">
         <div className="reading-modes">{(['original','bilingual'] as const).map(item=><button key={item} className={mode===item?'active':''} aria-pressed={mode===item} onClick={()=>switchMode(item)}>{t(item)}</button>)}</div>
-        {selection&&<div className="selection-actions"><strong>{t('selection')}</strong><span>{selection.text.slice(0,70)}</span><button disabled={saving} onClick={()=>void highlight()}><Highlighter size={14}/>{t('addHighlight')}</button><button onClick={takeNote}><MessageSquare size={14}/>{t('addNote')}</button><button onClick={()=>setExplaining(true)}><Sparkles size={14}/>{t('explainSelection')}</button><button className="icon-btn" aria-label={t('close')} onClick={()=>setSelection(null)}><X size={14}/></button></div>}
-        {paper.pdf_available ? <PdfViewer key={paper.id} initialPage={page} url={'/api/papers/'+encodeURIComponent(paper.id)+'/pdf'} locator={locator} onSelection={setSelection} onPageChange={rememberPage}
+        {selection&&<div className="selection-actions"><strong>{t('selection')}</strong><span>{selection.text.slice(0,70)}</span>{isShortTranslationSelection(selection.text)&&<button onClick={()=>setQuickTranslationOpen(true)} aria-pressed={quickTranslationOpen}><Languages size={14}/>{t('quickTranslate')}</button>}<button disabled={saving} onClick={()=>void highlight()}><Highlighter size={14}/>{t('addHighlight')}</button><button onClick={takeNote}><MessageSquare size={14}/>{t('addNote')}</button><button onClick={()=>setExplaining(true)}><Sparkles size={14}/>{t('explainSelection')}</button><button className="icon-btn" aria-label={t('close')} onClick={()=>setSelection(null)}><X size={14}/></button>{quickTranslationOpen&&isShortTranslationSelection(selection.text)&&<QuickTranslationPopover text={selection.text} close={()=>setQuickTranslationOpen(false)}/>}</div>}
+        {paper.pdf_available ? <PdfViewer key={paper.id} initialPage={page} url={'/api/papers/'+encodeURIComponent(paper.id)+'/pdf'} locator={locator} onSelection={next=>{setSelection(next);setQuickTranslationOpen(false)}} onPageChange={rememberPage}
           paragraphs={mode==='bilingual'?reading?.paragraphs:undefined} activeParagraphId={selected?.id} translatedParagraphIds={Object.keys(translations)} onTranslateParagraph={paragraph=>void translate(paragraph)} annotations={annotations} activeNoteId={activeNoteId} onOpenAnnotation={openAnnotation}/>
           : <Empty title={t('noPdf')} text={t('noPdfHint')}/>}
       </section>

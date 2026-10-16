@@ -38,6 +38,8 @@ export interface Translation { id:string;chunk_id:string;text:string;source_text
 export interface ReadingAnchor { chunk_id:string;page:number;bbox:number[]|null;page_width:number|null;page_height:number|null }
 export interface ReadingParagraph { id:string;text:string;source_text:string;section:string|null;kind:'prose'|'caption';anchors:ReadingAnchor[] }
 export interface ReadingTranslation { text:string;model?:string|null }
+export interface QuickDefinition { part_of_speech:string|null; text:string; example:string|null }
+export interface QuickTranslation { query:string; normalized_query:string; translation:string|null; phonetic:string|null; definitions:QuickDefinition[]; source:'youdao'|'dictionaryapi'; cached:boolean }
 export interface ReadingDocument { paragraphs:ReadingParagraph[];translations:Record<string,ReadingTranslation> }
 export interface CardItem { content: string; evidence_ids: string[]; section?: string | null }
 export type CardField = 'one_sentence_summary'|'problem'|'motivation'|'background'|'core_idea'|'method'|'main_results'|'limitations'|'contributions'|'datasets'|'metrics'|'baselines'|'ablation_findings'|'future_work'|'claims'|'related_methods'|'prerequisite_concepts'|'abstract_zh'|'abstract_en'|'tldr'|'section_summaries'

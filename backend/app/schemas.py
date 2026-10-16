@@ -431,6 +431,35 @@ class TranslateRequest(BaseModel):
     force: bool = False
 
 
+class QuickTranslationRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=80)
+
+    @field_validator('text')
+    @classmethod
+    def valid_short_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError('请选择一个英文单词或短词')
+        if any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError('速译文本不能包含控制字符')
+        return value
+
+
+class QuickDefinitionRead(BaseModel):
+    part_of_speech: str | None = None
+    text: str
+    example: str | None = None
+
+
+class QuickTranslationResponse(BaseModel):
+    query: str
+    normalized_query: str
+    translation: str | None = None
+    phonetic: str | None = None
+    definitions: list[QuickDefinitionRead] = Field(default_factory=list)
+    source: str
+    cached: bool
+
+
 class ExplainRequest(BaseModel):
     chunk_id: str = Field(min_length=1)
     selected_text: str = Field(min_length=1,max_length=12000)

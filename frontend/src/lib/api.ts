@@ -1,5 +1,5 @@
 import type { Answer, CodexAccountStatus, Collection, ExplainStyle, Graph, HistoryItem, IntelligenceTask, LibraryAnswer, ModelSettings, ModelProfile, ModelProfiles, ModelProfileInput, ModelRouting, Note, NoteKind, Paper, PaperDetail, PaperMetadataUpdate, ReadingDocument, ReadingStatus, ReadingTranslation, SearchHit } from '../types'
-import type { CodexModels, NoteInput } from '../types'
+import type { CodexModels, NoteInput, QuickTranslation } from '../types'
 
 export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); this.name = 'ApiError' }
@@ -64,6 +64,7 @@ export const api = {
   modelRouting: (body:ModelRouting) => request<ModelProfiles>('/settings/routing',{method:'PUT',...json(body)}),
   readingParagraphs: (id:string) => request<ReadingDocument>(`/papers/${encodeURIComponent(id)}/reading-paragraphs`),
   translateParagraph: (id:string,paragraphId:string,signal?:AbortSignal) => request<ReadingTranslation & {model_version?:string;cached:boolean}>(`/papers/${encodeURIComponent(id)}/translate`, {method:'POST',...json({paragraph_id:paragraphId}),signal}),
+  quickTranslate: (text:string, signal?:AbortSignal) => request<QuickTranslation>('/dictionary/lookup', {method:'POST',...json({text}),signal}),
   updateModelSettings: (body: {base_url:string;model:string;api_key?:string|null;wire_api:'chat_completions'|'responses';reasoning_effort:'disabled'|'none'|'minimal'|'low'|'medium'|'high'|'xhigh';timeout:number;test_connection:boolean}) => request<ModelSettings>('/settings/model', {method:'PUT', ...json(body)}),
   clearModelSettings: () => request<ModelSettings>('/settings/model', {method:'DELETE'}),
   translate: (id: string, chunkId: string) => request<{text: string; provider: string}>(`/papers/${encodeURIComponent(id)}/translate`, {method: 'POST', ...json({chunk_id: chunkId})}),
