@@ -1,5 +1,8 @@
-import type { Answer, CodexAccountStatus, Collection, ExplainStyle, Graph, HistoryItem, IntelligenceTask, LibraryAnswer, ModelSettings, ModelProfile, ModelProfiles, ModelProfileInput, ModelRouting, Note, NoteKind, Paper, PaperDetail, PaperMetadataUpdate, ReadingDocument, ReadingStatus, ReadingTranslation, SearchHit } from '../types'
-import type { CodexModels, NoteInput, QuickTranslation } from '../types'
+import type { ActivityDay, ActivityKind, Answer, CodexAccountStatus, Collection, ExplainStyle, Graph, HistoryItem, IntelligenceTask, KnowledgeAudit, KnowledgeCandidate, KnowledgeEntityDetail, KnowledgeEntityIndexItem, KnowledgePaper, KnowledgeRelation, LibraryAnswer, MaintenanceIssue, MaintenanceRun, MaintenanceRunDetail, ModelSettings, ModelProfile, ModelProfiles, ModelProfileInput, ModelRouting, Note, NoteKind, Paper, PaperDetail, PaperMetadataUpdate, ReadingDocument, ReadingStatus, ReadingTranslation, ResearchActivity, SearchHit } from '../types'
+import type { CodexModels, NoteInput, QuickTranslation, ParagraphReview } from '../types'
+import type { ChatIdentity, ChatKind, SavedConversation, ConversationRead } from '../types'
+import type { KnowledgeEntityInput, KnowledgeEvidence, KnowledgeMergePreview, KnowledgeRelationInput } from '../types'
+import type { CollectionResearchState, ResearchSettings, ResearchStatus, ResearchTask, ResearchScope, ResearchFinding, ResearchFindingsState, FindingAction, FindingRevision } from '../types'
 
 export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); this.name = 'ApiError' }
@@ -31,6 +34,25 @@ async function loadPapers() {
   return {items:[...new Map(items.map(p=>[p.id,p])).values()],total:first.total}
 }
 export const api = {
+  researchStatus: () => request<ResearchStatus>('/research/status'),
+  researchQuota: () => request<{quota:ResearchStatus['quota'];checked_at:number;available:boolean}>('/research/quota'),
+  researchSettings: (body:ResearchSettings) => request<ResearchSettings>('/research/settings', {method:'PUT',...json(body)}),
+  collectionResearch: (id:string, revisionId?:string) => request<CollectionResearchState>(`/research/collections/${encodeURIComponent(id)}${revisionId?'?revision_id='+encodeURIComponent(revisionId):''}`),
+  researchScope: (id:string,body:ResearchScope) => request<ResearchScope>(`/research/collections/${encodeURIComponent(id)}/scope`, {method:'PUT',...json(body)}),
+  updateResearch: (id:string,kind:'essay'|'findings'='essay') => request<ResearchTask>(`/research/collections/${encodeURIComponent(id)}/update?kind=${kind}`,{method:'POST'}),
+  researchFindings: (id:string) => request<ResearchFindingsState>(`/research/collections/${encodeURIComponent(id)}/findings`),
+  findingAction: (id:string,action:FindingAction) => request<ResearchFinding>(`/research/findings/${encodeURIComponent(id)}`,{method:'PATCH',...json({action})}),
+  findingHistory: (id:string) => request<{revisions:FindingRevision[]}>(`/research/findings/${encodeURIComponent(id)}/history`),
+  researchTaskAction: (id:string,action:'retry'|'cancel') => request<ResearchTask>(`/research/tasks/${encodeURIComponent(id)}/${action}`,{method:'POST'}),
+  maintenanceRuns: (limit=20) => request<{items:MaintenanceRun[]}>(`/knowledge/maintenance/runs?limit=${limit}`),
+  maintenanceRun: (id:string) => request<MaintenanceRunDetail>(`/knowledge/maintenance/runs/${encodeURIComponent(id)}`),
+  createMaintenanceRun: (body:{scope_type:'library'|'collection'|'papers';scope_id?:string;paper_ids?:string[];allow_external?:boolean;force?:boolean}) => request<MaintenanceRunDetail>('/knowledge/maintenance/runs',{method:'POST',...json(body)}),
+  applySafeMaintenance: (id:string) => request<{run:MaintenanceRunDetail;results:Array<{id:string;status:string;detail?:string}>}>(`/knowledge/maintenance/runs/${encodeURIComponent(id)}/apply-safe`,{method:'POST'}),
+  maintenanceAction: (id:string,action:'retry'|'cancel') => request<MaintenanceRun>(`/knowledge/maintenance/runs/${encodeURIComponent(id)}/${action}`,{method:'POST'}),
+  applyMaintenanceIssue: (id:string) => request<{issue:MaintenanceIssue;run:MaintenanceRun}>(`/knowledge/maintenance/issues/${encodeURIComponent(id)}/apply`,{method:'POST'}),
+  rejectMaintenanceIssue: (id:string) => request<{issue:MaintenanceIssue;run:MaintenanceRun}>(`/knowledge/maintenance/issues/${encodeURIComponent(id)}/reject`,{method:'POST'}),
+  undoMaintenanceIssue: (id:string) => request<{issue:MaintenanceIssue;run:MaintenanceRun}>(`/knowledge/maintenance/issues/${encodeURIComponent(id)}/undo`,{method:'POST'}),
+  readingPresence: (clientId:string,reading:boolean) => request<{ok:boolean}>('/research/presence',{method:'POST',...json({client_id:clientId,reading})}),
   papers: loadPapers,
   collections: () => request<{ items: Collection[] }>('/collections'),
   paper: (id: string) => request<PaperDetail>(`/papers/${encodeURIComponent(id)}`),
@@ -40,13 +62,17 @@ export const api = {
   intelligenceTasks: (paperId:string) => request<{tasks:IntelligenceTask[]}>(`/intelligence/tasks?paper_id=${encodeURIComponent(paperId)}&limit=1`),
   queueAnalysis: (paper_ids:string[],force=false) => request<{tasks:IntelligenceTask[]}>('/intelligence/tasks',{method:'POST',...json({paper_ids,force})}),
   cancelAnalysis: (id:string) => request<IntelligenceTask>(`/intelligence/tasks/${encodeURIComponent(id)}/cancel`,{method:'POST'}),
-  librarian: (body:{question:string;collection_id?:string;paper_ids?:string[];history?:HistoryItem[]},signal?:AbortSignal) => request<LibraryAnswer>('/intelligence/ask',{method:'POST',...json(body),signal}),
+  librarian: (body:ChatIdentity&{question:string;collection_id?:string;paper_ids?:string[];history?:HistoryItem[];reading_page?:number;conversation_kind?:'paper'|'librarian'},signal?:AbortSignal) => request<LibraryAnswer>('/intelligence/ask',{method:'POST',...json(body),signal}),
+  conversations: (kind:ChatKind,paperId:string|undefined,context:Record<string,unknown>,offset=0) => request<{items:SavedConversation[];has_more:boolean}>(`/conversations?kind=${kind}${paperId?`&paper_id=${encodeURIComponent(paperId)}`:''}&context=${encodeURIComponent(JSON.stringify(context))}&offset=${offset}`),
+  conversation: <R,>(id:string) => request<ConversationRead<R>>(`/conversations/${encodeURIComponent(id)}`),
+  createConversation: (kind:ChatKind,paperId:string|undefined,context:Record<string,unknown>) => request<SavedConversation>('/conversations',{method:'POST',...json({kind,paper_id:paperId,context})}),
   refreshMetadata: (id: string) => request<PaperDetail>(`/papers/${encodeURIComponent(id)}/refresh-metadata`, { method: 'POST' }),
   createCollection: (name: string, description: string) => request<Collection>('/collections', { method: 'POST', ...json({ name, description, color: '#536f89' }) }),
   membership: (collectionId: string, paperId: string, add: boolean) => request<unknown>(`/collections/${encodeURIComponent(collectionId)}/papers/${encodeURIComponent(paperId)}`, { method: add ? 'PUT' : 'DELETE' }),
+  addCollectionPapers: (collectionId: string, paperIds: string[]) => request<Collection>(`/collections/${encodeURIComponent(collectionId)}/papers`, {method: 'POST', ...json({paper_ids: paperIds})}),
   analyze: (id: string) => request<PaperDetail>(`/papers/${encodeURIComponent(id)}/analyze`, { method: 'POST' }),
-  ask: (id: string, question: string) => request<Answer>(`/papers/${encodeURIComponent(id)}/ask`, { method: 'POST', ...json({ question }) }),
-  explain: (id:string, body:{chunk_id:string;selected_text:string;style:ExplainStyle}) => request<Answer>(`/papers/${encodeURIComponent(id)}/explain`, {method:'POST',...json(body)}),
+  ask: (id: string, question: string, identity:ChatIdentity={},signal?:AbortSignal) => request<Answer>(`/papers/${encodeURIComponent(id)}/ask`, { method: 'POST', ...json({ question,...identity }),signal }),
+  explain: (id:string, body:ChatIdentity&{chunk_id?:string;selected_text?:string;translated_text?:string;page?:number;image_data_url?:string;style?:ExplainStyle;question?:string;context_scope?:'auto'|'paragraph'|'section'|'full';allow_external?:boolean;history?:Array<{question:string;answer:string}>}) => request<Answer>(`/papers/${encodeURIComponent(id)}/explain`, {method:'POST',...json(body)}),
   note: (id: string, body: NoteInput) => request<Note>(`/papers/${encodeURIComponent(id)}/notes`, { method: 'POST', ...json(body) }),
   updateNote: (id:string,noteId:string,body:{content:string;kind:NoteKind}) => request<Note>(`/papers/${encodeURIComponent(id)}/notes/${encodeURIComponent(noteId)}`,{method:'PATCH',...json(body)}),
   deleteNote: (id: string, noteId: string) => request<unknown>(`/papers/${encodeURIComponent(id)}/notes/${encodeURIComponent(noteId)}`, { method: 'DELETE' }),
@@ -63,10 +89,33 @@ export const api = {
   deleteModelProfile: (id:string) => request<ModelProfiles>(`/settings/profiles/${encodeURIComponent(id)}`,{method:'DELETE'}),
   modelRouting: (body:ModelRouting) => request<ModelProfiles>('/settings/routing',{method:'PUT',...json(body)}),
   readingParagraphs: (id:string) => request<ReadingDocument>(`/papers/${encodeURIComponent(id)}/reading-paragraphs`),
+  reviewParagraph: (id:string,paragraphId:string,signal?:AbortSignal) => request<ParagraphReview>(`/papers/${encodeURIComponent(id)}/reading-paragraphs/review`,{method:'POST',...json({paragraph_id:paragraphId}),signal}),
   translateParagraph: (id:string,paragraphId:string,signal?:AbortSignal) => request<ReadingTranslation & {model_version?:string;cached:boolean}>(`/papers/${encodeURIComponent(id)}/translate`, {method:'POST',...json({paragraph_id:paragraphId}),signal}),
   quickTranslate: (text:string, signal?:AbortSignal) => request<QuickTranslation>('/dictionary/lookup', {method:'POST',...json({text}),signal}),
   updateModelSettings: (body: {base_url:string;model:string;api_key?:string|null;wire_api:'chat_completions'|'responses';reasoning_effort:'disabled'|'none'|'minimal'|'low'|'medium'|'high'|'xhigh';timeout:number;test_connection:boolean}) => request<ModelSettings>('/settings/model', {method:'PUT', ...json(body)}),
   clearModelSettings: () => request<ModelSettings>('/settings/model', {method:'DELETE'}),
   translate: (id: string, chunkId: string) => request<{text: string; provider: string}>(`/papers/${encodeURIComponent(id)}/translate`, {method: 'POST', ...json({chunk_id: chunkId})}),
+  activity: (days = 365) => request<ResearchActivity>(`/activity?days=${encodeURIComponent(days)}`),
+  recordActivity: (kind: ActivityKind, paperId?: string) => request<ActivityDay>('/activity', {method:'POST', ...json({kind, ...(paperId ? {paper_id: paperId} : {})})}),
+  paperKnowledge: (id:string) => request<KnowledgePaper>(`/papers/${encodeURIComponent(id)}/knowledge`),
+  reviewKnowledgeCandidates: (id:string,candidateIds:string[],decision:'confirm'|'reject') => request<KnowledgePaper>(`/papers/${encodeURIComponent(id)}/knowledge/review`, {method:'POST',...json({candidate_ids:candidateIds,decision})}),
+  paperKnowledgeAudit: (id:string) => request<KnowledgeAudit>(`/papers/${encodeURIComponent(id)}/knowledge/audit`),
+  confirmKnowledgeCandidate: (id:string, body?:{name?:string;description?:string}) => request<KnowledgeCandidate>(`/knowledge/candidates/${encodeURIComponent(id)}/confirm`, {method:'POST', ...json(body ?? {})}),
+  rejectKnowledgeCandidate: (id:string) => request<KnowledgeCandidate>(`/knowledge/candidates/${encodeURIComponent(id)}/reject`, {method:'POST'}),
+  confirmKnowledgeRelation: (id:string) => request<KnowledgeRelation>(`/knowledge/relations/${encodeURIComponent(id)}/confirm`, {method:'POST'}),
+  editConfirmKnowledgeCandidate: (id:string, body:{name:string;description?:string}) => request<KnowledgeCandidate>(`/knowledge/candidates/${encodeURIComponent(id)}/edit-confirm`, {method:'POST', ...json(body)}),
+  extractKnowledgeParagraph: (id:string, paragraphId:string) => request<KnowledgePaper>(`/papers/${encodeURIComponent(id)}/knowledge/paragraph`, {method:'POST', ...json({paragraph_id:paragraphId})}),
+  knowledgeEntities: (entityType?:string, paperIds?:string[]) => request<{items:KnowledgeEntityIndexItem[]}>(`/knowledge/entities${entityType||paperIds?'?'+new URLSearchParams({...entityType?{entity_type:entityType}:{},...paperIds?{paper_ids:paperIds.join(',')}:{}}):''}`),
+  knowledgeOverview: (paperIds:string[]) => request<{candidates:KnowledgeCandidate[];relations:KnowledgeRelation[]}>(`/knowledge/overview${paperIds.length?`?paper_ids=${encodeURIComponent(paperIds.join(','))}`:''}`),
+  knowledgeEntity: (id:string) => request<KnowledgeEntityDetail>(`/knowledge/entities/${encodeURIComponent(id)}`),
+  updateKnowledgeEntity: (id:string, body:KnowledgeEntityInput) => request<KnowledgeEntityDetail>(`/knowledge/entities/${encodeURIComponent(id)}`, {method:'PATCH',...json(body)}),
+  previewKnowledgeMerge: (id:string, targetId:string) => request<KnowledgeMergePreview>(`/knowledge/entities/${encodeURIComponent(id)}/merge-preview`, {method:'POST',...json({target_id:targetId})}),
+  mergeKnowledgeEntity: (id:string, targetId:string) => request<KnowledgeEntityDetail>(`/knowledge/entities/${encodeURIComponent(id)}/merge`, {method:'POST',...json({target_id:targetId})}),
+  updateKnowledgeRelation: (id:string, body:KnowledgeRelationInput) => request<KnowledgeRelation>(`/knowledge/relations/${encodeURIComponent(id)}`, {method:'PATCH',...json(body)}),
+  createKnowledgeRelation: (paperId:string, body:KnowledgeRelationInput & {evidence:KnowledgeEvidence[]}) => request<KnowledgeRelation>(`/papers/${encodeURIComponent(paperId)}/knowledge/relations`, {method:'POST',...json(body)}),
+  rejectKnowledgeRelation: (id:string) => request<KnowledgeRelation>(`/knowledge/relations/${encodeURIComponent(id)}/reject`, {method:'POST'}),
+  restoreKnowledgeRelation: (id:string) => request<KnowledgeRelation>(`/knowledge/relations/${encodeURIComponent(id)}/restore`, {method:'POST'}),
+  knowledgeRelations: (status:'confirmed'|'candidate'|'all'='confirmed') => request<{items:KnowledgeRelation[]}>(`/knowledge/relations?status=${encodeURIComponent(status)}`),
+  resolveKnowledgeRelation: (id:string, body:{target_name:string;target_type:'paper'|'method'|'dataset'|'benchmark'|'task'|'metric'|'concept'|'venue'}) => request<KnowledgeRelation>(`/knowledge/relations/${encodeURIComponent(id)}/resolve`, {method:'POST', ...json(body)}),
 }
 export const errorMessage = (error: unknown): string => error instanceof Error ? error.message : String(error)
