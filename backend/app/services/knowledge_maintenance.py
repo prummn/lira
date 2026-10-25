@@ -12,7 +12,7 @@ import hashlib
 import json
 import uuid
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Iterable
 
 from fastapi import HTTPException
@@ -65,8 +65,14 @@ def _json(raw: str | None, fallback: Any):
         return fallback
 
 
+def _json_default(value: Any):
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
 def _dump(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=_json_default)
 
 
 def _now() -> datetime:
@@ -456,6 +462,9 @@ def _subject_rows(session: Session, issue: KnowledgeMaintenanceIssue) -> list[An
 
 
 def _refresh_run_counts(session: Session, run: KnowledgeMaintenanceRun) -> None:
+    # Test queries do not autoflush in this local-first session factory. Flush
+    # newly created issues before deriving the counts returned to the UI.
+    session.flush()
     issues = list(session.scalars(select(KnowledgeMaintenanceIssue).where(KnowledgeMaintenanceIssue.run_id == run.id)).all())
     run.safe_count = sum(bool(row.auto_eligible and row.status == "proposed") for row in issues)
     run.review_count = sum(row.status in {"proposed", "needs_review"} and not row.auto_eligible for row in issues)

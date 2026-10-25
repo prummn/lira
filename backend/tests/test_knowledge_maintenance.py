@@ -1,6 +1,7 @@
 """Deterministic knowledge-network maintenance and repair gates."""
 
 import json
+from datetime import datetime, timezone
 
 import httpx
 import pytest
@@ -13,6 +14,7 @@ from app.services.knowledge_maintenance import (
     make_issue,
     scope_fingerprint,
     undo_issue,
+    subjects_fingerprint,
 )
 from app.providers.base import ProviderError
 from app.providers.openai_compatible import OpenAICompatibleProvider
@@ -52,6 +54,16 @@ def test_deterministic_audit_reports_exact_duplicate_candidates_as_safe(tmp_path
         assert duplicate["proposed_action"] == {"type": "reconcile_paper", "paper_id": paper.id}
         assert duplicate["auto_eligible"] is True
         assert duplicate["confidence_basis"]["exact_identity"] is True
+
+
+def test_scope_fingerprint_serializes_analysis_timestamps(tmp_path):
+    database = make_db(tmp_path)
+    with database.sessions() as session:
+        paper = _paper(session)
+        paper.intelligence_analyzed_at = datetime.now(timezone.utc)
+        session.commit()
+        fingerprint = subjects_fingerprint(session, [], [paper.id])
+        assert len(fingerprint) == 64
 
 
 def test_evidence_repair_is_reversible_and_keeps_quote(tmp_path):

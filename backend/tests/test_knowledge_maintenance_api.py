@@ -27,6 +27,7 @@ def test_run_persists_deterministic_issues_and_safe_batch(client):
     payload = created.json()
     assert payload["scope_type"] == "papers"
     assert any(issue["auto_eligible"] for issue in payload["issues"])
+    assert payload["safe_count"] >= 1
     run_id = payload["id"]
     applied = client.post(f"/api/knowledge/maintenance/runs/{run_id}/apply-safe")
     assert applied.status_code == 200, applied.text
