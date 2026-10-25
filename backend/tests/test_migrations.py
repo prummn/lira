@@ -41,7 +41,7 @@ def test_unversioned_legacy_database_upgrades_without_losing_notes(
         ).one() == (0, 0)
         assert (
             connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-            == "0008_note_anchors"
+                == "0015_knowledge_maintenance"
         )
         assert connection.execute(text("SELECT one_liner,findings,card_json FROM paper_analysis WHERE paper_id='legacy'")).one() == ('Preserve old analysis','Original finding','{}')
         assert connection.execute(text("SELECT source_url,metadata_sources_json,metadata_warnings_json FROM papers WHERE id='legacy'")).one() == (None, '{}', '[]')
@@ -77,3 +77,73 @@ def test_intelligence_migration_distinguishes_old_remote_and_local_cards(tmp_pat
         assert 'run_token' in {column['name'] for column in inspect(connection).get_columns('intelligence_tasks')}
     database.engine.dispose()
     engine.dispose()
+
+
+def test_curation_upgrade_preserves_confirmations_quotes_and_foreign_keys(tmp_path: Path) -> None:
+    url = f"sqlite:///{(tmp_path / 'curation.db').as_posix()}"
+    config = Config(str(BACKEND_DIR / 'alembic.ini'))
+    config.set_main_option('script_location', str(BACKEND_DIR / 'migrations'))
+    config.set_main_option('sqlalchemy.url', url)
+    command.upgrade(config, '0011_conversations')
+    engine = create_engine(url)
+    with engine.begin() as connection:
+        connection.execute(text("INSERT INTO papers(id,title,reading_status,is_favorite,analysis_status,tags_json,created_at,updated_at) VALUES('p','Kept paper','reading',0,'ready','[]',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+        connection.execute(text("INSERT INTO knowledge_entities(id,entity_type,name,normalized_name,aliases_json,status,created_at,updated_at) VALUES('e','method','ReAct','react','[]','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+        connection.execute(text("INSERT INTO knowledge_candidates(id,paper_id,entity_id,entity_type,name,normalized_name,role,confidence,status,evidence_json,created_at,updated_at) VALUES('c','p','e','method','ReAct','react','used',0.9,'confirmed','[{\"chunk_id\":\"source\",\"quote\":\"Original quote\"}]',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+    database = Database(url)
+    database.migrate()
+    with database.engine.connect() as connection:
+        assert connection.execute(text("SELECT name,links_json,merged_into_id FROM knowledge_entities WHERE id='e'")).one() == ('ReAct','[]',None)
+        assert connection.execute(text("SELECT entity_id,status,evidence_json FROM knowledge_candidates WHERE id='c'")).one() == ('e','confirmed','[{"chunk_id":"source","quote":"Original quote"}]')
+        assert connection.execute(text('PRAGMA foreign_key_check')).all() == []
+        assert connection.execute(text('SELECT COUNT(*) FROM knowledge_changes')).scalar() == 0
+    database.engine.dispose()
+    engine.dispose()
+def test_research_findings_upgrade_keeps_existing_scopes_and_tasks(tmp_path: Path) -> None:
+    url = f"sqlite:///{(tmp_path / 'research.db').as_posix()}"
+    config = Config(str(BACKEND_DIR / 'alembic.ini'))
+    config.set_main_option('script_location', str(BACKEND_DIR / 'migrations'))
+    config.set_main_option('sqlalchemy.url', url)
+    command.upgrade(config, '0013_background_research')
+    engine = create_engine(url)
+    with engine.begin() as connection:
+        connection.execute(text("INSERT INTO collections(id,name,color,created_at,updated_at) VALUES('topic','Memory','#aaa',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+        connection.execute(text("INSERT INTO research_scopes(collection_id,enabled,focus,created_at,updated_at) VALUES('topic',1,'Kept focus',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+        connection.execute(text("INSERT INTO research_tasks(id,collection_id,fingerprint,status,stage,material_json,checkpoint_json,attempts,calls,usage_json,created_at,updated_at) VALUES('job','topic','abc','completed','published','{}','{}',0,3,'{}',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+    database = Database(url)
+    database.migrate()
+    with database.engine.connect() as connection:
+        assert connection.execute(text('SELECT kind,status FROM research_tasks')).one() == ('essay', 'completed')
+        assert connection.execute(text('SELECT focus,work_types_json FROM research_scopes')).one() == ('Kept focus', '["essay"]')
+        assert connection.execute(text('PRAGMA foreign_key_check')).all() == []
+    assert 'research_finding_revisions' in inspect(database.engine).get_table_names()
+    database.engine.dispose()
+    engine.dispose()
+
+
+def test_knowledge_maintenance_upgrade_adds_persistent_runs_and_issues(tmp_path: Path) -> None:
+    url = f"sqlite:///{(tmp_path / 'maintenance.db').as_posix()}"
+    config = Config(str(BACKEND_DIR / "alembic.ini"))
+    config.set_main_option("script_location", str(BACKEND_DIR / "migrations"))
+    config.set_main_option("sqlalchemy.url", url)
+    command.upgrade(config, "0014_research_findings")
+    database = Database(url)
+    database.migrate()
+    with database.engine.connect() as connection:
+        tables = set(inspect(connection).get_table_names())
+        assert {"knowledge_maintenance_runs", "knowledge_maintenance_issues"} <= tables
+        connection.execute(text(
+            "INSERT INTO knowledge_maintenance_runs "
+            "(id,scope_type,status,source_fingerprint,created_at,updated_at) "
+            "VALUES('run-1','library','complete','fp',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
+        ))
+        connection.commit()
+        connection.execute(text(
+            "INSERT INTO knowledge_maintenance_issues "
+            "(id,run_id,kind,severity,status,confidence,summary,reasoning,source_fingerprint,created_at,updated_at) "
+            "VALUES('issue-1','run-1','identity','warning','proposed',0.9,'Duplicate','Evidence','fp',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
+        ))
+        connection.commit()
+        assert connection.execute(text("SELECT run_id,status FROM knowledge_maintenance_issues")).one() == ("run-1", "proposed")
+        assert connection.execute(text("PRAGMA foreign_key_check")).all() == []
+    database.engine.dispose()

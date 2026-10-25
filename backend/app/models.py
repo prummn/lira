@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -88,6 +89,7 @@ class Paper(Base, TimestampMixin):
     intelligence_status: Mapped[str] = mapped_column(String(32), default="unanalyzed", nullable=False)
     intelligence_report_json: Mapped[Optional[str]] = mapped_column(Text)
     intelligence_analyzed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    knowledge_status: Mapped[str] = mapped_column(String(32), default="unread", nullable=False)
     tags_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     page_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -118,6 +120,12 @@ class Paper(Base, TimestampMixin):
     intelligence_tasks: Mapped[list[IntelligenceTask]] = relationship(
         back_populates="paper", cascade="all, delete-orphan", order_by="IntelligenceTask.created_at"
     )
+    knowledge_candidates: Mapped[list["KnowledgeCandidate"]] = relationship(
+        back_populates="paper", cascade="all, delete-orphan", order_by="KnowledgeCandidate.created_at"
+    )
+    knowledge_relations: Mapped[list["KnowledgeRelation"]] = relationship(
+        back_populates="paper", cascade="all, delete-orphan", order_by="KnowledgeRelation.created_at"
+    )
 
 
 class IntelligenceTask(Base, TimestampMixin):
@@ -143,6 +151,43 @@ class ModelCallCache(Base):
     usage_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
     model: Mapped[str] = mapped_column(String(200), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class ChatConversation(Base, TimestampMixin):
+    __tablename__ = 'chat_conversations'
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    paper_id: Mapped[Optional[str]] = mapped_column(ForeignKey('papers.id', ondelete='CASCADE'), index=True)
+    context_json: Mapped[str] = mapped_column(Text, default='{}', nullable=False)
+    context_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(200), default='', nullable=False)
+
+
+class ChatTurn(Base):
+    __tablename__ = 'chat_turns'
+    __table_args__ = (Index('uq_chat_running', 'conversation_id', unique=True, sqlite_where=text("status = 'running'")),)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(ForeignKey('chat_conversations.id', ondelete='CASCADE'), nullable=False, index=True)
+    request_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default='running', nullable=False)
+    response_json: Mapped[Optional[str]] = mapped_column(Text)
+    error: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class ResearchActivity(Base):
+    """One local aggregate row per calendar day of research activity."""
+
+    __tablename__ = "research_activity"
+
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    reading: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    notes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    language: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    search: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    imports: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    paper_ids_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
 
 
 class CollectionPaper(Base):
@@ -171,6 +216,81 @@ class Collection(Base, TimestampMixin):
     paper_links: Mapped[list[CollectionPaper]] = relationship(
         back_populates="collection", cascade="all, delete-orphan"
     )
+
+
+class ResearchControl(Base):
+    __tablename__ = 'research_control'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    settings_json: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class ResearchScope(Base, TimestampMixin):
+    __tablename__ = 'research_scopes'
+    collection_id: Mapped[str] = mapped_column(ForeignKey('collections.id', ondelete='CASCADE'), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    focus: Mapped[str] = mapped_column(Text, default='', nullable=False)
+    work_types_json: Mapped[str] = mapped_column(Text, default='["essay"]', server_default='["essay"]', nullable=False)
+
+
+class ResearchTask(Base, TimestampMixin):
+    __tablename__ = 'research_tasks'
+    __table_args__ = (UniqueConstraint('collection_id', 'fingerprint', name='uq_research_material'),)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    collection_id: Mapped[str] = mapped_column(ForeignKey('collections.id', ondelete='CASCADE'), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(24), default='essay', server_default='essay', nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default='queued', nullable=False)
+    stage: Mapped[str] = mapped_column(String(24), default='synthesis', nullable=False)
+    material_json: Mapped[str] = mapped_column(Text, nullable=False)
+    checkpoint_json: Mapped[str] = mapped_column(Text, default='{}', nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    calls: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    usage_json: Mapped[str] = mapped_column(Text, default='{}', nullable=False)
+    error: Mapped[Optional[str]] = mapped_column(Text)
+
+
+class ResearchRevision(Base):
+    __tablename__ = 'research_revisions'
+    __table_args__ = (UniqueConstraint('collection_id', 'number', name='uq_research_revision'),)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    collection_id: Mapped[str] = mapped_column(ForeignKey('collections.id', ondelete='CASCADE'), nullable=False, index=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey('research_tasks.id', ondelete='CASCADE'), nullable=False, unique=True)
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    dek: Mapped[str] = mapped_column(Text, nullable=False)
+    markdown: Mapped[str] = mapped_column(Text, nullable=False)
+    changes: Mapped[str] = mapped_column(Text, nullable=False)
+    sources_json: Mapped[str] = mapped_column(Text, nullable=False)
+    coverage_json: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class ResearchFinding(Base, TimestampMixin):
+    __tablename__ = 'research_findings'
+    __table_args__ = (UniqueConstraint('collection_id', 'identity', name='uq_research_finding_identity'),)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    collection_id: Mapped[str] = mapped_column(ForeignKey('collections.id', ondelete='CASCADE'), nullable=False, index=True)
+    identity: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    next_step: Mapped[str] = mapped_column(Text, nullable=False)
+    sources_json: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default='unread', nullable=False)
+    review_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    due_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    model: Mapped[str] = mapped_column(String(200), nullable=False)
+
+
+class ResearchFindingRevision(Base):
+    __tablename__ = 'research_finding_revisions'
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    finding_id: Mapped[str] = mapped_column(ForeignKey('research_findings.id', ondelete='CASCADE'), nullable=False, index=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey('research_tasks.id', ondelete='CASCADE'), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    content_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
 class PaperChunk(Base):
@@ -286,3 +406,145 @@ class Edge(Base, TimestampMixin):
     relation_source: Mapped[str] = mapped_column(
         String(32), default="user", nullable=False
     )
+
+
+class KnowledgeEntity(Base, TimestampMixin):
+    """Canonical field entity; only confirmed candidates create one."""
+
+    __tablename__ = "knowledge_entities"
+    __table_args__ = (UniqueConstraint("entity_type", "normalized_name", name="uq_knowledge_entity_name"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    entity_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(300), nullable=False, index=True)
+    aliases_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False, index=True)
+    links_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    merged_into_id: Mapped[Optional[str]] = mapped_column(ForeignKey("knowledge_entities.id"))
+
+
+class KnowledgeChange(Base):
+    """Append-only snapshots of researcher changes, including merge origins."""
+
+    __tablename__ = "knowledge_changes"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    subject_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    subject_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(48), nullable=False)
+    before_json: Mapped[str] = mapped_column(Text, nullable=False)
+    after_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class KnowledgeCandidate(Base, TimestampMixin):
+    """Paper-local extracted item awaiting researcher review."""
+
+    __tablename__ = "knowledge_candidates"
+    __table_args__ = (
+        Index("ix_knowledge_candidate_paper_status", "paper_id", "status"),
+        Index("ix_knowledge_candidate_normalized", "entity_type", "normalized_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    paper_id: Mapped[str] = mapped_column(ForeignKey("papers.id", ondelete="CASCADE"), nullable=False, index=True)
+    entity_id: Mapped[Optional[str]] = mapped_column(ForeignKey("knowledge_entities.id", ondelete="SET NULL"), index=True)
+    entity_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(300), nullable=False, index=True)
+    aliases_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    role: Mapped[str] = mapped_column(String(32), default="cited", nullable=False)
+    confidence: Mapped[float] = mapped_column(default=0.5, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="candidate", nullable=False, index=True)
+    evidence_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    run_id: Mapped[Optional[str]] = mapped_column(String(100), index=True)
+    model_version: Mapped[Optional[str]] = mapped_column(String(200))
+    prompt_version: Mapped[Optional[str]] = mapped_column(String(100))
+    conflict_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    paper: Mapped[Paper] = relationship(back_populates="knowledge_candidates")
+    entity: Mapped[Optional[KnowledgeEntity]] = relationship()
+
+
+class KnowledgeRelation(Base, TimestampMixin):
+    """Paper-local, evidence-backed edge candidate."""
+
+    __tablename__ = "knowledge_relations"
+    __table_args__ = (Index("ix_knowledge_relation_paper_status", "paper_id", "status"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    paper_id: Mapped[str] = mapped_column(ForeignKey("papers.id", ondelete="CASCADE"), nullable=False, index=True)
+    relation: Mapped[str] = mapped_column(String(48), nullable=False)
+    source_name: Mapped[str] = mapped_column(String(300), nullable=False)
+    source_normalized_name: Mapped[str] = mapped_column(String(300), nullable=False)
+    target_name: Mapped[str] = mapped_column(String(300), nullable=False)
+    target_normalized_name: Mapped[str] = mapped_column(String(300), nullable=False)
+    source_candidate_id: Mapped[Optional[str]] = mapped_column(ForeignKey("knowledge_candidates.id", ondelete="SET NULL"))
+    target_candidate_id: Mapped[Optional[str]] = mapped_column(ForeignKey("knowledge_candidates.id", ondelete="SET NULL"))
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    confidence: Mapped[float] = mapped_column(default=0.5, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="candidate", nullable=False, index=True)
+    evidence_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    run_id: Mapped[Optional[str]] = mapped_column(String(100), index=True)
+    model_version: Mapped[Optional[str]] = mapped_column(String(200))
+    prompt_version: Mapped[Optional[str]] = mapped_column(String(100))
+    conflict_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    paper: Mapped[Paper] = relationship(back_populates="knowledge_relations")
+
+
+class KnowledgeMaintenanceRun(Base, TimestampMixin):
+    """Persistent cross-paper audit and repair plan."""
+
+    __tablename__ = "knowledge_maintenance_runs"
+    __table_args__ = (
+        Index("ix_knowledge_maintenance_run_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    scope_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    scope_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(24), default="queued", nullable=False, index=True)
+    allow_external: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    model_name: Mapped[Optional[str]] = mapped_column(String(200))
+    prompt_version: Mapped[Optional[str]] = mapped_column(String(100))
+    source_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+    safe_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    review_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    conflict_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    applied_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    usage_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    issues: Mapped[list["KnowledgeMaintenanceIssue"]] = relationship(
+        back_populates="run", cascade="all, delete-orphan", order_by="KnowledgeMaintenanceIssue.created_at"
+    )
+
+
+class KnowledgeMaintenanceIssue(Base, TimestampMixin):
+    """One evidence-backed problem and its typed, reversible action proposal."""
+
+    __tablename__ = "knowledge_maintenance_issues"
+    __table_args__ = (
+        Index("ix_knowledge_maintenance_issue_run_status", "run_id", "status"),
+        Index("ix_knowledge_maintenance_issue_source_fingerprint", "source_fingerprint"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("knowledge_maintenance_runs.id", ondelete="CASCADE"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), default="info", nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="proposed", nullable=False, index=True)
+    confidence: Mapped[float] = mapped_column(default=0.0, nullable=False)
+    confidence_basis_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    auto_eligible: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    subject_ids_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    evidence_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    external_leads_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    reasoning: Mapped[str] = mapped_column(Text, nullable=False)
+    proposed_action_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    source_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    applied_change_ids_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    run: Mapped["KnowledgeMaintenanceRun"] = relationship(back_populates="issues")
