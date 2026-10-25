@@ -20,6 +20,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from ..models import (
+    Collection,
     CollectionPaper,
     KnowledgeCandidate,
     KnowledgeChange,
@@ -592,3 +593,85 @@ def serialize_run(run: KnowledgeMaintenanceRun) -> dict:
         "error_message": run.error_message, "safe_count": run.safe_count, "review_count": run.review_count,
         "conflict_count": run.conflict_count, "applied_count": run.applied_count, "usage": _json(run.usage_json, {}),
     }
+
+
+def prepare_run(session: Session, *, scope_type: str = "library", scope_id: str | None = None,
+                paper_ids: Iterable[str] = (), allow_external: bool = False, force: bool = False) -> KnowledgeMaintenanceRun:
+    selected = _paper_ids(session, scope_type, scope_id, paper_ids)
+    if not selected:
+        raise HTTPException(409, "当前范围没有可体检的论文")
+    if scope_type == "collection" and not session.get(Collection, scope_id):
+        raise HTTPException(404, "专题不存在")
+    fingerprint = scope_fingerprint(session, selected)
+    if not force:
+        existing = session.scalar(select(KnowledgeMaintenanceRun).where(
+            KnowledgeMaintenanceRun.scope_type == scope_type,
+            KnowledgeMaintenanceRun.scope_id == scope_id,
+            KnowledgeMaintenanceRun.source_fingerprint == fingerprint,
+            KnowledgeMaintenanceRun.status.in_(["queued", "running", "complete", "partial"]),
+        ).order_by(KnowledgeMaintenanceRun.created_at.desc()))
+        if existing is not None:
+            return existing
+    run = KnowledgeMaintenanceRun(
+        id="kmr-" + uuid.uuid4().hex[:24], scope_type=scope_type, scope_id=scope_id,
+        status="queued", allow_external=allow_external, source_fingerprint=fingerprint,
+        usage_json=_dump({"paper_count": len(selected), "call_times": [], "events": []}),
+    )
+    session.add(run)
+    session.flush()
+    for finding in collect_deterministic_findings(session, selected):
+        issue = make_issue(session, run, finding)
+        issue.source_fingerprint = subjects_fingerprint(session, finding.get("subject_ids", []), finding.get("paper_ids", [])) if finding.get("subject_ids") or finding.get("paper_ids") else fingerprint
+    _refresh_run_counts(session, run)
+    session.flush()
+    return run
+
+
+def execute_run(session: Session, run: KnowledgeMaintenanceRun, provider=None) -> KnowledgeMaintenanceRun:
+    """Run the model stage for a prepared batch; local findings always survive."""
+    from ..providers.base import ProviderError
+
+    run.status = "running"
+    run.started_at = run.started_at or _now()
+    run.error_message = None
+    session.flush()
+    issues = list(session.scalars(select(KnowledgeMaintenanceIssue).where(KnowledgeMaintenanceIssue.run_id == run.id)).all())
+    if provider is None or getattr(provider, "mode", "extractive") != "remote" or not getattr(provider, "configured", False):
+        run.status = "partial"
+        run.error_message = "当前没有可用的远程模型，已保留程序化体检结果"
+        run.finished_at = _now()
+        _refresh_run_counts(session, run)
+        session.flush()
+        return run
+    errors = []
+    for issue in issues:
+        if issue.status != "proposed":
+            continue
+        finding = {
+            "kind": issue.kind, "summary": issue.summary, "reasoning": issue.reasoning,
+            "subject_ids": _json(issue.subject_ids_json, []), "paper_ids": [],
+            "proposed_action": _json(issue.proposed_action_json, {}),
+        }
+        bundle = build_model_bundle(session, finding)
+        try:
+            result = provider.audit_knowledge_bundle(bundle)
+            store_model_proposals(session, run, finding, result)
+            run.model_name = result.get("model_version") or run.model_name
+            run.prompt_version = result.get("prompt_version") or run.prompt_version
+            usage = _json(run.usage_json, {"call_times": [], "events": []})
+            usage["call_times"] = [*usage.get("call_times", []), _now().timestamp()]
+            usage["events"] = [*usage.get("events", []), {"stage": "maintenance", "at": _now().timestamp(), "code": "saved"}][-20:]
+            usage["input_tokens"] = usage.get("input_tokens", 0) + int(getattr(provider, "last_usage", {}).get("input_tokens") or 0)
+            usage["output_tokens"] = usage.get("output_tokens", 0) + int(getattr(provider, "last_usage", {}).get("output_tokens") or 0)
+            usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
+            run.usage_json = _dump(usage)
+            session.flush()
+        except ProviderError as error:
+            errors.append(str(error))
+            break
+    run.status = "partial" if errors else "complete"
+    run.error_message = errors[0] if errors else None
+    run.finished_at = _now()
+    _refresh_run_counts(session, run)
+    session.flush()
+    return run
