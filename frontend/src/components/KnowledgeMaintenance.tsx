@@ -30,7 +30,7 @@ export function KnowledgeMaintenance({ scopeType, scopeId, paperIds, openPaper }
   const load = async () => {
     setLoading(true)
     try {
-      const list = await api.maintenanceRuns()
+      const list = await api.maintenanceRuns(20, {type: scopeType, id: scopeId})
       const latest = list.items[0]
       const detail = latest ? await api.maintenanceRun(latest.id) : null
       setRun(detail)

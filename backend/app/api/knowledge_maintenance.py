@@ -48,8 +48,13 @@ def create_run(payload: MaintenanceRunCreate, request: Request, session: Session
 
 
 @router.get("/knowledge/maintenance/runs")
-def list_runs(limit: int = Query(20, ge=1, le=100), session: Session = Depends(get_db)):
-    rows = session.scalars(select(KnowledgeMaintenanceRun).order_by(KnowledgeMaintenanceRun.created_at.desc()).limit(limit)).all()
+def list_runs(limit: int = Query(20, ge=1, le=100), scope_type: str | None = Query(None), scope_id: str | None = Query(None), session: Session = Depends(get_db)):
+    statement = select(KnowledgeMaintenanceRun)
+    if scope_type:
+        statement = statement.where(KnowledgeMaintenanceRun.scope_type == scope_type)
+    if scope_id:
+        statement = statement.where(KnowledgeMaintenanceRun.scope_id == scope_id)
+    rows = session.scalars(statement.order_by(KnowledgeMaintenanceRun.created_at.desc()).limit(limit)).all()
     return {"items": [maintenance.serialize_run(row) for row in rows]}
 
 

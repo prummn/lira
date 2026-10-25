@@ -44,7 +44,7 @@ export const api = {
   findingAction: (id:string,action:FindingAction) => request<ResearchFinding>(`/research/findings/${encodeURIComponent(id)}`,{method:'PATCH',...json({action})}),
   findingHistory: (id:string) => request<{revisions:FindingRevision[]}>(`/research/findings/${encodeURIComponent(id)}/history`),
   researchTaskAction: (id:string,action:'retry'|'cancel') => request<ResearchTask>(`/research/tasks/${encodeURIComponent(id)}/${action}`,{method:'POST'}),
-  maintenanceRuns: (limit=20) => request<{items:MaintenanceRun[]}>(`/knowledge/maintenance/runs?limit=${limit}`),
+  maintenanceRuns: (limit=20, scope?:{type?:string;id?:string}) => request<{items:MaintenanceRun[]}>(`/knowledge/maintenance/runs?limit=${limit}${scope?.type?`&scope_type=${encodeURIComponent(scope.type)}`:''}${scope?.id?`&scope_id=${encodeURIComponent(scope.id)}`:''}`),
   maintenanceRun: (id:string) => request<MaintenanceRunDetail>(`/knowledge/maintenance/runs/${encodeURIComponent(id)}`),
   createMaintenanceRun: (body:{scope_type:'library'|'collection'|'papers';scope_id?:string;paper_ids?:string[];allow_external?:boolean;force?:boolean}) => request<MaintenanceRunDetail>('/knowledge/maintenance/runs',{method:'POST',...json(body)}),
   applySafeMaintenance: (id:string) => request<{run:MaintenanceRunDetail;results:Array<{id:string;status:string;detail?:string}>}>(`/knowledge/maintenance/runs/${encodeURIComponent(id)}/apply-safe`,{method:'POST'}),

@@ -58,3 +58,19 @@ def test_run_can_be_cancelled_and_retried_without_losing_local_issues(client):
     assert retried.json()["status"] == "queued"
     detail = client.get(f"/api/knowledge/maintenance/runs/{run_id}").json()
     assert detail["issues"]
+
+
+def test_run_list_can_be_scoped_to_collection(client):
+    from app.models import Collection, CollectionPaper, Paper
+    with client.app.state.database.sessions() as session:
+        session.add(Paper(id='paper-a', title='Paper A'))
+        session.add(Collection(id='collection-a', name='A'))
+        session.add(Collection(id='collection-b', name='B'))
+        session.add_all([CollectionPaper(collection_id='collection-a', paper_id='paper-a'), CollectionPaper(collection_id='collection-b', paper_id='paper-a')])
+        session.commit()
+    first = client.post('/api/knowledge/maintenance/runs', json={'scope_type':'collection','scope_id':'collection-a'})
+    second = client.post('/api/knowledge/maintenance/runs', json={'scope_type':'collection','scope_id':'collection-b'})
+    assert first.status_code == 200 and second.status_code == 200
+    scoped = client.get('/api/knowledge/maintenance/runs?scope_type=collection&scope_id=collection-a')
+    assert scoped.status_code == 200
+    assert [item['scope_id'] for item in scoped.json()['items']] == ['collection-a']
