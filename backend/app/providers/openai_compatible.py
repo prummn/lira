@@ -243,28 +243,35 @@ class OpenAICompatibleProvider:
                 raise ProviderError('模型服务响应过大，已拒绝处理', code='invalid_response')
         raise ProviderError('模型流式连接结束但未完成输出，请重试；已有结果已保留', code='stream_interrupted', retryable=True)
 
-    def _complete(self, system: str, user: str, *, json_output: bool, max_output_tokens: int = 3000, reasoning_effort: str | None = None) -> str:
+    def _complete(self, system: str, user: str, *, json_output: bool, max_output_tokens: int = 3000, reasoning_effort: str | None = None, image_data_url: str | None = None) -> str:
         self.last_usage = {}
         self.response_model = None
         gate = self._capacity() if hasattr(self, '_capacity') else nullcontext()
         with gate:
             return self._complete_request(system, user, json_output=json_output,
-                max_output_tokens=max_output_tokens, reasoning_effort=reasoning_effort)
+                max_output_tokens=max_output_tokens, reasoning_effort=reasoning_effort,
+                image_data_url=image_data_url)
 
-    def _complete_request(self, system: str, user: str, *, json_output: bool, max_output_tokens: int = 3000, reasoning_effort: str | None = None) -> str:
+    def _complete_request(self, system: str, user: str, *, json_output: bool, max_output_tokens: int = 3000, reasoning_effort: str | None = None, image_data_url: str | None = None) -> str:
         self.last_usage = {}
         self.response_model = None
         self.last_http_status = None
         effort = self.effective_reasoning_effort(reasoning_effort)
         if self.wire_api == 'responses':
-            payload: dict[str, Any] = {'model': self.model, 'instructions': system, 'input': [{'role': 'user', 'content': [{'type': 'input_text', 'text': ('Return JSON for this data:\n' if json_output else '') + user}]}], 'max_output_tokens': max_output_tokens, 'store': False, 'stream': True}
+            content: list[dict[str, Any]] = [{'type': 'input_text', 'text': ('Return JSON for this data:\n' if json_output else '') + user}]
+            if image_data_url:
+                content.append({'type': 'input_image', 'image_url': image_data_url, 'detail': 'high'})
+            payload: dict[str, Any] = {'model': self.model, 'instructions': system, 'input': [{'role': 'user', 'content': content}], 'max_output_tokens': max_output_tokens, 'store': False, 'stream': True}
             if effort is not None:
                 payload['reasoning'] = {'effort': effort}
             if json_output and self.json_mode != 'none':
                 payload['text'] = {'format': {'type': 'json_object'}}
             endpoint = '/responses'
         else:
-            payload = {'model':self.model,'messages':[{'role':'system','content':system},{'role':'user','content':user}], self.completion_parameter: max_output_tokens}
+            user_content: str | list[dict[str, Any]] = user
+            if image_data_url:
+                user_content = [{'type': 'text', 'text': ('Return JSON for this data:\n' if json_output else '') + user}, {'type': 'image_url', 'image_url': {'url': image_data_url, 'detail': 'high'}}]
+            payload = {'model':self.model,'messages':[{'role':'system','content':system},{'role':'user','content':user_content}], self.completion_parameter: max_output_tokens}
             if effort is not None:
                 payload['reasoning_effort'] = effort
             if json_output and self.json_mode != 'none':
@@ -347,6 +354,84 @@ class OpenAICompatibleProvider:
     def _json(self, prompt: str, data: dict[str, Any]) -> dict[str, Any]:
         return self.complete_json(prompt, data, max_output_tokens=3000)
 
+    def audit_knowledge_bundle(self, bundle: dict) -> dict:
+        """Ask for bounded maintenance proposals while validating their scope."""
+        prompt = self._prompt('knowledge_maintenance.txt')
+        data = self.complete_json(prompt, bundle, max_output_tokens=2200, reasoning_effort='minimal')
+        raw = data.get('issues')
+        if raw is None:
+            raw = []
+        if not isinstance(raw, list) or len(raw) > 32:
+            raise ProviderError('模型返回的维护建议数量无效，已有结果已保留', code='invalid_response', diagnostics=self._http_diagnostics())
+        chunks = {
+            str(item.get('chunk_id')): str(item.get('content') or '')
+            for item in bundle.get('chunks', []) if isinstance(item, dict) and item.get('chunk_id')
+        }
+        subjects = {str(item) for item in bundle.get('subject_ids', [])}
+        normalized = []
+        for item in raw:
+            if not isinstance(item, dict):
+                raise ProviderError('模型返回的维护建议格式无效，已有结果已保留', code='invalid_response', diagnostics=self._http_diagnostics())
+            kind = item.get('kind')
+            if kind not in {'identity', 'relation', 'evidence', 'coverage', 'importance', 'structure'}:
+                raise ProviderError('模型返回了未知的维护问题类型，已有结果已保留', code='invalid_response', diagnostics=self._http_diagnostics())
+            raw_subjects = item.get('subject_ids', [])
+            if not isinstance(raw_subjects, list) or len(raw_subjects) > 20:
+                raise ProviderError('模型返回的维护对象数量无效，已有结果已保留', code='invalid_response', diagnostics=self._http_diagnostics())
+            item_subjects = [str(value) for value in raw_subjects if str(value) in subjects]
+            if len(item_subjects) != len(raw_subjects):
+                raise ProviderError('模型返回了超出上下文范围的对象，已有结果已保留', code='invalid_response', diagnostics=self._http_diagnostics())
+            citations = item.get('citations', [])
+            if not isinstance(citations, list) or len(citations) > 8:
+                raise ProviderError('模型返回的维护证据数量无效，已有结果已保留', code='invalid_response', diagnostics=self._http_diagnostics())
+            verified = []
+            for citation in citations:
+                if not isinstance(citation, dict):
+                    raise ProviderError('模型返回的维护证据格式无效，已有结果已保留', code='invalid_response', diagnostics=self._http_diagnostics())
+                chunk_id, quote = citation.get('chunk_id'), citation.get('source_text') or citation.get('quote')
+                if not isinstance(chunk_id, str) or chunk_id not in chunks or not isinstance(quote, str) or not quote.strip():
+                    raise ProviderError('模型返回了不存在的维护证据，已有结果已保留', code='invalid_response', diagnostics=self._http_diagnostics())
+                if canonical_quote(chunks[chunk_id], quote) is None:
+                    raise ProviderError('模型返回的维护引文无法在原文中核验，已有结果已保留', code='invalid_response', diagnostics=self._http_diagnostics())
+                verified.append({'chunk_id': chunk_id, 'quote': quote.strip()})
+            confidence = item.get('confidence', 0)
+            if not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
+                raise ProviderError('模型返回的维护置信度无效，已有结果已保留', code='invalid_response', diagnostics=self._http_diagnostics())
+            action = item.get('action') if isinstance(item.get('action'), dict) else {}
+            queries = item.get('external_queries', [])
+            normalized.append({
+                'kind': kind,
+                'summary': str(item.get('summary') or '')[:1000],
+                'reasoning': str(item.get('reasoning') or '')[:4000],
+                'subject_ids': item_subjects,
+                'citations': verified,
+                'action': action,
+                'confidence': float(confidence),
+                'confidence_factors': item.get('confidence_factors') if isinstance(item.get('confidence_factors'), dict) else {},
+                'external_queries': [str(value)[:300] for value in queries[:4] if isinstance(value, str)] if isinstance(queries, list) else [],
+            })
+        return {
+            'issues': normalized,
+            'model_version': self.response_model or self.model,
+            'prompt_version': 'maintenance-sha256:' + hashlib.sha256(prompt.encode('utf-8')).hexdigest(),
+        }
+
+    def _json_with_image(self, prompt: str, data: dict[str, Any], image_data_url: str) -> dict[str, Any]:
+        content = self._complete(
+            prompt,
+            json.dumps(data, ensure_ascii=False),
+            json_output=True,
+            max_output_tokens=3000,
+            image_data_url=image_data_url,
+        )
+        try:
+            result = json.loads(content)
+            if not isinstance(result, dict):
+                raise ValueError('Expected object')
+            return result
+        except (json.JSONDecodeError, ValueError):
+            raise ProviderError('模型返回的结构化 JSON 无效，已有结果已保留', code='invalid_response', diagnostics=self._http_diagnostics()) from None
+
     def complete_json(self, system: str, payload: dict, *, max_output_tokens: int, reasoning_effort: str | None = None) -> dict:
         content = self._complete(system, json.dumps(payload,ensure_ascii=False), json_output=True, max_output_tokens=max_output_tokens, reasoning_effort=reasoning_effort)
         try:
@@ -398,12 +483,29 @@ class OpenAICompatibleProvider:
             key = (chunk_id,source)
             if key not in seen:
                 seen.add(key)
-                verified.append(VerifiedCitation(original,source,claim,'explicit' if claim == source else 'llm_summary'))
+                source_type = getattr(original, 'source_type', None) or ('explicit' if claim == source else 'llm_summary')
+                verified.append(VerifiedCitation(original,source,claim,source_type))
         return verified,valid and bool(verified)
+
+    @staticmethod
+    def _answer_notes(data: dict[str, Any]) -> dict[str, Any]:
+        """Keep optional provenance notes bounded and presentation-safe."""
+        def values(key: str) -> list[str]:
+            raw = data.get(key)
+            if not isinstance(raw, list):
+                return []
+            return [item.strip() for item in raw[:8]
+                    if isinstance(item, str) and item.strip() and len(item) <= 1200]
+        return {
+            'facts': values('facts'),
+            'inferences': values('inferences'),
+            'unknowns': values('unknowns'),
+            'needs_more_context': data.get('needs_more_context') is True,
+        }
 
     def analyze(self, chunks: list[PaperChunk]) -> AnalysisResult:
         from .cards import CARD_ALIASES, LIST_FIELDS, SINGLE_FIELDS
-        from .base import CardEntry
+        from .base import CardEntry, KnowledgeCandidateEntry, KnowledgeRelationEntry
         context, sent = self._context(chunks)
         if not context:
             return AnalysisResult()
@@ -455,6 +557,26 @@ class OpenAICompatibleProvider:
         concepts = data.get('concepts',[])
         if isinstance(concepts,list):
             result.concepts = list(dict.fromkeys(term for term in concepts[:16] if isinstance(term,str) and 1 <= len(term) <= 100 and term.casefold() in corpus))
+        # Legacy one-shot providers may return the optional knowledge fields.
+        # Keep the same evidence boundary as Paper Card entries.
+        allowed_types = {'paper', 'method', 'dataset', 'benchmark', 'task', 'metric', 'concept', 'venue'}
+        allowed_roles = {'proposed', 'used', 'baseline', 'cited', 'compared'}
+        for item in data.get('knowledge_candidates', []) if isinstance(data.get('knowledge_candidates'), list) else []:
+            if not isinstance(item, dict) or item.get('entity_type') not in allowed_types or item.get('role', 'cited') not in allowed_roles:
+                continue
+            name = item.get('name'); citations, valid = self._citations(item.get('citations'), sent, lookup, str(item.get('description') or name or ''))
+            confidence = item.get('confidence', .5)
+            if isinstance(name, str) and name.strip() and valid and isinstance(confidence, (int, float)) and 0 <= confidence <= 1:
+                aliases = item.get('aliases', []) if isinstance(item.get('aliases'), list) else []
+                result.knowledge_candidates.append(KnowledgeCandidateEntry(item['entity_type'], name.strip(), ' '.join(name.casefold().split()), [a.strip() for a in aliases if isinstance(a, str) and a.strip()], item.get('description') if isinstance(item.get('description'), str) else None, item.get('role', 'cited'), float(confidence), citations))
+        allowed_relations = {'builds_on', 'extends', 'compares_with', 'replaces', 'uses_dataset', 'evaluated_on', 'inspired_by', 'contrasts_with', 'requires_concept'}
+        for item in data.get('knowledge_relations', []) if isinstance(data.get('knowledge_relations'), list) else []:
+            if not isinstance(item, dict) or item.get('relation') not in allowed_relations:
+                continue
+            source, target = item.get('source_name'), item.get('target_name'); confidence = item.get('confidence', .5)
+            citations, valid = self._citations(item.get('citations'), sent, lookup, str(item.get('description') or ''))
+            if isinstance(source, str) and isinstance(target, str) and source.strip() and target.strip() and valid and isinstance(confidence, (int, float)) and 0 <= confidence <= 1:
+                result.knowledge_relations.append(KnowledgeRelationEntry(item['relation'], source.strip(), ' '.join(source.casefold().split()), target.strip(), ' '.join(target.casefold().split()), item.get('description') if isinstance(item.get('description'), str) else None, float(confidence), citations))
         return result
 
     def ask(self, question: str, chunks: list[PaperChunk]) -> AnswerResult:
@@ -472,7 +594,33 @@ class OpenAICompatibleProvider:
         citations,valid = self._citations(data.get('citations'),sent,{c.id:c for c in chunks},answer.strip())
         if not valid:
             return AnswerResult(ABSTENTION,[],True)
-        return AnswerResult(answer.strip(),[],False,citations)
+        return AnswerResult(answer.strip(),[],False,citations,**self._answer_notes(data))
+
+    def ask_with_image(self, question: str, chunks: list[PaperChunk], image_data_url: str) -> AnswerResult:
+        """Ask about a rendered PDF page while preserving text citations.
+
+        Visual observations are intentionally allowed to have no text citation;
+        the API marks the response as visual so the reader can distinguish them
+        from claims backed by an extracted passage.
+        """
+        from .mock import tokens
+        query = tokens(question)
+        ordered = sorted(chunks, key=lambda c: (-len(tokens(c.content) & query), c.page or 0, c.id))
+        context, sent = self._context(ordered, prioritize_sections=False)
+        # A scanned page or a figure-only page may have no extracted text. The
+        # image is still a complete source for a vision-capable connection.
+        # Keep the empty text context and let the model answer from the image.
+        data = self._json_with_image(self._prompt('paper_ask_visual.txt'), {'question': question, 'chunks': context}, image_data_url)
+        answer = data.get('answer')
+        if data.get('insufficient_evidence') is not False or not isinstance(answer, str) or not answer.strip() or len(answer) > 16000:
+            return AnswerResult(ABSTENTION, [], True)
+        raw_citations = data.get('citations')
+        if raw_citations == []:
+            return AnswerResult(answer.strip(), [], False, [], **self._answer_notes(data))
+        citations, valid = self._citations(raw_citations, sent, {c.id: c for c in chunks}, answer.strip())
+        if not valid:
+            return AnswerResult(ABSTENTION, [], True)
+        return AnswerResult(answer.strip(), [], False, citations, **self._answer_notes(data))
 
     def translate(self, chunk: PaperChunk) -> str:
         if len(chunk.content) > MAX_TRANSLATION_CHARS:

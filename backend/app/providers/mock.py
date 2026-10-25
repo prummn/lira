@@ -127,3 +127,7 @@ class MockProvider:
 
     def translate(self, chunk: PaperChunk) -> str:
         raise NotImplementedError("翻译需要配置模型，原文已保留")
+
+    def audit_knowledge_bundle(self, bundle: dict) -> dict:
+        """Local mode never invents maintenance proposals."""
+        return {"issues": [], "model_version": self.name, "prompt_version": "local_none"}

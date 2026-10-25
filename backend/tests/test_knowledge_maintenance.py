@@ -2,6 +2,9 @@
 
 import json
 
+import httpx
+import pytest
+
 from app.models import KnowledgeCandidate, KnowledgeEntity, KnowledgeMaintenanceRun, KnowledgeRelation, Paper, PaperChunk
 from app.services.knowledge_maintenance import (
     apply_issue,
@@ -11,6 +14,8 @@ from app.services.knowledge_maintenance import (
     scope_fingerprint,
     undo_issue,
 )
+from app.providers.base import ProviderError
+from app.providers.openai_compatible import OpenAICompatibleProvider
 from test_knowledge_service import make_db
 
 
@@ -109,3 +114,46 @@ def test_rejected_endpoint_and_ambiguous_alias_are_never_auto_applied(tmp_path):
             "proposed_action": {"type": "restore_relation", "relation_id": relation.id},
         }
         assert confidence_gate(session, relation_finding)["auto_eligible"] is False
+
+
+def test_provider_validates_bounded_maintenance_bundle_and_citations():
+    seen = {}
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": json.dumps({
+                "issues": [{
+                    "kind": "relation", "summary": "关系待核对", "reasoning": "原文支持一条明确关系",
+                    "subject_ids": ["r-1"], "citations": [{"chunk_id": "chunk-1", "source_text": "A builds on B."}],
+                    "action": {"type": "rewrite_relation"}, "confidence": .92,
+                    "confidence_factors": {"evidence_count": 1}, "external_queries": [],
+                }]
+            }, ensure_ascii=False)}}], "model": "maintenance-model",
+        })
+
+    provider = OpenAICompatibleProvider(api_key="test-secret", base_url="https://model.example/v1", model="maintenance-model", transport=httpx.MockTransport(respond))
+    result = provider.audit_knowledge_bundle({
+        "subject_ids": ["r-1"], "chunks": [{"chunk_id": "chunk-1", "content": "A builds on B."}],
+        "subjects": [{"id": "r-1", "type": "relation"}],
+    })
+    assert result["issues"][0]["subject_ids"] == ["r-1"]
+    assert result["issues"][0]["citations"][0]["chunk_id"] == "chunk-1"
+    assert seen["body"]["response_format"] == {"type": "json_object"}
+    assert seen["body"]["max_completion_tokens"] == 2200
+    assert "store" not in seen["body"]
+
+
+def test_provider_rejects_out_of_scope_maintenance_citation():
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": json.dumps({
+                "issues": [{"kind": "evidence", "summary": "bad", "reasoning": "bad", "subject_ids": ["r-1"],
+                             "citations": [{"chunk_id": "unknown", "source_text": "bad"}], "action": {}, "confidence": .1}]
+            })}}]
+        })
+
+    provider = OpenAICompatibleProvider(api_key="test-secret", base_url="https://model.example/v1", model="maintenance-model", transport=httpx.MockTransport(respond))
+    with pytest.raises(ProviderError) as error:
+        provider.audit_knowledge_bundle({"subject_ids": ["r-1"], "chunks": [{"chunk_id": "chunk-1", "content": "A builds on B."}]})
+    assert error.value.code == "invalid_response"

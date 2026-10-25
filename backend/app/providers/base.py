@@ -33,6 +33,30 @@ class CardEntry:
 
 
 @dataclass
+class KnowledgeCandidateEntry:
+    entity_type: str
+    name: str
+    normalized_name: str
+    aliases: list[str]
+    description: str | None
+    role: str
+    confidence: float
+    citations: list[VerifiedCitation]
+
+
+@dataclass
+class KnowledgeRelationEntry:
+    relation: str
+    source_name: str
+    source_normalized_name: str
+    target_name: str
+    target_normalized_name: str
+    description: str | None
+    confidence: float
+    citations: list[VerifiedCitation]
+
+
+@dataclass
 class AnalysisResult:
     one_liner: str | None = None
     problem: str | None = None
@@ -43,6 +67,8 @@ class AnalysisResult:
     evidence_chunks: list[PaperChunk] = field(default_factory=list)
     citations: list[VerifiedCitation] = field(default_factory=list)
     card: dict[str, CardEntry | list[CardEntry] | None] = field(default_factory=dict)
+    knowledge_candidates: list[KnowledgeCandidateEntry] = field(default_factory=list)
+    knowledge_relations: list[KnowledgeRelationEntry] = field(default_factory=list)
     model_version: str | None = None
     prompt_version: str | None = None
 
@@ -53,6 +79,10 @@ class AnswerResult:
     chunks: list[PaperChunk]
     insufficient_evidence: bool
     citations: list[VerifiedCitation] = field(default_factory=list)
+    facts: list[str] = field(default_factory=list)
+    inferences: list[str] = field(default_factory=list)
+    unknowns: list[str] = field(default_factory=list)
+    needs_more_context: bool = False
 
 
 class ModelProvider(Protocol):
@@ -63,7 +93,10 @@ class ModelProvider(Protocol):
 
     def analyze(self, chunks: list[PaperChunk]) -> AnalysisResult: ...
     def ask(self, question: str, chunks: list[PaperChunk]) -> AnswerResult: ...
+    def ask_with_image(self, question: str, chunks: list[PaperChunk], image_data_url: str) -> AnswerResult: ...
     def translate(self, chunk: PaperChunk) -> str: ...
+
+    def audit_knowledge_bundle(self, bundle: dict) -> dict: ...
 
 
 class MetadataProvider(Protocol):

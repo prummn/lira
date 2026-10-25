@@ -332,6 +332,120 @@ def make_issue(session: Session, run: KnowledgeMaintenanceRun, finding: dict) ->
     return issue
 
 
+def build_model_bundle(session: Session, finding: dict) -> dict:
+    """Assemble one bounded one-hop neighborhood for a provider call."""
+    subject_ids = [str(item) for item in finding.get("subject_ids", [])][:20]
+    rows = _subject_rows_from_ids(session, subject_ids)
+    paper_ids = set(finding.get("paper_ids", []))
+    paper_ids.update(row.paper_id for row in rows if hasattr(row, "paper_id"))
+    papers = _paper_map(session, paper_ids)
+    candidate_ids = {row.id for row in rows if isinstance(row, KnowledgeCandidate)}
+    for relation in session.scalars(select(KnowledgeRelation).where(
+        or_(KnowledgeRelation.source_candidate_id.in_(candidate_ids), KnowledgeRelation.target_candidate_id.in_(candidate_ids))
+    ).limit(20)).all() if candidate_ids else []:
+        rows.append(relation)
+        paper_ids.add(relation.paper_id)
+    chunks = []
+    seen_chunks = set()
+    for row in rows:
+        paper = papers.get(getattr(row, "paper_id", None))
+        if paper is None:
+            continue
+        for evidence in _json(row.evidence_json, [])[:4]:
+            chunk = next((item for item in paper.chunks if item.id == evidence.get("chunk_id")), None)
+            if chunk is not None and chunk.id not in seen_chunks:
+                seen_chunks.add(chunk.id)
+                chunks.append({"chunk_id": chunk.id, "paper_id": paper.id, "page": chunk.page, "section": chunk.section, "content": chunk.content[:4000]})
+    if len(chunks) < 12:
+        for paper in papers.values():
+            for chunk in paper.chunks:
+                if chunk.id in seen_chunks:
+                    continue
+                seen_chunks.add(chunk.id)
+                chunks.append({"chunk_id": chunk.id, "paper_id": paper.id, "page": chunk.page, "section": chunk.section, "content": chunk.content[:4000]})
+                if len(chunks) >= 12:
+                    break
+            if len(chunks) >= 12:
+                break
+    return {
+        "subject_ids": subject_ids,
+        "finding": {key: finding.get(key) for key in ("kind", "summary", "reasoning", "proposed_action")},
+        "subjects": [_subject_payload(row) for row in rows[:20]],
+        "chunks": chunks,
+    }
+
+
+def _subject_rows_from_ids(session: Session, ids: Iterable[str]) -> list[Any]:
+    values = list(dict.fromkeys(str(item) for item in ids))
+    rows: list[Any] = []
+    for model in (KnowledgeEntity, KnowledgeCandidate, KnowledgeRelation):
+        rows.extend(session.scalars(select(model).where(model.id.in_(values))).all())
+    return rows
+
+
+def _subject_payload(row) -> dict:
+    payload = {key: value for key, value in _row_snapshot(row).items() if key in {
+        "id", "paper_id", "entity_id", "entity_type", "name", "normalized_name", "aliases_json", "role", "status",
+        "relation", "source_name", "source_normalized_name", "target_name", "target_normalized_name",
+        "source_candidate_id", "target_candidate_id", "description", "confidence",
+    }}
+    if "aliases_json" in payload:
+        payload["aliases"] = _json(payload.pop("aliases_json"), [])
+    payload.pop("evidence_json", None)
+    return payload
+
+
+def store_model_proposals(session: Session, run: KnowledgeMaintenanceRun, finding: dict, result: dict) -> list[KnowledgeMaintenanceIssue]:
+    """Validate provider proposals and turn them into reviewable issues."""
+    proposals = result.get("issues", []) if isinstance(result, dict) else []
+    if not isinstance(proposals, list):
+        return []
+    bundle = build_model_bundle(session, finding)
+    chunks = {item["chunk_id"]: item for item in bundle["chunks"]}
+    papers = _paper_map(session, {item["paper_id"] for item in bundle["chunks"]})
+    existing = {
+        (issue.kind, tuple(_json(issue.subject_ids_json, [])), _json(issue.proposed_action_json, {}).get("type"))
+        for issue in run.issues
+    }
+    stored = []
+    for proposal in proposals[:12]:
+        if not isinstance(proposal, dict):
+            continue
+        citations = []
+        for citation in proposal.get("citations", []) if isinstance(proposal.get("citations"), list) else []:
+            chunk = chunks.get(citation.get("chunk_id")) if isinstance(citation, dict) else None
+            if chunk is None:
+                continue
+            paper = papers.get(chunk["paper_id"])
+            if paper is None:
+                continue
+            valid = _valid_evidence(paper, [{"chunk_id": chunk["chunk_id"], "quote": citation.get("quote")}])
+            citations.extend([{**item, "paper_id": paper.id, "paper_title": paper.title} for item in valid])
+        action = proposal.get("action") if isinstance(proposal.get("action"), dict) else {}
+        action_type = action.get("type")
+        if action_type not in SAFE_ACTIONS | REVIEW_ACTIONS | {"review_evidence", "review_alias_collision"}:
+            action = {"type": "review_structure"}
+        subjects = [str(item) for item in proposal.get("subject_ids", [])]
+        kind = proposal.get("kind") if proposal.get("kind") in {"identity", "relation", "evidence", "coverage", "importance", "structure"} else finding.get("kind", "structure")
+        key = (kind, tuple(subjects), action.get("type"))
+        if key in existing:
+            continue
+        model_finding = {
+            "kind": kind, "severity": "warning", "subject_ids": subjects,
+            "paper_ids": list({item["paper_id"] for item in citations}), "evidence": citations,
+            "summary": proposal.get("summary") or finding.get("summary") or "模型发现待检查问题",
+            "reasoning": proposal.get("reasoning") or "模型建议需要根据原文证据复核",
+            "proposed_action": action, "confidence": proposal.get("confidence", 0),
+            "confidence_basis": proposal.get("confidence_factors") if isinstance(proposal.get("confidence_factors"), dict) else {},
+            "external_leads": [{"query": query, "source": "model", "status": "unfetched"} for query in proposal.get("external_queries", []) if isinstance(query, str)],
+        }
+        stored.append(make_issue(session, run, model_finding))
+        existing.add(key)
+    session.flush()
+    _refresh_run_counts(session, run)
+    return stored
+
+
 def _subject_rows(session: Session, issue: KnowledgeMaintenanceIssue) -> list[Any]:
     ids = _json(issue.subject_ids_json, [])
     rows: list[Any] = []
