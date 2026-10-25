@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -11,7 +9,6 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..maintenance_schemas import MaintenanceRunCreate
 from ..models import KnowledgeMaintenanceIssue, KnowledgeMaintenanceRun
-from ..providers import get_model_provider
 from ..services import knowledge_maintenance as maintenance
 
 router = APIRouter()
@@ -86,6 +83,16 @@ def apply_safe(run_id: str, session: Session = Depends(get_db)):
     run = session.get(KnowledgeMaintenanceRun, run_id)
     session.commit()
     return {"run": _detail(session, run), "results": results}
+
+
+@router.post("/knowledge/maintenance/runs/{run_id}/{action}")
+def maintenance_action(run_id: str, action: str, request: Request):
+    if action not in {'cancel', 'retry'}:
+        raise HTTPException(404, "维护操作不存在")
+    worker = getattr(request.app.state, "research_worker", None)
+    if worker is None or not hasattr(worker, "maintenance_action"):
+        raise HTTPException(503, "后台维护服务尚未启动")
+    return worker.maintenance_action(run_id, action)
 
 
 @router.post("/knowledge/maintenance/issues/{issue_id}/apply")

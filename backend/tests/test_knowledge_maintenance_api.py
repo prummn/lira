@@ -43,3 +43,17 @@ def test_run_deduplicates_same_fingerprint_unless_forced(client):
     assert first.json()["id"] == second.json()["id"]
     forced = client.post("/api/knowledge/maintenance/runs", json={"scope_type": "library", "force": True})
     assert forced.json()["id"] != first.json()["id"]
+
+
+def test_run_can_be_cancelled_and_retried_without_losing_local_issues(client):
+    seed_duplicate(client)
+    created = client.post("/api/knowledge/maintenance/runs", json={"scope_type": "papers", "paper_ids": ["paper-a"]})
+    run_id = created.json()["id"]
+    cancelled = client.post(f"/api/knowledge/maintenance/runs/{run_id}/cancel")
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["status"] == "cancelled"
+    retried = client.post(f"/api/knowledge/maintenance/runs/{run_id}/retry")
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["status"] == "queued"
+    detail = client.get(f"/api/knowledge/maintenance/runs/{run_id}").json()
+    assert detail["issues"]

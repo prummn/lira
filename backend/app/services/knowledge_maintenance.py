@@ -627,7 +627,7 @@ def prepare_run(session: Session, *, scope_type: str = "library", scope_id: str 
     return run
 
 
-def execute_run(session: Session, run: KnowledgeMaintenanceRun, provider=None) -> KnowledgeMaintenanceRun:
+def execute_run(session: Session, run: KnowledgeMaintenanceRun, provider=None, *, max_calls: int | None = None) -> KnowledgeMaintenanceRun:
     """Run the model stage for a prepared batch; local findings always survive."""
     from ..providers.base import ProviderError
 
@@ -635,7 +635,10 @@ def execute_run(session: Session, run: KnowledgeMaintenanceRun, provider=None) -
     run.started_at = run.started_at or _now()
     run.error_message = None
     session.flush()
-    issues = list(session.scalars(select(KnowledgeMaintenanceIssue).where(KnowledgeMaintenanceIssue.run_id == run.id)).all())
+    all_issues = list(session.scalars(select(KnowledgeMaintenanceIssue).where(KnowledgeMaintenanceIssue.run_id == run.id).order_by(KnowledgeMaintenanceIssue.created_at, KnowledgeMaintenanceIssue.id)).all())
+    usage = _json(run.usage_json, {"call_times": [], "events": [], "processed_issue_ids": []})
+    processed = {str(item) for item in usage.get("processed_issue_ids", []) if str(item)}
+    issues = [issue for issue in all_issues if issue.status == "proposed" and issue.id not in processed]
     if provider is None or getattr(provider, "mode", "extractive") != "remote" or not getattr(provider, "configured", False):
         run.status = "partial"
         run.error_message = "当前没有可用的远程模型，已保留程序化体检结果"
@@ -644,9 +647,10 @@ def execute_run(session: Session, run: KnowledgeMaintenanceRun, provider=None) -
         session.flush()
         return run
     errors = []
+    calls = 0
     for issue in issues:
-        if issue.status != "proposed":
-            continue
+        if max_calls is not None and calls >= max_calls:
+            break
         finding = {
             "kind": issue.kind, "summary": issue.summary, "reasoning": issue.reasoning,
             "subject_ids": _json(issue.subject_ids_json, []), "paper_ids": [],
@@ -655,22 +659,25 @@ def execute_run(session: Session, run: KnowledgeMaintenanceRun, provider=None) -
         bundle = build_model_bundle(session, finding)
         try:
             result = provider.audit_knowledge_bundle(bundle)
+            calls += 1
             store_model_proposals(session, run, finding, result)
+            processed.add(issue.id)
             run.model_name = result.get("model_version") or run.model_name
             run.prompt_version = result.get("prompt_version") or run.prompt_version
-            usage = _json(run.usage_json, {"call_times": [], "events": []})
             usage["call_times"] = [*usage.get("call_times", []), _now().timestamp()]
             usage["events"] = [*usage.get("events", []), {"stage": "maintenance", "at": _now().timestamp(), "code": "saved"}][-20:]
             usage["input_tokens"] = usage.get("input_tokens", 0) + int(getattr(provider, "last_usage", {}).get("input_tokens") or 0)
             usage["output_tokens"] = usage.get("output_tokens", 0) + int(getattr(provider, "last_usage", {}).get("output_tokens") or 0)
             usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
+            usage["processed_issue_ids"] = sorted(processed)
             run.usage_json = _dump(usage)
             session.flush()
         except ProviderError as error:
             errors.append(str(error))
             break
-    run.status = "partial" if errors else "complete"
-    run.error_message = errors[0] if errors else None
+    remaining = any(issue.status == "proposed" and issue.id not in processed for issue in all_issues)
+    run.status = "partial" if errors or remaining else "complete"
+    run.error_message = errors[0] if errors else ("本轮达到后台维护调用上限，可稍后继续" if remaining else None)
     run.finished_at = _now()
     _refresh_run_counts(session, run)
     session.flush()
