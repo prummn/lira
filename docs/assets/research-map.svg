@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="460" viewBox="0 0 1280 460" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">From a paper to a research atlas</title>
+  <desc id="desc">PDF pages and bibliographic metadata lead to anchored evidence. Reading, translation, questions and notes use that evidence. Across papers, methods, datasets and benchmarks form a knowledge network with links back to their sources.</desc>
+  <rect width="1280" height="460" rx="12" fill="#f5f1e9"/>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <g fill="#a85e43" font-size="14" letter-spacing="2"><text x="46" y="47">01 / COLLECT</text><text x="444" y="47">02 / UNDERSTAND</text><text x="865" y="47">03 / CONNECT</text></g>
+    <g fill="#302f2c" font-size="29" font-family="Georgia, 'Times New Roman', serif"><text x="46" y="94">Start with a paper</text><text x="444" y="94">Keep the evidence</text><text x="865" y="94">Build across papers</text></g>
+    <path d="M46 117H1234" stroke="#d9d1c4"/>
+    <g stroke="#aaa191" stroke-width="1.5">
+      <path d="M68 155H177L200 178V308H68Z" fill="#fcfaf6"/>
+      <path d="M177 155V178H200M88 192H159M88 218H181M88 230H181M88 242H164M88 278H181M88 290H158"/>
+      <path d="M85 250H184V260H85Z" fill="#d59a72" fill-opacity=".4" stroke="none"/>
+      <path d="M201 255H326Q350 255 350 231V218Q350 194 374 194H419"/>
+      <path d="M409 188L419 194L409 200"/>
+    </g>
+    <g fill="#716a60" font-size="16"><text x="225" y="184">PDF + metadata</text><text x="225" y="282">Page, paragraph,</text><text x="225" y="304">source location</text></g>
+    <g fill="#302f2c" font-size="20"><text x="444" y="178">Read &amp; translate</text><text x="444" y="242">Ask &amp; annotate</text><text x="444" y="306">Extract &amp; verify</text></g>
+    <g fill="#716a60" font-size="15"><text x="444" y="202">Original layout, formulas intact</text><text x="444" y="266">Questions and notes stay with sources</text><text x="444" y="330">Claims link back to the PDF</text></g>
+    <g stroke="#aaa191" stroke-width="1.5"><path d="M755 243H826M816 237L826 243L816 249"/></g>
+    <g stroke="#bcb3a4" stroke-width="1.5"><path d="M909 206L1039 172L1164 234L1048 300L909 206L941 315L1048 300M1039 172L1048 300M909 206L1164 234"/></g>
+    <g fill="#f5f1e9" stroke="#a85e43" stroke-width="1.5"><circle cx="909" cy="206" r="8"/><circle cx="1039" cy="172" r="8"/><circle cx="1164" cy="234" r="8"/><circle cx="1048" cy="300" r="8"/><circle cx="941" cy="315" r="5"/></g>
+    <g fill="#302f2c" font-size="16"><text x="864" y="181">Methods</text><text x="1005" y="148">Datasets</text><text x="1112" y="211">Benchmarks</text><text x="1012" y="330">Papers</text></g>
+    <path d="M46 369H1234" stroke="#d9d1c4"/>
+    <circle cx="54" cy="410" r="4" fill="#a85e43"/>
+    <text x="69" y="415" fill="#716a60" font-size="16">Source links remain available at every step.</text>
+    <text x="865" y="415" fill="#716a60" font-size="16">Stored locally. Models when needed.</text>
+  </g>
+</svg>

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="460" viewBox="0 0 1600 460" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">LIRA — Literature Research Atlas</title>
+  <desc id="desc">A local workspace for reading papers and connecting ideas. A paper, a source annotation and a network share the same visual thread.</desc>
+  <rect width="1600" height="460" rx="12" fill="#f5f1e9"/>
+  <path d="M64 395H1536" stroke="#d9d1c4"/>
+  <g transform="translate(66 71) scale(2.75)">
+    <rect width="32" height="32" rx="5" fill="#302f2c"/>
+    <path d="M6.5 8.5h12v17M25.5 23.5h-12v-17" stroke="#f5eee5" stroke-width="2"/>
+    <circle cx="16" cy="16" r="2.25" fill="#d59a72"/>
+  </g>
+  <text x="182" y="142" fill="#302f2c" font-family="Georgia, 'Times New Roman', serif" font-size="84" letter-spacing="6">LIRA</text>
+  <text x="68" y="224" fill="#716a60" font-family="Arial, Helvetica, sans-serif" font-size="18" letter-spacing="4">LITERATURE RESEARCH ATLAS</text>
+  <text x="65" y="307" fill="#302f2c" font-family="Georgia, 'Times New Roman', serif" font-size="38">Read closely. Connect ideas.</text>
+  <text x="68" y="427" fill="#716a60" font-family="Arial, Helvetica, sans-serif" font-size="14" letter-spacing="2">PAPERS / EVIDENCE / NOTES / KNOWLEDGE</text>
+  <g stroke="#d9d1c4">
+    <path d="M925 88H1073L1108 123V337H925Z" fill="#faf8f3" stroke-width="1.5"/>
+    <path d="M1073 88V123H1108M951 139H1041M951 154H1020M951 193H1081M951 207H1081M951 221H1061M951 264H1081M951 278H1081M951 292H1043" stroke-width="2"/>
+    <path d="M947 231H1084V245H947Z" fill="#d59a72" fill-opacity=".3" stroke="none"/>
+    <path d="M1083 238H1153L1219 190M1153 238L1240 290M1219 190L1365 139L1467 222L1390 318L1240 290M1219 190L1390 318M1365 139L1390 318M1240 290L1467 222" stroke-width="1.5"/>
+  </g>
+  <g fill="#f5f1e9" stroke="#817a6f" stroke-width="1.5">
+    <circle cx="1219" cy="190" r="9"/><circle cx="1365" cy="139" r="6"/>
+    <circle cx="1467" cy="222" r="7"/><circle cx="1390" cy="318" r="7"/>
+    <circle cx="1240" cy="290" r="6"/>
+  </g>
+  <circle cx="1153" cy="238" r="5" fill="#b36548"/>
+  <circle cx="1219" cy="190" r="4" fill="#b36548"/>
+  <text x="1022" y="427" fill="#716a60" font-family="Arial, Helvetica, sans-serif" font-size="14" letter-spacing="2">A LOCAL WORKSPACE FOR RESEARCH</text>
+</svg>

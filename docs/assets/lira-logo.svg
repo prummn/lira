@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">LIRA</title>
+  <desc id="desc">Two intersecting frames meet at a warm central point.</desc>
+  <rect width="512" height="512" rx="80" fill="#302f2c"/>
+  <path d="M104 136h192v272M408 376H216V104" stroke="#f5eee5" stroke-width="32" stroke-linecap="square"/>
+  <circle cx="256" cy="256" r="36" fill="#d59a72"/>
+</svg>

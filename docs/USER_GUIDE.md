@@ -2,7 +2,7 @@
 
 ## 启动工作台
 
-在 `D:\paper_reader` 的 PowerShell 中运行：
+在仓库根目录的 PowerShell 中运行：
 
 ```powershell
 .\scripts\start.ps1 -InstallDependencies
