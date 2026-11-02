@@ -38,6 +38,16 @@ test('a short English selection opens dictionary quick translation without model
     const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(range)
     span.dispatchEvent(new MouseEvent('mouseup', {bubbles:true}))
   })
+  const selectionRect = await page.evaluate(() => {
+    const range = window.getSelection()!.getRangeAt(0)
+    const rect = range.getBoundingClientRect()
+    return {top:rect.top,bottom:rect.bottom,left:rect.left,right:rect.right}
+  })
+  const actionsRect = await page.locator('.selection-actions').boundingBox()
+  expect(actionsRect).not.toBeNull()
+  expect(actionsRect!.x).toBeGreaterThanOrEqual(0)
+  expect(actionsRect!.x + actionsRect!.width).toBeLessThanOrEqual(1440)
+  expect(Math.abs(actionsRect!.y - selectionRect.bottom)).toBeLessThan(180)
   await page.getByRole('button', {name:'短词速译', exact:true}).click()
   await expect(page.locator('.quick-translation-popover')).toContainText('核验器')
   await expect(page.locator('.quick-translation-popover')).toContainText('/ˈverɪfaɪə(r)/')

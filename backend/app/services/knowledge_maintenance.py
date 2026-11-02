@@ -16,7 +16,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Iterable
 
 from fastapi import HTTPException
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..models import (
@@ -29,6 +29,7 @@ from ..models import (
     KnowledgeMaintenanceRun,
     KnowledgeRelation,
     Paper,
+    PaperChunk,
 )
 from . import knowledge_curation as curation
 from .knowledge import _valid_evidence, normalize_name
@@ -467,7 +468,8 @@ def _refresh_run_counts(session: Session, run: KnowledgeMaintenanceRun) -> None:
     session.flush()
     issues = list(session.scalars(select(KnowledgeMaintenanceIssue).where(KnowledgeMaintenanceIssue.run_id == run.id)).all())
     run.safe_count = sum(bool(row.auto_eligible and row.status == "proposed") for row in issues)
-    run.review_count = sum(row.status in {"proposed", "needs_review"} and not row.auto_eligible for row in issues)
+    run.review_count = sum(row.status in {"proposed", "needs_review"} and not row.auto_eligible
+        and not (row.status == 'proposed' and _json(row.proposed_action_json, {}).get('type') == 'curate_paper') for row in issues)
     run.conflict_count = sum(row.severity == "critical" for row in issues if row.status not in {"rejected", "undone"})
     run.applied_count = sum(row.status in {"auto_applied", "accepted"} for row in issues)
 
@@ -563,6 +565,15 @@ def undo_issue(session: Session, issue: KnowledgeMaintenanceIssue) -> KnowledgeM
     if issue.status not in {"auto_applied", "accepted"}:
         raise HTTPException(409, "这条维护建议没有可撤销的应用记录")
     change_ids = _json(issue.applied_change_ids_json, [])
+    if _json(issue.proposed_action_json, {}).get('type') == 'curate_paper':
+        from .knowledge_steward import undo_changes
+        undo_changes(session, change_ids)
+        issue.status = 'undone'
+        issue.updated_at = _now()
+        run = session.get(KnowledgeMaintenanceRun, issue.run_id)
+        if run:
+            _refresh_run_counts(session, run)
+        return issue
     changes = list(session.scalars(select(KnowledgeChange).where(KnowledgeChange.id.in_(change_ids))).all())
     if not changes:
         raise HTTPException(409, "找不到这条建议的变更快照")
@@ -604,6 +615,56 @@ def serialize_run(run: KnowledgeMaintenanceRun) -> dict:
     }
 
 
+def backlog(session: Session, *, scope_type='library', scope_id=None, paper_ids=()) -> dict:
+    """Current scope work across batches, counted once per paper, without PDFs."""
+    selected = _paper_ids(session, scope_type, scope_id, paper_ids)
+    papers = session.execute(select(Paper.id, Paper.title).where(
+        Paper.id.in_(selected), Paper.id.in_(select(PaperChunk.paper_id).distinct()))).all()
+    ids = {p.id for p in papers}
+    counts = {key: defaultdict(int) for key in ('objects', 'relations')}
+    for key, model in (('objects', KnowledgeCandidate), ('relations', KnowledgeRelation)):
+        for pid, count in session.execute(select(model.paper_id, func.count()).where(
+                model.paper_id.in_(ids), ~model.status.in_(['confirmed','known','alias','rejected']),
+                model.evidence_json != '[]').group_by(model.paper_id)):
+            counts[key][pid] = count
+    work = defaultdict(list)
+    for issue, run in session.execute(select(KnowledgeMaintenanceIssue, KnowledgeMaintenanceRun).join(
+            KnowledgeMaintenanceRun, KnowledgeMaintenanceRun.id == KnowledgeMaintenanceIssue.run_id)
+            .order_by(KnowledgeMaintenanceIssue.created_at.desc())):
+        action = _json(issue.proposed_action_json, {})
+        if action.get('type') == 'curate_paper' and action.get('paper_id') in ids:
+            work[action['paper_id']].append((issue, run))
+    items, checked = [], 0
+    rank = {'running': 0, 'queued': 1, 'retry_wait': 2, 'failed': 3, 'untracked': 4, 'needs_review': 5}
+    for paper in papers:
+        pending_objects, pending_relations = counts['objects'][paper.id], counts['relations'][paper.id]
+        state, job_id, error, success = None, None, None, False
+        for issue, run in work[paper.id]:
+            if issue.status in {'accepted','auto_applied'}:
+                success = True
+            if issue.status == 'proposed' and run.status in {'queued','running','partial'}:
+                usage = _json(run.usage_json, {})
+                candidate = ('running' if run.status == 'running' and usage.get('active_issue_id') == issue.id else 'retry_wait'
+                    if usage.get('retry_at', {}).get(issue.id, 0) > _now().timestamp() else 'queued')
+                if state is None or rank[candidate] < rank[state]:
+                    state, job_id = candidate, run.id
+                    # A batch error may belong to a different paper. Only show
+                    # it on an issue that actually has a recorded failed attempt.
+                    error = run.error_message if usage.get('attempts', {}).get(issue.id, 0) else None
+            elif issue.status == 'needs_review' and run.status != 'cancelled' and state is None and not success:
+                state, job_id, error = 'failed', run.id, issue.reasoning
+        checked += int(success)
+        if state is None:
+            state = 'needs_review' if success and (pending_objects or pending_relations) else 'untracked' if not success else None
+        if state is not None:
+            items.append(dict(paper_id=paper.id, title=paper.title, status=state, run_id=job_id,
+                pending_objects=pending_objects, pending_relations=pending_relations, error=error))
+    items.sort(key=lambda item: (rank[item['status']], item['title'].casefold()))
+    return dict(pending_papers=sum(i['status'] != 'needs_review' for i in items),
+        review_papers=sum(i['status'] == 'needs_review' for i in items), checked_papers=checked,
+        pending_objects=sum(counts['objects'].values()), pending_relations=sum(counts['relations'].values()), items=items)
+
+
 def prepare_run(session: Session, *, scope_type: str = "library", scope_id: str | None = None,
                 paper_ids: Iterable[str] = (), allow_external: bool = False, force: bool = False) -> KnowledgeMaintenanceRun:
     selected = _paper_ids(session, scope_type, scope_id, paper_ids)
@@ -611,6 +672,18 @@ def prepare_run(session: Session, *, scope_type: str = "library", scope_id: str 
         raise HTTPException(409, "当前范围没有可体检的论文")
     if scope_type == "collection" and not session.get(Collection, scope_id):
         raise HTTPException(404, "专题不存在")
+    if not force and scope_type == 'papers':
+        # Queued jobs read the latest snapshot; another extraction must not
+        # create a second owner of the same pending paper work.
+        active = session.scalars(select(KnowledgeMaintenanceRun).where(
+            KnowledgeMaintenanceRun.scope_type == 'papers',
+            KnowledgeMaintenanceRun.status.in_(['queued','partial']))
+            .order_by(KnowledgeMaintenanceRun.created_at)).all()
+        for previous_run in active:
+            wanted = {_json(i.proposed_action_json, {}).get('paper_id')
+                      for i in pending_audit_issues(session, previous_run)}
+            if wanted == set(selected):
+                return previous_run
     fingerprint = scope_fingerprint(session, selected)
     if not force:
         existing = session.scalar(select(KnowledgeMaintenanceRun).where(
@@ -619,7 +692,8 @@ def prepare_run(session: Session, *, scope_type: str = "library", scope_id: str 
             KnowledgeMaintenanceRun.source_fingerprint == fingerprint,
             KnowledgeMaintenanceRun.status.in_(["queued", "running", "complete", "partial"]),
         ).order_by(KnowledgeMaintenanceRun.created_at.desc()))
-        if existing is not None:
+        from .knowledge_steward import VERSION
+        if existing is not None and _json(existing.usage_json, {}).get('curation_version') == VERSION:
             return existing
     run = KnowledgeMaintenanceRun(
         id="kmr-" + uuid.uuid4().hex[:24], scope_type=scope_type, scope_id=scope_id,
@@ -628,26 +702,115 @@ def prepare_run(session: Session, *, scope_type: str = "library", scope_id: str 
     )
     session.add(run)
     session.flush()
-    for finding in collect_deterministic_findings(session, selected):
+    audit_ids = []
+    from .knowledge_steward import VERSION, fingerprint as paper_fingerprint
+    # One body-text audit per changed paper. Local findings remain diagnostic
+    # context, rather than consuming one model call per dangling relation.
+    for paper in _paper_map(session, selected).values():
+        current = paper_fingerprint(paper)
+        previous = session.scalars(select(KnowledgeMaintenanceIssue).where(
+            KnowledgeMaintenanceIssue.status.in_(['accepted', 'auto_applied']))).all()
+        if not force and any((action := _json(item.proposed_action_json, {})).get('type') == 'curate_paper'
+                and action.get('paper_id') == paper.id and action.get('version') == VERSION
+                and action.get('result_fingerprint') == current for item in previous):
+            continue
+        finding = {'kind': 'coverage', 'summary': paper.title, 'reasoning': '阅读正文，补全核心对象、核验关系并连接已有知识',
+            'paper_ids': [paper.id], 'subject_ids': [], 'confidence': 0,
+            'proposed_action': {'type': 'curate_paper', 'paper_id': paper.id, 'version': VERSION}}
         issue = make_issue(session, run, finding)
-        issue.source_fingerprint = subjects_fingerprint(session, finding.get("subject_ids", []), finding.get("paper_ids", [])) if finding.get("subject_ids") or finding.get("paper_ids") else fingerprint
+        audit_ids.append(issue.id)
+    run.usage_json = _dump({**_json(run.usage_json, {}), 'audit_issue_ids': audit_ids, 'forced': force, 'curation_version': VERSION})
     _refresh_run_counts(session, run)
     session.flush()
     return run
+
+
+def enqueue_after_analysis(session: Session, paper: Paper) -> None:
+    from ..models import ResearchControl
+    control = session.get(ResearchControl, 1)
+    settings = _json(control.settings_json, {}) if control else {}
+    if settings.get('enabled') and settings.get('maintenance_enabled') and paper.chunks:
+        session.flush()
+        prepare_run(session, scope_type='papers', paper_ids=[paper.id], allow_external=True)
+
+
+def _upgrade_run(session: Session, run: KnowledgeMaintenanceRun) -> None:
+    usage = _json(run.usage_json, {})
+    from .knowledge_steward import VERSION
+    if usage.get('curation_version') != VERSION:
+        legacy = list(session.scalars(select(KnowledgeMaintenanceIssue).where(KnowledgeMaintenanceIssue.run_id == run.id)))
+        selected = _paper_ids(session, run.scope_type, run.scope_id) if run.scope_type != 'papers' else sorted({
+            action['paper_id'] for item in legacy if (action := _json(item.proposed_action_json, {})).get('paper_id')})
+        ids = []
+        if not selected:
+            run.status = 'failed'
+            run.error_message = '旧整理批次未保存论文范围，请从当前专题重新发起整理；旧记录已保留'
+            run.finished_at = _now()
+            return
+        for paper in _paper_map(session, selected).values():
+            issue = make_issue(session, run, {'kind':'coverage','summary':paper.title,
+                'reasoning':'按正文重新检查核心对象与关系','paper_ids':[paper.id],
+                'proposed_action':{'type':'curate_paper','paper_id':paper.id,'version':VERSION}})
+            ids.append(issue.id)
+        for item in legacy:
+            if item.id in usage.get('audit_issue_ids', []) and item.status == 'proposed':
+                item.status = 'stale'
+                item.reasoning = '已由逐篇正文整理接替；原始检查记录保留'
+        usage.update(curation_version=VERSION, audit_issue_ids=ids, processed_issue_ids=[])
+        run.usage_json = _dump(usage)
+        session.flush()
+
+
+def pending_audit_issues(session: Session, run: KnowledgeMaintenanceRun) -> list[KnowledgeMaintenanceIssue]:
+    usage = _json(run.usage_json, {})
+    processed = set(usage.get('processed_issue_ids', []))
+    rows = list(session.scalars(select(KnowledgeMaintenanceIssue).where(
+        KnowledgeMaintenanceIssue.run_id == run.id).order_by(KnowledgeMaintenanceIssue.created_at, KnowledgeMaintenanceIssue.id)).all())
+    original = set(usage.get('audit_issue_ids', [])) if 'audit_issue_ids' in usage else {
+        row.id for row in rows if _json(row.confidence_basis_json, {}).get('deterministic')}
+    return [row for row in rows if row.id in original and row.id not in processed and row.status == 'proposed']
+
+
+def ready_audit_issues(session: Session, run: KnowledgeMaintenanceRun) -> list[KnowledgeMaintenanceIssue]:
+    retry = _json(run.usage_json, {}).get('retry_at', {})
+    return [item for item in pending_audit_issues(session, run) if retry.get(item.id, 0) <= _now().timestamp()]
 
 
 def execute_run(session: Session, run: KnowledgeMaintenanceRun, provider=None, *, max_calls: int | None = None) -> KnowledgeMaintenanceRun:
     """Run the model stage for a prepared batch; local findings always survive."""
     from ..providers.base import ProviderError
 
+    _upgrade_run(session, run)
+    if run.status == 'failed':
+        session.flush()
+        return run
+    usage = _json(run.usage_json, {})
+    if not usage.get('forced'):
+        prior = session.scalar(select(KnowledgeMaintenanceRun).where(
+            KnowledgeMaintenanceRun.id != run.id,
+            KnowledgeMaintenanceRun.scope_type == run.scope_type,
+            KnowledgeMaintenanceRun.scope_id == run.scope_id,
+            KnowledgeMaintenanceRun.source_fingerprint == run.source_fingerprint,
+            KnowledgeMaintenanceRun.allow_external == run.allow_external,
+            KnowledgeMaintenanceRun.status == 'complete').order_by(KnowledgeMaintenanceRun.created_at).limit(1))
+        if prior and _json(prior.usage_json, {}).get('curation_version') == usage.get('curation_version'):
+            run.status, run.finished_at = 'cancelled', _now()
+            run.error_message = '同一知识快照已完成体检，保留本批记录并跳过重复调用'
+            run.usage_json = _dump({**usage, 'duplicate_of': prior.id})
+            session.flush()
+            return run
     run.status = "running"
     run.started_at = run.started_at or _now()
     run.error_message = None
     session.flush()
-    all_issues = list(session.scalars(select(KnowledgeMaintenanceIssue).where(KnowledgeMaintenanceIssue.run_id == run.id).order_by(KnowledgeMaintenanceIssue.created_at, KnowledgeMaintenanceIssue.id)).all())
+    all_issues = pending_audit_issues(session, run)
     usage = _json(run.usage_json, {"call_times": [], "events": [], "processed_issue_ids": []})
     processed = {str(item) for item in usage.get("processed_issue_ids", []) if str(item)}
     issues = [issue for issue in all_issues if issue.status == "proposed" and issue.id not in processed]
+    attempts = usage.get('attempts', {})
+    retry_at = usage.get('retry_at', {})
+    issues.sort(key=lambda item: (attempts.get(item.id, 0), retry_at.get(item.id, 0), item.id))
+    issues = [item for item in issues if retry_at.get(item.id, 0) <= _now().timestamp()]
     if provider is None or getattr(provider, "mode", "extractive") != "remote" or not getattr(provider, "configured", False):
         run.status = "partial"
         run.error_message = "当前没有可用的远程模型，已保留程序化体检结果"
@@ -665,28 +828,100 @@ def execute_run(session: Session, run: KnowledgeMaintenanceRun, provider=None, *
             "subject_ids": _json(issue.subject_ids_json, []), "paper_ids": [],
             "proposed_action": _json(issue.proposed_action_json, {}),
         }
-        bundle = build_model_bundle(session, finding)
+        action = finding['proposed_action']
+        paper = session.get(Paper, action.get('paper_id')) if action.get('type') == 'curate_paper' else None
+        if action.get('type') == 'curate_paper' and (paper is None or not paper.chunks):
+            issue.status = 'stale'
+            processed.add(issue.id)
+            continue
+        if paper is not None:
+            from .knowledge_steward import VERSION, build_bundle, fingerprint as paper_fingerprint
+            current_fingerprint = paper_fingerprint(paper)
+            completed = session.scalars(select(KnowledgeMaintenanceIssue).where(
+                KnowledgeMaintenanceIssue.id != issue.id,
+                KnowledgeMaintenanceIssue.status.in_(['accepted','auto_applied']))).all()
+            prior_issue = next((item for item in completed if
+                (done := _json(item.proposed_action_json, {})).get('type') == 'curate_paper'
+                and done.get('paper_id') == paper.id and done.get('version') == VERSION
+                and done.get('result_fingerprint') == current_fingerprint), None) if not usage.get('forced') else None
+            if prior_issue is not None:
+                issue.status = 'accepted'
+                issue.reasoning = '该论文的当前知识快照已检查，复用已有结果，未重复调用模型'
+                issue.proposed_action_json = _dump({**action, 'result_fingerprint': current_fingerprint,
+                                                   'reused_issue_id': prior_issue.id})
+                processed.add(issue.id)
+                usage.setdefault('auto_actions', 0)
+                usage['processed_issue_ids'] = sorted(processed)
+                run.usage_json = _dump(usage)
+                session.flush()
+                continue
+            from .publication_metadata import enrich_publication
+            metadata = enrich_publication(session, paper, allow_external=run.allow_external)
+            bundle = build_bundle(session, paper)
+        else:
+            bundle = build_model_bundle(session, finding)
+        # Count attempts before generation: a rejected response or cancellation
+        # can still consume quota. The caller commits partial runs on failure.
+        calls += 1
+        usage['active_issue_id'] = issue.id
+        usage["call_times"] = [*usage.get("call_times", []), _now().timestamp()]
+        run.usage_json = _dump(usage)
+        # The provider may run for minutes. Persist its attempt, then release
+        # SQLite's write lock so reading, notes and foreground Q&A keep working.
+        session.commit()
         try:
             result = provider.audit_knowledge_bundle(bundle)
-            calls += 1
-            store_model_proposals(session, run, finding, result)
+            from ..providers.priority import check_background
+            check_background()
+            session.expire_all()
+            if run.status != 'running':
+                return run
+            if paper is not None:
+                from .knowledge_steward import apply_batch
+                report = apply_batch(session, paper, result, bundle)
+                report['publication'] = metadata
+                issue.proposed_action_json = _dump({**action, 'result_fingerprint': report['result_fingerprint']})
+                issue.applied_change_ids_json = _dump(report['change_ids'])
+                issue.summary = report['summary'] or paper.title
+                issue.reasoning = '已核对正文；仅写入原文支持、端点有效且未覆盖人工决定的变更'
+                issue.auto_eligible = True
+                issue.status = 'auto_applied' if report['change_ids'] else 'accepted'
+                usage['paper_audits'] = [*usage.get('paper_audits', []), report]
+                usage['auto_actions'] = usage.get('auto_actions', 0) + sum(report.get(k,0) for k in ('objects_confirmed','objects_rejected','objects_contextualized','relations_confirmed','relations_rejected','aliases_linked'))
+            else:
+                store_model_proposals(session, run, finding, result)
             processed.add(issue.id)
-            run.model_name = result.get("model_version") or run.model_name
-            run.prompt_version = result.get("prompt_version") or run.prompt_version
-            usage["call_times"] = [*usage.get("call_times", []), _now().timestamp()]
+            run.model_name = result.get("model_version") or getattr(provider, 'response_model', None) or getattr(provider, 'model', None) or run.model_name
+            run.prompt_version = result.get("prompt_version") or bundle.get('version') or run.prompt_version
             usage["events"] = [*usage.get("events", []), {"stage": "maintenance", "at": _now().timestamp(), "code": "saved"}][-20:]
             usage["input_tokens"] = usage.get("input_tokens", 0) + int(getattr(provider, "last_usage", {}).get("input_tokens") or 0)
             usage["output_tokens"] = usage.get("output_tokens", 0) + int(getattr(provider, "last_usage", {}).get("output_tokens") or 0)
             usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
             usage["processed_issue_ids"] = sorted(processed)
+            usage.pop('active_issue_id', None)
             run.usage_json = _dump(usage)
             session.flush()
         except ProviderError as error:
+            usage.pop('active_issue_id', None)
+            usage['input_tokens'] = usage.get('input_tokens', 0) + int(getattr(provider, 'last_usage', {}).get('input_tokens') or 0)
+            usage['output_tokens'] = usage.get('output_tokens', 0) + int(getattr(provider, 'last_usage', {}).get('output_tokens') or 0)
+            usage['total_tokens'] = usage['input_tokens'] + usage['output_tokens']
+            attempts[issue.id] = attempts.get(issue.id, 0) + int(error.code != 'background_preempted')
+            retry_at[issue.id] = _now().timestamp() + (5 if error.code == 'background_preempted' else 60)
+            usage['attempts'], usage['retry_at'] = attempts, retry_at
+            if attempts[issue.id] >= 2:
+                processed.add(issue.id)
+                issue.status = 'needs_review'
+                issue.reasoning = str(error)
+                usage['processed_issue_ids'] = sorted(processed)
+            usage["events"] = [*usage.get("events", []), {"stage": "maintenance", "at": _now().timestamp(), "code": error.code}][-20:]
+            run.usage_json = _dump(usage)
             errors.append(str(error))
             break
     remaining = any(issue.status == "proposed" and issue.id not in processed for issue in all_issues)
-    run.status = "partial" if errors or remaining else "complete"
-    run.error_message = errors[0] if errors else ("本轮达到后台维护调用上限，可稍后继续" if remaining else None)
+    failed = any(item.status == 'needs_review' for item in all_issues)
+    run.status = 'failed' if failed and not remaining else ("partial" if errors or remaining else "complete")
+    run.error_message = errors[0] if errors else ("部分论文等待重试退避，已有整理已保存" if remaining and not issues else "本轮达到后台维护调用上限，可稍后继续" if remaining else None)
     run.finished_at = _now()
     _refresh_run_counts(session, run)
     session.flush()

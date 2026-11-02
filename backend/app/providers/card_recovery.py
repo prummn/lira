@@ -13,6 +13,37 @@ MAX_REJECTED_VALUE_CHARS = 12000
 MAX_REJECTED_TEXT_CHARS = 24000
 
 
+def section_repair_context(context: dict, targets: list[dict]) -> dict | None:
+    """Repair heading metadata with complete cited sources, not the whole paper.
+
+    Unknown IDs, truncated targets and semantic/content faults still need the
+    broader context. Keep every source of each selected cross-section fact.
+    """
+    refs = set()
+    if not targets:
+        return None
+    for target in targets:
+        if (target.get('reason_codes') != ['section_mismatch']
+                or not target.get('rejected_value_complete')):
+            return None
+        try:
+            value = json.loads(target['rejected_value'])
+        except (KeyError, ValueError, TypeError):
+            return None
+        ids = value.get('citation_ids') if isinstance(value, dict) else None
+        if not isinstance(ids, list) or not ids or not all(isinstance(key, str) for key in ids):
+            return None
+        refs.update(ids)
+    available = {source['id'] for source in context['evidence']}
+    if not refs <= available:
+        return None
+    facts = [fact for fact in context['facts'] if refs.intersection(fact['citation_ids'])]
+    if not facts:
+        return None
+    refs.update(key for fact in facts for key in fact['citation_ids'])
+    return {'facts': facts, 'evidence': [source for source in context['evidence'] if source['id'] in refs]}
+
+
 def repair_targets(data: dict, rejections: list[dict]) -> list[dict]:
     raw = data.get('card') if isinstance(data.get('card'), dict) else data
     targets = {}

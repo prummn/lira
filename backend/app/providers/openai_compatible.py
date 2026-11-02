@@ -12,7 +12,7 @@ from typing import Any
 import httpx
 from ..models import PaperChunk
 from .base import AnalysisResult, AnswerResult, ProviderError, VerifiedCitation
-from .validation import canonical_quote
+from .validation import canonical_quote, canonical_elided_quote
 from .usage import sanitize_usage
 
 PROMPTS_DIR = Path(__file__).resolve().parents[3] / 'prompts'
@@ -20,6 +20,45 @@ MAX_CONTEXT_CHARS = 24000
 MAX_CHUNK_CHARS = 4000
 MAX_TRANSLATION_CHARS = 12000
 ABSTENTION = '当前提供的原文中没有足够且可验证的证据，无法回答这个问题。'
+
+
+def parse_json_object(content: str) -> dict[str, Any]:
+    """Extract one JSON object from a model response.
+
+    Models occasionally wrap a valid JSON response in a markdown fence or a
+    short preface/suffix.  The transport still asks for JSON, but accepting
+    those harmless wrappers keeps a good answer from being discarded.  We
+    deliberately decode only an object and never attempt to repair malformed
+    JSON or accept an array as an object.
+    """
+    if not isinstance(content, str):
+        raise ValueError('Expected a JSON object')
+    text = content.lstrip('\ufeff \t\r\n')
+    if text.startswith('```'):
+        first_line, separator, remainder = text.partition('\n')
+        if separator and first_line.strip().casefold() in {'```', '```json', '```jsonc'}:
+            text = remainder
+    decoder = json.JSONDecoder()
+    if text.startswith(('{', '[')):
+        try:
+            value, _ = decoder.raw_decode(text)
+        except json.JSONDecodeError:
+            raise ValueError('Incomplete JSON object') from None
+        if not isinstance(value, dict):
+            raise ValueError('Expected a JSON object')
+        return value
+    # Start at each object marker so prose before the payload is harmless,
+    # while raw_decode still enforces valid JSON syntax and balanced braces.
+    for offset, marker in enumerate(text):
+        if marker != '{':
+            continue
+        try:
+            value, _ = decoder.raw_decode(text[offset:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    raise ValueError('Expected a JSON object')
 
 
 class OpenAICompatibleProvider:
@@ -97,13 +136,12 @@ class OpenAICompatibleProvider:
         return None if self.reasoning_effort == 'disabled' else requested or self.reasoning_effort
 
     def test_connection(self) -> None:
-        """Make a tiny uncached request so the settings form can verify the profile."""
+        """Verify the saved settings, with room for a reasoning model's answer."""
         self._complete(
             'Reply with the single word OK.',
             'OK',
             json_output=False,
-            max_output_tokens=8,
-            reasoning_effort='minimal',
+            max_output_tokens=64 if self.reasoning_effort == 'disabled' else 1024,
         )
 
     @staticmethod
@@ -243,16 +281,16 @@ class OpenAICompatibleProvider:
                 raise ProviderError('模型服务响应过大，已拒绝处理', code='invalid_response')
         raise ProviderError('模型流式连接结束但未完成输出，请重试；已有结果已保留', code='stream_interrupted', retryable=True)
 
-    def _complete(self, system: str, user: str, *, json_output: bool, max_output_tokens: int = 3000, reasoning_effort: str | None = None, image_data_url: str | None = None) -> str:
+    def _complete(self, system: str, user: str, *, json_output: bool, max_output_tokens: int = 3000, reasoning_effort: str | None = None, image_data_url: str | None = None, output_schema: dict | None = None) -> str:
         self.last_usage = {}
         self.response_model = None
         gate = self._capacity() if hasattr(self, '_capacity') else nullcontext()
         with gate:
             return self._complete_request(system, user, json_output=json_output,
                 max_output_tokens=max_output_tokens, reasoning_effort=reasoning_effort,
-                image_data_url=image_data_url)
+                image_data_url=image_data_url, **({'output_schema': output_schema} if output_schema is not None else {}))
 
-    def _complete_request(self, system: str, user: str, *, json_output: bool, max_output_tokens: int = 3000, reasoning_effort: str | None = None, image_data_url: str | None = None) -> str:
+    def _complete_request(self, system: str, user: str, *, json_output: bool, max_output_tokens: int = 3000, reasoning_effort: str | None = None, image_data_url: str | None = None, output_schema: dict | None = None) -> str:
         self.last_usage = {}
         self.response_model = None
         self.last_http_status = None
@@ -266,6 +304,8 @@ class OpenAICompatibleProvider:
                 payload['reasoning'] = {'effort': effort}
             if json_output and self.json_mode != 'none':
                 payload['text'] = {'format': {'type': 'json_object'}}
+            if output_schema:
+                payload['text'] = {'format': {'type':'json_schema','name':'research_result','strict':True,'schema':output_schema}}
             endpoint = '/responses'
         else:
             user_content: str | list[dict[str, Any]] = user
@@ -276,6 +316,8 @@ class OpenAICompatibleProvider:
                 payload['reasoning_effort'] = effort
             if json_output and self.json_mode != 'none':
                 payload['response_format'] = {'type':'json_object'}
+            if output_schema:
+                payload['response_format'] = {'type':'json_schema','json_schema':{'name':'research_result','strict':True,'schema':output_schema}}
             endpoint = '/chat/completions'
         try:
             streamed = None
@@ -356,6 +398,11 @@ class OpenAICompatibleProvider:
 
     def audit_knowledge_bundle(self, bundle: dict) -> dict:
         """Ask for bounded maintenance proposals while validating their scope."""
+        if bundle.get('mode') == 'paper_curation':
+            from ..services.knowledge_steward import output_schema
+            prompt = self._prompt('knowledge_steward.txt')
+            data = self.complete_json(prompt, bundle, max_output_tokens=14000, reasoning_effort='high', output_schema=output_schema())
+            return data
         prompt = self._prompt('knowledge_maintenance.txt')
         data = self.complete_json(prompt, bundle, max_output_tokens=2200, reasoning_effort='minimal')
         raw = data.get('issues')
@@ -416,30 +463,53 @@ class OpenAICompatibleProvider:
             'prompt_version': 'maintenance-sha256:' + hashlib.sha256(prompt.encode('utf-8')).hexdigest(),
         }
 
-    def _json_with_image(self, prompt: str, data: dict[str, Any], image_data_url: str) -> dict[str, Any]:
-        content = self._complete(
-            prompt,
-            json.dumps(data, ensure_ascii=False),
-            json_output=True,
-            max_output_tokens=3000,
-            image_data_url=image_data_url,
-        )
+    def _answer_json(self, prompt: str, data: dict[str, Any], image_data_url: str | None = None) -> dict[str, Any]:
+        return self._json_with_image(prompt, data, image_data_url) if image_data_url else self._json(prompt, data)
+
+    def _json_with_image(self, prompt: str, data: dict[str, Any], image_data_url: str, *, output_schema: dict | None = None) -> dict[str, Any]:
+        payload = json.dumps(data, ensure_ascii=False)
+        content: str | None = None
+        first_error: ProviderError | None = None
+        text_fallback = False
         try:
-            result = json.loads(content)
-            if not isinstance(result, dict):
-                raise ValueError('Expected object')
-            return result
-        except (json.JSONDecodeError, ValueError):
+            content = self._complete(
+                prompt, payload, json_output=True, max_output_tokens=2200,
+                reasoning_effort='medium', image_data_url=image_data_url, output_schema=output_schema,
+            )
+        except ProviderError as error:
+            first_error = error
+            # Some official CLI/model combinations accept an image input but
+            # fail to complete a schema-constrained visual turn. The extracted
+            # page text is still useful, so make one bounded text-only pass
+            # instead of exposing a dead-end "request not completed" state.
+            if error.code not in {'upstream_error', 'stream_interrupted', 'transport_timeout', 'output_incomplete'}:
+                raise
+            try:
+                content = self._complete(
+                    prompt + '\n图像输入未能完成，请仅依据 supplied chunks 给出可核验的文字回答。',
+                    payload, json_output=False, max_output_tokens=1600,
+                    reasoning_effort='medium', output_schema=output_schema,
+                )
+                text_fallback = True
+            except ProviderError:
+                raise first_error
+        try:
+            return parse_json_object(content or '')
+        except ValueError:
+            # A vision model may follow the content request but ignore the
+            # JSON formatting instruction. Preserve that useful answer as a
+            # normal visual response; citations remain empty until verified
+            # against the extracted chunks by a later pass.
+            if output_schema is None and content and content.strip() and (first_error is None or text_fallback):
+                return {'answer': content.strip(), 'facts': [], 'inferences': [], 'unknowns': [],
+                        'needs_more_context': False, 'citations': [], 'insufficient_evidence': False}
             raise ProviderError('模型返回的结构化 JSON 无效，已有结果已保留', code='invalid_response', diagnostics=self._http_diagnostics()) from None
 
-    def complete_json(self, system: str, payload: dict, *, max_output_tokens: int, reasoning_effort: str | None = None) -> dict:
-        content = self._complete(system, json.dumps(payload,ensure_ascii=False), json_output=True, max_output_tokens=max_output_tokens, reasoning_effort=reasoning_effort)
+    def complete_json(self, system: str, payload: dict, *, max_output_tokens: int, reasoning_effort: str | None = None, output_schema: dict | None = None) -> dict:
+        content = self._complete(system, json.dumps(payload,ensure_ascii=False), json_output=True, max_output_tokens=max_output_tokens, reasoning_effort=reasoning_effort, **({'output_schema':output_schema} if output_schema else {}))
         try:
-            result = json.loads(content)
-            if not isinstance(result,dict):
-                raise ValueError('Expected object')
-            return result
-        except (json.JSONDecodeError,ValueError):
+            return parse_json_object(content)
+        except ValueError:
             raise ProviderError('模型返回的结构化 JSON 无效，已有结果已保留', code='invalid_response', diagnostics=self._http_diagnostics()) from None
 
     @staticmethod
@@ -460,7 +530,7 @@ class OpenAICompatibleProvider:
         return context,sent
 
     @staticmethod
-    def _citations(raw: Any, sent: dict[str,str], chunks: dict[str,PaperChunk], claim: str) -> tuple[list[VerifiedCitation],bool]:
+    def _citations(raw: Any, sent: dict[str,str], chunks: dict[str,PaperChunk], claim: str, *, allow_elisions: bool = False) -> tuple[list[VerifiedCitation],bool]:
         if not isinstance(raw,list) or not raw or len(raw) > 10:
             return [],False
         verified: list[VerifiedCitation] = []
@@ -477,6 +547,9 @@ class OpenAICompatibleProvider:
             sent_quote = canonical_quote(sent[chunk_id],quote)
             original = chunks[chunk_id]
             source = canonical_quote(original.content,quote)
+            if allow_elisions and sent_quote is None:
+                sent_quote = canonical_elided_quote(sent[chunk_id], quote)
+                source = canonical_quote(original.content, sent_quote) if sent_quote else None
             if sent_quote is None or source is None:
                 valid = False
                 continue
@@ -587,14 +660,28 @@ class OpenAICompatibleProvider:
         context,sent = self._context(ordered,prioritize_sections=False)
         if not context:
             return AnswerResult(ABSTENTION,[],True)
-        data = self._json(self._prompt('paper_ask.txt'), {'question':question,'chunks':context})
+        data = self._answer_json(self._prompt('paper_ask.txt'), {'question':question,'chunks':context})
+        return self._validated_answer(data, sent, chunks)
+
+    def _validated_answer(self, data: dict, sent: dict[str, str], chunks: list[PaperChunk], *, visual: bool = False) -> AnswerResult:
         answer = data.get('answer')
-        if data.get('insufficient_evidence') is not False or not isinstance(answer,str) or not answer.strip() or len(answer) > 16000:
-            return AnswerResult(ABSTENTION,[],True)
-        citations,valid = self._citations(data.get('citations'),sent,{c.id:c for c in chunks},answer.strip())
+        if (not isinstance(data.get('insufficient_evidence'), bool)
+                or not isinstance(answer, str) or not answer.strip() or len(answer) > 16000):
+            raise ProviderError('模型回答格式无效，请重试；已有对话已保留', code='invalid_response', diagnostics=self._http_diagnostics())
+        notes = self._answer_notes(data)
+        if data['insufficient_evidence']:
+            # Preserve the actual evidence gap, including the expansion signal.
+            # Validation failures below are technical errors, never refusals.
+            return AnswerResult(answer.strip(), [], True, unknowns=notes['unknowns'],
+                                needs_more_context=notes['needs_more_context'])
+        if visual and data.get('citations') == []:
+            return AnswerResult(answer.strip(), [], False, [], **notes)
+        citations, valid = self._citations(data.get('citations'), sent,
+            {c.id: c for c in chunks}, answer.strip(), allow_elisions=True)
         if not valid:
-            return AnswerResult(ABSTENTION,[],True)
-        return AnswerResult(answer.strip(),[],False,citations,**self._answer_notes(data))
+            raise ProviderError('回答的部分引文未通过原文校验，请重试；这不表示论文缺少相关内容，已有对话已保留',
+                                code='invalid_response', diagnostics={**self._http_diagnostics(), 'validation': 'answer_citations'})
+        return AnswerResult(answer.strip(), [], False, citations, **notes)
 
     def ask_with_image(self, question: str, chunks: list[PaperChunk], image_data_url: str) -> AnswerResult:
         """Ask about a rendered PDF page while preserving text citations.
@@ -610,17 +697,8 @@ class OpenAICompatibleProvider:
         # A scanned page or a figure-only page may have no extracted text. The
         # image is still a complete source for a vision-capable connection.
         # Keep the empty text context and let the model answer from the image.
-        data = self._json_with_image(self._prompt('paper_ask_visual.txt'), {'question': question, 'chunks': context}, image_data_url)
-        answer = data.get('answer')
-        if data.get('insufficient_evidence') is not False or not isinstance(answer, str) or not answer.strip() or len(answer) > 16000:
-            return AnswerResult(ABSTENTION, [], True)
-        raw_citations = data.get('citations')
-        if raw_citations == []:
-            return AnswerResult(answer.strip(), [], False, [], **self._answer_notes(data))
-        citations, valid = self._citations(raw_citations, sent, {c.id: c for c in chunks}, answer.strip())
-        if not valid:
-            return AnswerResult(ABSTENTION, [], True)
-        return AnswerResult(answer.strip(), [], False, citations, **self._answer_notes(data))
+        data = self._answer_json(self._prompt('paper_ask_visual.txt'), {'question': question, 'chunks': context}, image_data_url)
+        return self._validated_answer(data, sent, chunks, visual=True)
 
     def translate(self, chunk: PaperChunk) -> str:
         if len(chunk.content) > MAX_TRANSLATION_CHARS:

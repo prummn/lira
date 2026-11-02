@@ -101,6 +101,15 @@
 .pdfv-text-layer br::selection { background: transparent; }
 .pdfv-text-layer .pdfv-search-match { background: rgba(250, 191, 55, .32); box-shadow: 0 0 0 1px rgba(213, 160, 42, .32); }
 .pdfv-evidence-overlay { position: absolute; z-index: 3; pointer-events: none; border: 1px solid #c5a754; border-radius: 2px; background: rgba(255, 212, 94, .22); box-shadow: 0 0 0 2px rgba(227, 187, 69, .1); }
+.pdfv-visual-region { position:absolute; z-index:3; pointer-events:none; border:1px solid transparent; border-radius:3px; transition:border-color .16s ease,background-color .16s ease,box-shadow .16s ease; }
+.pdfv-visual-region.is-hovered { border-color:rgba(56,106,133,.78); background:rgba(76,139,161,.08); box-shadow:0 0 0 2px rgba(76,139,161,.11); }
+.pdfv-visual-region-action { position:absolute; z-index:7; display:inline-flex; align-items:center; gap:6px; max-width:190px; min-height:27px; padding:0 8px; border:1px solid #b9ccd0; border-radius:4px; color:#31555c; background:#f6fbfa; box-shadow:0 2px 8px rgba(24,48,51,.13); font-size:10px; font-weight:600; cursor:pointer; white-space:nowrap; }
+.pdfv-visual-region-action.figure { color:#365a76; background:#f3f8fc; border-color:#b9cada; }
+.pdfv-visual-region-action.table { color:#315f58; background:#f3faf7; border-color:#bad4c9; }
+.pdfv-visual-region-action:hover { filter:brightness(.97); box-shadow:0 3px 10px rgba(24,48,51,.19); }
+.pdfv-visual-region-action span { overflow:hidden; text-overflow:ellipsis; }
+.pdfv-visual-region-action:focus-visible { outline:2px solid #497b82; outline-offset:2px; }
+@media (prefers-reduced-motion:reduce) { .pdfv-visual-region { transition:none; } }
 .pdfv-note-group { --note-color:#b8791f; --note-ink:#86621d; --note-surface:#fff9e6; --note-hover:#ffedb8; --note-focus:#624307; pointer-events:none; }
 .pdfv-note-group-kind-note { --note-color:#5d7e9f; --note-ink:#536b82; --note-surface:#f1f6fb; --note-hover:#dceaf6; --note-focus:#38536d; }
 .pdfv-note-group-kind-idea { --note-color:#ac8d2d; --note-ink:#86702b; --note-surface:#fff9df; --note-hover:#f8edb6; --note-focus:#6f5b18; }

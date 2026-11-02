@@ -57,9 +57,9 @@ export function CodexAccountSettings({ onChange, onReady, onModelsRefresh, disab
     {account?.authenticated ? <>
       <div className="codex-account-identity"><Check size={17}/><span>{account.email}</span>{account.plan&&<span className="codex-plan">{account.plan}</span>}
         <button className="text-btn" type="button" disabled={busy||disabled} onClick={()=>void run(api.codexLogout)}>{t('codexLogout')}</button></div>
-      {account.limits.length>0?<div className="codex-limits">{account.limits.map(window=><div className="codex-limit" key={window.name}>
-        <div><span>{window.window_minutes ? `${window.window_minutes>=1440?window.window_minutes/1440:window.window_minutes/60} ${t(window.window_minutes>=1440?'codexDays':'codexHours')}` : t('codexQuota')}</span><strong>{t('codexUsed')} {Math.round(window.used_percent)}%</strong></div>
-        <progress aria-label={t('codexQuota')} max={100} value={window.used_percent} aria-valuenow={window.used_percent}/>
+      {account.limits.length>0?<div className="codex-limits">{account.limits.map(window=><div className="codex-limit" key={`${window.limit_id??''}-${window.name}`}>
+        <div><span>{window.window_minutes ? `${window.window_minutes>=1440?window.window_minutes/1440:window.window_minutes/60} ${t(window.window_minutes>=1440?'codexDays':'codexHours')}` : t('codexQuota')}{window.limit_id&&window.limit_id!=='codex'?` · ${window.limit_id}`:''}</span><strong>{window.used_percent===null?'—':`${t('codexUsed')} ${Math.round(window.used_percent)}%`}</strong></div>
+        <progress aria-label={t('codexQuota')} max={100} value={window.used_percent??undefined} aria-valuenow={window.used_percent??undefined}/>
         {window.resets_at&&<small>{t('codexResets')} {new Date(window.resets_at*1000).toLocaleString(language,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</small>}
       </div>)}</div>:<p className="codex-muted">{account.limits_error||t('codexNoLimits')}</p>}
     </> : account?.retryable ? <p>{t('codexAccountUnavailable')}</p> : account?.pending ? <div className="codex-login-pending">

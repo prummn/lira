@@ -130,6 +130,10 @@ def test_extraction_uses_local_source_ids_without_retyping_pdf_words(tmp_path):
         payload = json.loads(json.loads(request.content)['messages'][-1]['content'])
         if payload.get('stage') == 'review_card_science':
             answer = {'items': [{'field': item['field'], 'decision': 'supported'} for item in payload['items']]}
+        elif payload.get('stage') == 'repair_extract':
+            assert payload['targets'][0]['field'] == 'facts[1]'
+            # The fabricated fact cannot be justified by a source-ID repair.
+            answer = {'repairs': []}
         elif 'chunks' in payload:
             seen.extend(payload['chunks'])
             assert all(len(p['content']) <= 1000 for p in payload['chunks'])
@@ -258,9 +262,13 @@ def test_long_paper_reduction_remains_bounded_and_retains_late_evidence(tmp_path
 
 
 @pytest.mark.parametrize('bad_stage', ['extract', 'reduce', 'synthesize'])
-def test_partial_stage_retry_replaces_rejected_output_and_reuses_valid_stages(tmp_path, bad_stage):
+def test_partial_stage_retry_replaces_rejected_output_and_reuses_valid_stages(tmp_path, bad_stage, monkeypatch):
     from collections import Counter
     from app.providers.harness import analyze_full_paper
+    # Exercise reduction failures explicitly, independent of the larger final
+    # synthesis capacity used for ordinary papers.
+    if bad_stage == 'reduce':
+        monkeypatch.setattr('app.providers.harness.SYNTHESIS_CHARS', 48000)
     db = database(tmp_path)
     calls = Counter()
     failed_once = False
@@ -360,6 +368,41 @@ def test_reduction_preserves_negative_and_late_facts_and_rejects_foreign_ids():
         _reduce_facts([{'content': 'Foreign group quote.', 'fact_ids': [facts[0]['id']], 'citation_ids': [refs[-1]]}], facts[:1], pool, parts, max_facts=1)
 
 
+def test_reduction_can_preserve_omitted_parents_without_inventing_a_summary():
+    """A bad compression response must not make an otherwise readable paper fail."""
+    from app.providers.harness import _citation_pool, _facts, _reduce_facts, SourcePart
+
+    parts = {}
+    for index, content in enumerate((
+        'The collection procedure creates reproducible task environments.',
+        'The generated tasks are validated against the repository tests.',
+        'The released data covers many repositories and task instances.',
+    )):
+        part = SourcePart(f'c{index}:0:{len(content)}', f'c{index}', 0, len(content), index + 1, 'Results', content)
+        parts[part.part_id] = part
+    facts, invalid = _facts([
+        {'content': content, 'citations': [{'part_id': part_id, 'chunk_id': parts[part_id].chunk_id, 'source_text': parts[part_id].content}]}
+        for part_id, content in zip(parts, (
+            'The collection procedure creates reproducible task environments.',
+            'The generated tasks are validated against the repository tests.',
+            'The released data covers many repositories and task instances.',
+        ))
+    ], parts)
+    assert invalid == 0
+    pool = _citation_pool(facts, parts)
+    refs = [fact['citation_ids'][0] for fact in facts]
+
+    # The model merged the first two facts but silently omitted the third.
+    reduced, invalid = _reduce_facts([
+        {'content': 'The procedure creates validated task environments.',
+         'fact_ids': [facts[0]['id'], facts[1]['id']], 'citation_ids': refs[:2]},
+    ], facts, pool, parts, max_facts=2, allow_incomplete=True)
+
+    assert invalid == 0
+    assert {source_id for fact in reduced for source_id in fact['source_fact_ids']} == {fact['id'] for fact in facts}
+    assert any(fact['id'] == facts[2]['id'] and fact['content'] == facts[2]['content'] for fact in reduced)
+
+
 def test_fingerprint_uses_prompts_loaded_at_start_even_when_files_change(tmp_path, monkeypatch):
     import app.providers.harness as harness
     prompt_dir = tmp_path / 'prompts'
@@ -410,6 +453,7 @@ def test_card_ids_cannot_reach_evidence_outside_final_submitted_pool():
 def test_nonconvergent_id_reduction_fails_without_repeating_levels(tmp_path, monkeypatch):
     import app.providers.harness as harness
     monkeypatch.setattr(harness, 'REDUCE_CHARS', 1000)
+    monkeypatch.setattr(harness, 'SYNTHESIS_CHARS', 200)
     db = database(tmp_path)
     calls = []
     def respond(request):

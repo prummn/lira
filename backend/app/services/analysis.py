@@ -10,6 +10,7 @@ from ..providers.base import AnalysisResult, CardEntry, ModelProvider, ProviderE
 from ..schemas import PaperCard
 from ..providers.mock import body
 from ..providers.validation import canonical_quote
+from .knowledge import persist_candidates, paper_knowledge_status
 
 
 def evidence_for(chunk: PaperChunk) -> Evidence:
@@ -36,9 +37,15 @@ def evidence_for_citation(citation: VerifiedCitation, original: PaperChunk) -> E
     source = canonical_quote(original.content, citation.source_text)
     if source is None:
         raise ProviderError('模型引文无法在当前论文原文中验证，已有结果已保留')
-    source_type = 'explicit' if citation.claim == source else 'llm_summary'
+    source_type = citation.source_type if citation.source_type in {'explicit', 'llm_summary', 'external', 'user', 'metadata'} else ('explicit' if citation.claim == source else 'llm_summary')
     digest = hashlib.sha256(json.dumps([original.id,source,citation.claim,source_type],ensure_ascii=False).encode()).hexdigest()[:24]
-    return Evidence(id='evidence-' + digest, paper_id=original.paper_id, claim=citation.claim, source_text=source, page=original.page, section=original.section, confidence=1.0, source_type=source_type, chunk_id=original.id, bbox_json=original.bbox_json, page_width=original.page_width, page_height=original.page_height)
+    evidence = Evidence(id='evidence-' + digest, paper_id=original.paper_id, claim=citation.claim, source_text=source, page=original.page, section=original.section, confidence=1.0, source_type=source_type, chunk_id=original.id, bbox_json=original.bbox_json, page_width=original.page_width, page_height=original.page_height)
+    source_url = getattr(original, 'source_url', None)
+    if source_url:
+        # Evidence is a response-only object here; external snippets are not
+        # persisted and therefore do not need a database column.
+        evidence.source_url = source_url  # type: ignore[attr-defined]
+    return evidence
 
 
 def analyze_paper(session: Session, paper: Paper, provider: ModelProvider) -> None:
@@ -115,4 +122,10 @@ def persist_analysis_result(session: Session, paper: Paper, provider: ModelProvi
     analysis.prompt_version = result.prompt_version
     paper.analysis = analysis
     paper.analysis_status = "ready"
+    candidates, relations = persist_candidates(
+        session, paper, result.knowledge_candidates, result.knowledge_relations,
+        run_id=f"{result.prompt_version or 'analysis'}-{uuid.uuid4().hex[:12]}",
+    )
+    # persist_candidates computes status from the complete inventory, including
+    # earlier manual decisions and incremental paragraph extractions.
     session.flush()

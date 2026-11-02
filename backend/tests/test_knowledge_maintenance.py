@@ -56,6 +56,65 @@ def test_deterministic_audit_reports_exact_duplicate_candidates_as_safe(tmp_path
         assert duplicate["confidence_basis"]["exact_identity"] is True
 
 
+def test_audit_results_are_not_reaudited_as_new_work(tmp_path):
+    from app.services.knowledge_maintenance import prepare_run, execute_run
+    database = make_db(tmp_path)
+    class Auditor:
+        mode = 'remote'
+        configured = True
+        last_usage = {'input_tokens': 20, 'output_tokens': 10}
+        calls = 0
+        def audit_knowledge_bundle(self, bundle):
+            self.calls += 1
+            if bundle.get('mode') == 'paper_curation':
+                return {'summary': 'No additions', 'candidates': [], 'relations': [], 'reviews': []}
+            return {'issues': [{'kind': 'structure', 'summary': 'Review the missing concept',
+                'subject_ids': ['c-1'], 'action': {'type': 'create_entity'},
+                'confidence': .8, 'citations': []}]}
+    writer = Auditor()
+    with database.sessions() as db:
+        paper = _paper(db)
+        db.add_all([_candidate(paper, 'c-1'), _candidate(paper, 'c-2')])
+        db.commit()
+        run = prepare_run(db)
+        initial = len(run.issues)
+        for _ in range(initial + 3):
+            execute_run(db, run, writer, max_calls=1)
+            db.commit()
+        assert run.status == 'complete'
+        assert writer.calls == initial
+
+
+def test_old_duplicate_snapshot_does_not_consume_more_model_calls(tmp_path):
+    from app.services.knowledge_maintenance import prepare_run, execute_run
+    database = make_db(tmp_path)
+    class Auditor:
+        mode = 'remote'
+        configured = True
+        calls = 0
+        def audit_knowledge_bundle(self, bundle):
+            self.calls += 1
+            return {'summary': 'No additions', 'candidates': [], 'relations': [], 'reviews': []}
+    writer = Auditor()
+    with database.sessions() as db:
+        paper = _paper(db)
+        db.add_all([_candidate(paper, 'c-1'), _candidate(paper, 'c-2')])
+        db.commit()
+        first = prepare_run(db)
+        db.commit()
+        second = KnowledgeMaintenanceRun(id='duplicate-run', scope_type='library', status='queued',
+            source_fingerprint=first.source_fingerprint, usage_json=first.usage_json)
+        db.add(second)
+        db.commit()
+        execute_run(db, first, writer)
+        db.commit()
+        count = writer.calls
+        execute_run(db, second, writer)
+        assert writer.calls == count
+        assert second.status == 'cancelled'
+        assert json.loads(second.usage_json)['duplicate_of'] == first.id
+
+
 def test_scope_fingerprint_serializes_analysis_timestamps(tmp_path):
     database = make_db(tmp_path)
     with database.sessions() as session:

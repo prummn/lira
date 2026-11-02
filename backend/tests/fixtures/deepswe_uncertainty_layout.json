@@ -1,0 +1,553 @@
+{
+  "source": "DeepSWE, section 5.5, page 12: published text and observed PDF line geometry",
+  "chunks": [
+    {
+      "id": "uncertainty-0",
+      "page": 12,
+      "section": "5.5 Uncertainty quantification",
+      "content": "5.5 Uncertainty quantification",
+      "bbox": [
+        72.0,
+        365.69384765625,
+        240.0001983642578,
+        376.60296630859375
+      ]
+    },
+    {
+      "id": "uncertainty-1",
+      "page": 12,
+      "section": "5.5 Uncertainty quantification",
+      "content": "√",
+      "bbox": [
+        493.90399169921875,
+        444.7978210449219,
+        502.99127197265625,
+        455.7069091796875
+      ]
+    },
+    {
+      "id": "uncertainty-2",
+      "page": 12,
+      "section": "5.5 Uncertainty quantification",
+      "content": "Running every task about four times is the same as running the whole benchmark about four\ntimes, so each configuration has roughly four benchmark scores. The first score grades each task\non its first rollout, the second score grades each task on its second rollout, and so on (we order a\ntask’s rollouts by start time). Call these scores s1, . . . , sR. If a configuration is stable, its scores\nland close together; if it is noisy, they spread out. We report that spread as a 95% confidence\ninterval, pass@1 ± 1.96 SE, where the standard error of the mean is SE = std(s1, . . . , sR)/",
+      "bbox": [
+        72.0,
+        386.2037353515625,
+        540.4506225585938,
+        466.1072082519531
+      ]
+    },
+    {
+      "id": "uncertainty-3",
+      "page": 12,
+      "section": "5.5 Uncertainty quantification",
+      "content": "R. This\nconvention follows Terminal-Bench [Merrill et al., 2026]; we release the per-run scores and the code\nthat computes them. These intervals are the whiskers in Figure 1, and they caution against reading\nthe leaderboard as a strict ranking: GPT-5.5 sits clearly apart at the top (70.0%, [67.2, 72.9]), while\nmid-table neighbors such as GPT-5.4 (55.5%, [53.4, 57.7]) and Claude Opus 4.7 (54.2%, [49.5, 58.9])\nhave overlapping intervals and so are not statistically separated.",
+      "bbox": [
+        72.0,
+        453.94970703125,
+        541.279541015625,
+        532.6047973632812
+      ]
+    },
+    {
+      "id": "uncertainty-4",
+      "page": 12,
+      "section": "5.5 Uncertainty quantification",
+      "content": "This interval captures only one source of noise: how much the score moves when we rerun the\nsame 113 tasks. It misses a second source: the benchmark is just one particular set of 113 tasks,\nand a different but equally reasonable set could have given a different score. The interval also\nhas a small-sample weakness. With only about four runs, a configuration whose runs happen\nto land close together looks very precise even when its true uncertainty is large [Wang, 2025,\nTerminal-Bench contributors, 2026]. Methods that also account for which tasks were chosen give\nwider intervals [Madaan et al., 2024]. One option is a cluster bootstrap: repeatedly build a new\n113-task benchmark by drawing tasks at random (with replacement) from our 113 tasks, keeping\neach drawn task’s rollouts together, rescore each time, and read the spread of those scores; this shows\nhow much the result depends on the particular tasks. Even a Wilson interval, a standard confidence\ninterval for a success rate computed over all attempts pooled together, is wider here: [65.6, 74.1] for\nGPT-5.5, against [67.2, 72.9] run-to-run. We report the run-to-run interval for comparability with\nexisting leaderboards.",
+      "bbox": [
+        71.45500183105469,
+        539.0416870117188,
+        541.7048950195312,
+        712.5408325195312
+      ]
+    }
+  ],
+  "lines": [
+    {
+      "key": [
+        11,
+        10,
+        0
+      ],
+      "text": "5.5 Uncertainty quantification",
+      "bbox": [
+        72.0,
+        365.69384765625,
+        240.0001983642578,
+        376.60296630859375
+      ],
+      "size": 10.909099578857422,
+      "bold": true,
+      "horizontal": true,
+      "rank": 10
+    },
+    {
+      "key": [
+        11,
+        11,
+        0
+      ],
+      "text": "√",
+      "bbox": [
+        493.90399169921875,
+        444.7978210449219,
+        502.99127197265625,
+        455.7069091796875
+      ],
+      "size": 10.909099578857422,
+      "bold": false,
+      "horizontal": true,
+      "rank": 11
+    },
+    {
+      "key": [
+        11,
+        12,
+        0
+      ],
+      "text": "Running every task about four times is the same as running the whole benchmark about four",
+      "bbox": [
+        72.0,
+        386.2037353515625,
+        540.40283203125,
+        397.1128234863281
+      ],
+      "size": 11.017650604248047,
+      "bold": false,
+      "horizontal": true,
+      "rank": 12
+    },
+    {
+      "key": [
+        11,
+        12,
+        1
+      ],
+      "text": "times, so each configuration has roughly four benchmark scores. The first score grades each task",
+      "bbox": [
+        72.0,
+        399.75372314453125,
+        540.4506225585938,
+        410.6628112792969
+      ],
+      "size": 11.006843566894531,
+      "bold": false,
+      "horizontal": true,
+      "rank": 12
+    },
+    {
+      "key": [
+        11,
+        12,
+        2
+      ],
+      "text": "on its first rollout, the second score grades each task on its second rollout, and so on (we order a",
+      "bbox": [
+        72.0,
+        413.302734375,
+        540.1664428710938,
+        424.2118225097656
+      ],
+      "size": 10.990612983703613,
+      "bold": false,
+      "horizontal": true,
+      "rank": 12
+    },
+    {
+      "key": [
+        11,
+        12,
+        3
+      ],
+      "text": "task’s rollouts by start time). Call these scores s1, . . . , sR. If a configuration is stable, its scores",
+      "bbox": [
+        72.0,
+        426.85174560546875,
+        540.0540161132812,
+        439.00921630859375
+      ],
+      "size": 11.017650604248047,
+      "bold": false,
+      "horizontal": true,
+      "rank": 12
+    },
+    {
+      "key": [
+        11,
+        12,
+        4
+      ],
+      "text": "land close together; if it is noisy, they spread out. We report that spread as a 95% confidence",
+      "bbox": [
+        72.0,
+        440.40069580078125,
+        540.19140625,
+        451.309814453125
+      ],
+      "size": 11.017650604248047,
+      "bold": false,
+      "horizontal": true,
+      "rank": 12
+    },
+    {
+      "key": [
+        11,
+        12,
+        5
+      ],
+      "text": "interval, pass@1 ± 1.96 SE, where the standard error of the mean is SE = std(s1, . . . , sR)/",
+      "bbox": [
+        72.0,
+        453.94970703125,
+        493.903564453125,
+        466.1072082519531
+      ],
+      "size": 10.909099578857422,
+      "bold": false,
+      "horizontal": true,
+      "rank": 12
+    },
+    {
+      "key": [
+        11,
+        13,
+        0
+      ],
+      "text": "R. This",
+      "bbox": [
+        502.9939880371094,
+        453.94970703125,
+        540.0029296875,
+        465.060302734375
+      ],
+      "size": 10.909099578857422,
+      "bold": false,
+      "horizontal": true,
+      "rank": 13
+    },
+    {
+      "key": [
+        11,
+        13,
+        1
+      ],
+      "text": "convention follows Terminal-Bench [Merrill et al., 2026]; we release the per-run scores and the code",
+      "bbox": [
+        72.0,
+        467.49969482421875,
+        540.2045288085938,
+        478.4088134765625
+      ],
+      "size": 10.837958335876465,
+      "bold": false,
+      "horizontal": true,
+      "rank": 13
+    },
+    {
+      "key": [
+        11,
+        13,
+        2
+      ],
+      "text": "that computes them. These intervals are the whiskers in Figure 1, and they caution against reading",
+      "bbox": [
+        72.0,
+        481.0487060546875,
+        540.1873168945312,
+        491.95782470703125
+      ],
+      "size": 10.799457550048828,
+      "bold": false,
+      "horizontal": true,
+      "rank": 13
+    },
+    {
+      "key": [
+        11,
+        13,
+        3
+      ],
+      "text": "the leaderboard as a strict ranking: GPT-5.5 sits clearly apart at the top (70.0%, [67.2, 72.9]), while",
+      "bbox": [
+        72.0,
+        494.59771728515625,
+        540.0158081054688,
+        505.70831298828125
+      ],
+      "size": 10.909099578857422,
+      "bold": false,
+      "horizontal": true,
+      "rank": 13
+    },
+    {
+      "key": [
+        11,
+        13,
+        4
+      ],
+      "text": "mid-table neighbors such as GPT-5.4 (55.5%, [53.4, 57.7]) and Claude Opus 4.7 (54.2%, [49.5, 58.9])",
+      "bbox": [
+        72.0,
+        508.146728515625,
+        541.279541015625,
+        519.25732421875
+      ],
+      "size": 10.909099578857422,
+      "bold": false,
+      "horizontal": true,
+      "rank": 13
+    },
+    {
+      "key": [
+        11,
+        13,
+        5
+      ],
+      "text": "have overlapping intervals and so are not statistically separated.",
+      "bbox": [
+        72.0,
+        521.6956787109375,
+        378.9057312011719,
+        532.6047973632812
+      ],
+      "size": 10.909099578857422,
+      "bold": false,
+      "horizontal": true,
+      "rank": 13
+    },
+    {
+      "key": [
+        11,
+        14,
+        0
+      ],
+      "text": "This interval captures only one source of noise: how much the score moves when we rerun the",
+      "bbox": [
+        71.60700225830078,
+        539.0416870117188,
+        540.1878662109375,
+        549.9508056640625
+      ],
+      "size": 11.017650604248047,
+      "bold": false,
+      "horizontal": true,
+      "rank": 14
+    },
+    {
+      "key": [
+        11,
+        14,
+        1
+      ],
+      "text": "same 113 tasks. It misses a second source: the benchmark is just one particular set of 113 tasks,",
+      "bbox": [
+        72.0,
+        552.5906982421875,
+        541.6268920898438,
+        563.4998168945312
+      ],
+      "size": 11.017650604248047,
+      "bold": false,
+      "horizontal": true,
+      "rank": 14
+    },
+    {
+      "key": [
+        11,
+        14,
+        2
+      ],
+      "text": "and a different but equally reasonable set could have given a different score. The interval also",
+      "bbox": [
+        72.0,
+        566.1406860351562,
+        540.2138061523438,
+        577.0498046875
+      ],
+      "size": 11.017650604248047,
+      "bold": false,
+      "horizontal": true,
+      "rank": 14
+    },
+    {
+      "key": [
+        11,
+        14,
+        3
+      ],
+      "text": "has a small-sample weakness. With only about four runs, a configuration whose runs happen",
+      "bbox": [
+        72.0,
+        579.689697265625,
+        540.14697265625,
+        590.5988159179688
+      ],
+      "size": 11.017650604248047,
+      "bold": false,
+      "horizontal": true,
+      "rank": 14
+    },
+    {
+      "key": [
+        11,
+        14,
+        4
+      ],
+      "text": "to land close together looks very precise even when its true uncertainty is large [Wang, 2025,",
+      "bbox": [
+        72.0,
+        593.2387084960938,
+        541.7048950195312,
+        604.1478271484375
+      ],
+      "size": 11.017650604248047,
+      "bold": false,
+      "horizontal": true,
+      "rank": 14
+    },
+    {
+      "key": [
+        11,
+        14,
+        5
+      ],
+      "text": "Terminal-Bench contributors, 2026]. Methods that also account for which tasks were chosen give",
+      "bbox": [
+        71.60700225830078,
+        606.7877197265625,
+        540.1679077148438,
+        617.6968383789062
+      ],
+      "size": 10.996026039123535,
+      "bold": false,
+      "horizontal": true,
+      "rank": 14
+    },
+    {
+      "key": [
+        11,
+        14,
+        6
+      ],
+      "text": "wider intervals [Madaan et al., 2024]. One option is a cluster bootstrap: repeatedly build a new",
+      "bbox": [
+        71.60700225830078,
+        620.336669921875,
+        540.566162109375,
+        631.484619140625
+      ],
+      "size": 11.017650604248047,
+      "bold": false,
+      "horizontal": true,
+      "rank": 14
+    },
+    {
+      "key": [
+        11,
+        14,
+        7
+      ],
+      "text": "113-task benchmark by drawing tasks at random (with replacement) from our 113 tasks, keeping",
+      "bbox": [
+        71.45500183105469,
+        633.8857421875,
+        540.1353149414062,
+        644.7948608398438
+      ],
+      "size": 10.979779243469238,
+      "bold": false,
+      "horizontal": true,
+      "rank": 14
+    },
+    {
+      "key": [
+        11,
+        14,
+        8
+      ],
+      "text": "each drawn task’s rollouts together, rescore each time, and read the spread of those scores; this shows",
+      "bbox": [
+        72.0,
+        647.4356689453125,
+        540.1658935546875,
+        658.3447875976562
+      ],
+      "size": 10.799457550048828,
+      "bold": false,
+      "horizontal": true,
+      "rank": 14
+    },
+    {
+      "key": [
+        11,
+        14,
+        9
+      ],
+      "text": "how much the result depends on the particular tasks. Even a Wilson interval, a standard confidence",
+      "bbox": [
+        72.0,
+        660.9846801757812,
+        540.1979370117188,
+        672.0846557617188
+      ],
+      "size": 10.799457550048828,
+      "bold": false,
+      "horizontal": true,
+      "rank": 14
+    },
+    {
+      "key": [
+        11,
+        14,
+        10
+      ],
+      "text": "interval for a success rate computed over all attempts pooled together, is wider here: [65.6, 74.1] for",
+      "bbox": [
+        72.0,
+        674.53369140625,
+        540.234375,
+        685.644287109375
+      ],
+      "size": 10.909099578857422,
+      "bold": false,
+      "horizontal": true,
+      "rank": 14
+    },
+    {
+      "key": [
+        11,
+        14,
+        11
+      ],
+      "text": "GPT-5.5, against [67.2, 72.9] run-to-run. We report the run-to-run interval for comparability with",
+      "bbox": [
+        72.0,
+        688.0827026367188,
+        540.1520385742188,
+        699.1932983398438
+      ],
+      "size": 10.920002937316895,
+      "bold": false,
+      "horizontal": true,
+      "rank": 14
+    },
+    {
+      "key": [
+        11,
+        14,
+        12
+      ],
+      "text": "existing leaderboards.",
+      "bbox": [
+        72.0,
+        701.6317138671875,
+        175.8655242919922,
+        712.5408325195312
+      ],
+      "size": 10.909099578857422,
+      "bold": false,
+      "horizontal": true,
+      "rank": 14
+    }
+  ]
+}

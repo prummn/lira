@@ -39,11 +39,20 @@ def create_app(
             return get_model_provider()
         finally:
             current_store.reset(token)
-    worker = IntelligenceWorker(database, provider_factory=choose_provider)
+    from .services.background_research import BackgroundResearchWorker
+    research_worker = BackgroundResearchWorker(database, profiles)
+    worker = IntelligenceWorker(database, provider_factory=choose_provider,
+        profiles=profiles, research_worker=research_worker)
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         database.migrate()
+        from .services.knowledge_identity import reconcile_library
+        with database.sessions() as session:
+            reconcile_library(session)
+            session.commit()
+        from .services.conversations import recover_interrupted
+        recover_interrupted(database)
         storage.mkdir(parents=True, exist_ok=True)
         if seed_demo:
             from .seed import seed_database
@@ -51,9 +60,11 @@ def create_app(
             with database.sessions() as session:
                 seed_database(session, storage)
         worker.start()
+        research_worker.start()
         try:
             yield
         finally:
+            research_worker.stop()
             worker.stop()
             profiles.codex.close()
             database.engine.dispose()
@@ -63,6 +74,7 @@ def create_app(
     )
     application.state.database = database
     application.state.intelligence_worker = worker
+    application.state.research_worker = research_worker
     application.state.storage_dir = storage
     application.state.model_config_path = config_path
     application.state.model_profiles = profiles
@@ -70,6 +82,11 @@ def create_app(
     @application.middleware('http')
     async def model_profile_context(request: Request, call_next):
         token = current_store.set(profiles)
+        # Signal before provider/account RPCs, including explicit analysis queues.
+        if request.method in {'POST', 'PUT', 'PATCH'} and (
+            request.url.path.startswith(('/api/papers/', '/api/intelligence/', '/api/librarian'))
+        ) and not request.url.path.endswith('/translation-jobs/prioritize'):
+            profiles.priority.foreground()
         try:
             return await call_next(request)
         finally:

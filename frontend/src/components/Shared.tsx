@@ -9,12 +9,12 @@ export function Loading({ text }: { text: string }) { return <div className="emp
 export function ErrorBanner({ error, retry }: {error: string; retry?: () => void}) {
   const {t} = useUi(); return <div className="error-banner" role="alert"><AlertCircle size={16}/><span>{error}</span>{retry && <button className="text-btn" onClick={retry}>{t('retry')}</button>}</div>
 }
-export function Modal({ title, children, close }: {title: string; children: ReactNode; close: () => void}) {
+export function Modal({ title, children, close, variant = 'default', className = '', headerActions }: {title: string; children: ReactNode; close: () => void; variant?: 'default' | 'drawer'; className?: string; headerActions?:ReactNode}) {
   const {t} = useUi()
-  return createPortal(<div className="modal-backdrop" onClick={close} onKeyDown={e => { if(e.key === 'Escape') close() }}><section role="dialog" aria-modal="true" aria-label={title} className="modal" onClick={e => e.stopPropagation()}><div className="modal-head"><h2>{title}</h2><button className="icon-btn" aria-label={t('close')} onClick={close}><X size={18}/></button></div>{children}</section></div>, document.body)
+  return createPortal(<div className={`modal-backdrop ${variant === 'drawer' ? 'modal-backdrop-drawer' : ''}`} onClick={close} onKeyDown={e => { if(e.key === 'Escape') close() }}><section role="dialog" aria-modal="true" aria-label={title} className={`modal ${className}`} onClick={e => e.stopPropagation()}><div className="modal-head"><h2>{title}</h2><div className="modal-head-actions">{headerActions}<button className="icon-btn" aria-label={t('close')} onClick={close}><X size={18}/></button></div></div>{children}</section></div>, document.body)
 }
 export function SourceBadge({ source }: {source: string}) {
-  const {t} = useUi(); const key = source === 'user' ? 'sourceUser' : source === 'llm_summary' ? 'sourceAiSummary' : source === 'llm_inferred' || source === 'ai' ? 'sourceAi' : source === 'metadata' ? 'sourceMetadata' : 'sourceExplicit'
+  const {t} = useUi(); const key = source === 'external' ? 'sourceExternal' : source === 'user' ? 'sourceUser' : source === 'llm_summary' ? 'sourceAiSummary' : source === 'llm_inferred' || source === 'ai' ? 'sourceAi' : source === 'metadata' ? 'sourceMetadata' : 'sourceExplicit'
   return <span className={`source-badge source-${source}`}>{t(key)}</span>
 }
 export function PaperLink({ title, onClick }: { title: string; onClick: () => void }) { return <button className="paper-link" onClick={onClick}><span>{title}</span><ArrowUpRight size={14}/></button> }

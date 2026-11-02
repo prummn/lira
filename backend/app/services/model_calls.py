@@ -88,6 +88,8 @@ def json_call(database: Database, provider, system: str, payload: dict, operatio
     cached = cached_call(database, provider, system, payload, operation, max_output_tokens, reasoning_effort)
     if cached:
         return cached
+    from ..providers.priority import check_admission
+    check_admission()
     key = request_signature(provider, system, payload, operation, max_output_tokens, reasoning_effort)
     # No ORM transaction or connection is held during the potentially long network call.
     data = provider.complete_json(system, payload, max_output_tokens=max_output_tokens, reasoning_effort=reasoning_effort)

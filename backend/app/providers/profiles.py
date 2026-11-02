@@ -1,7 +1,7 @@
 """Atomic, server-only connection profiles and shared per-profile capacity gates."""
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from copy import deepcopy
 import json
@@ -26,6 +26,11 @@ class ProfileStore:
         self._lock = threading.RLock()
         self._condition = threading.Condition()
         self._in_use: dict[str, int] = {}
+        self._background_use: dict[str, int] = {}
+        self._waiting: dict[str, list] = {}
+        self._adaptive: dict[str, dict] = {}
+        from .priority import ResearchPriority
+        self.priority = ResearchPriority()
         self._state = json.loads(path.read_text(encoding='utf-8')) if path.exists() else None
         if self._state is not None and (self._state.get('version') != 1 or not isinstance(self._state.get('profiles'), list)):
             raise ValueError('模型配置文件格式无效')
@@ -103,10 +108,50 @@ class ProfileStore:
             return {**state, 'configuration_error': '旧模型配置无效，请新增连接；原配置文件未改动'}
         state = self._snapshot()
         state.pop('version')
+        state.setdefault('codex_max_concurrency', 4)
         state['profiles'] = [{**{k: v for k, v in p.items() if k != 'api_key'},
                               'provider_kind': p.get('provider_kind', 'api'),
                               'api_key_configured': bool(p.get('api_key'))} for p in state['profiles']]
         return state
+
+    def codex_concurrency(self) -> int:
+        with self._lock:
+            return min(8, max(1, self._snapshot().get('codex_max_concurrency', 4)))
+
+    def set_codex_concurrency(self, limit: int) -> dict:
+        if not 1 <= limit <= 8:
+            raise ValueError('官方账号并发请选择 1 至 8')
+        with self._lock:
+            state = self._snapshot()
+            state['codex_max_concurrency'] = limit
+            self._commit(state)
+        with self._condition:
+            self._condition.notify_all()
+        return self.public()
+
+    def worker_parallelism(self):
+        """Separate API profiles have capacity; official profiles share one account."""
+        profiles = self._snapshot()['profiles']
+        return min(16, max(1, sum(p.get('max_concurrency', 1) for p in profiles
+            if p.get('provider_kind') != 'codex') +
+            (self.codex_concurrency() if any(p.get('provider_kind') == 'codex' for p in profiles) else 0)))
+
+    def _effective_limit(self, key, configured):
+        adaptive = self._adaptive.get(key)
+        if adaptive and time.monotonic() >= adaptive['recover_at']:
+            adaptive['limit'] = min(configured, adaptive['limit'] + 1)
+            adaptive['recover_at'] = time.monotonic() + 60
+        return min(configured, adaptive['limit']) if adaptive else configured
+
+    def capacity_status(self):
+        with self._condition:
+            configured = self.codex_concurrency()
+            return {'official': {'configured': configured,
+                'effective': self._effective_limit('codex-subscription', configured),
+                'active': self._in_use.get('codex-subscription', 0),
+                'waiting': len(self._waiting.get('codex-subscription', []))},
+                'active': sum(self._in_use.values()),
+                'waiting': sum(len(items) for items in self._waiting.values())}
 
     def save(self, payload, profile_id: str | None = None) -> dict:
         with self._lock:
@@ -127,7 +172,8 @@ class ProfileStore:
         if payload.test_connection:
             if profile_id or payload.provider_kind == 'codex':
                 gate_id = 'codex-subscription' if payload.provider_kind == 'codex' else profile_id
-                provider._capacity = lambda: self.capacity(gate_id, values['max_concurrency'])
+                provider._capacity = lambda: self.capacity(gate_id,
+                    self.codex_concurrency() if payload.provider_kind == 'codex' else values['max_concurrency'])
             provider.test_connection()
         with self._lock:
             latest = self._snapshot(ignore_invalid_legacy=profile_id is None)
@@ -195,9 +241,19 @@ class ProfileStore:
         provider = self._build(profile)
         provider.profile_id, provider.profile_name = profile['id'], profile['name']
         subscription = profile.get('provider_kind') == 'codex'
+        provider.capacity_key = 'codex-subscription' if subscription else profile_id
         provider._capacity = lambda: self.capacity('codex-subscription' if subscription else profile_id,
-            1 if subscription else profile['max_concurrency'])
+            self.codex_concurrency() if subscription else profile['max_concurrency'])
         return provider
+
+    def subscription_provider(self, profile_id: str):
+        # Validate and build one frozen profile under the same lock. An edit
+        # cannot turn optional subscription work into a paid API request.
+        with self._lock:
+            profile = next((p for p in self._snapshot()['profiles'] if p['id'] == profile_id), None)
+            if profile is None or profile.get('provider_kind') != 'codex':
+                raise ProviderError('后台研究只使用指定的官方 Codex 连接', 409, code='subscription_required')
+            return self.provider(profile_id)
 
     def selected(self):
         # Before first migration preserve the legacy environment-backed adapter.
@@ -232,19 +288,56 @@ class ProfileStore:
 
     @contextmanager
     def capacity(self, profile_id: str, limit: int):
-        deadline = time.monotonic() + 1.0
-        with self._condition:
-            while self._in_use.get(profile_id, 0) >= limit:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise ProviderError('当前连接已达到同时请求上限，请稍后重试或切换连接', 503,
-                        code='local_capacity', retryable=True, retry_after=1,
-                        diagnostics={'request_sent': False})
-                self._condition.wait(timeout=min(.25, remaining))
-            self._in_use[profile_id] = self._in_use.get(profile_id, 0) + 1
-        try:
-            yield
-        finally:
+        from .priority import check_background, is_background, request_priority
+        background = is_background()
+        rank = request_priority()
+        work = nullcontext(False) if background else self.priority.foreground_work()
+        with work:
+            # A busy local account is a queue, not a failed upstream request.
+            deadline = time.monotonic() + 600
+            ticket = object()
             with self._condition:
-                self._in_use[profile_id] -= 1
-                self._condition.notify_all()
+                waiting = self._waiting.setdefault(profile_id, [])
+                waiting.append((ticket, rank))
+                try:
+                    while True:
+                        check_background()
+                        configured = self.codex_concurrency() if profile_id == 'codex-subscription' else limit
+                        effective_limit = self._effective_limit(profile_id, configured)
+                        first = min(waiting, key=lambda item: item[1]() if callable(item[1]) else item[1])[0] is ticket
+                        full = self._in_use.get(profile_id, 0) >= effective_limit
+                        # Idle capacity is borrowable. Rank-0 requests win the
+                        # next slot without cancelling already paid generation.
+                        if first and not full:
+                            self._in_use[profile_id] = self._in_use.get(profile_id, 0) + 1
+                            if background:
+                                self._background_use[profile_id] = self._background_use.get(profile_id, 0) + 1
+                            break
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise ProviderError('等待当前连接超过时限，请重试；已有结果已保留', 503,
+                                code='local_capacity', retryable=True, retry_after=1,
+                                diagnostics={'request_sent': False})
+                        self._condition.wait(timeout=min(.2, remaining))
+                finally:
+                    waiting.remove((ticket, rank))
+                    if not waiting:
+                        self._waiting.pop(profile_id, None)
+                    self._condition.notify_all()
+            try:
+                from .priority import check_admission
+                check_admission()
+                yield
+            except ProviderError as error:
+                if error.code == 'rate_limit':
+                    with self._condition:
+                        current = self._adaptive.get(profile_id, {}).get('limit', effective_limit)
+                        self._adaptive[profile_id] = {'limit': max(1, min(current, effective_limit) // 2),
+                            'recover_at': time.monotonic() + max(60, error.retry_after or 0)}
+                raise
+            finally:
+                with self._condition:
+                    self._in_use[profile_id] -= 1
+                    if background:
+                        self._background_use[profile_id] -= 1
+                    self._condition.notify_all()

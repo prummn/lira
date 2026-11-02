@@ -23,7 +23,8 @@ from sqlalchemy.orm import Session, selectinload
 from starlette.concurrency import run_in_threadpool
 
 from ..db import get_db
-from ..models import Author, Collection, CollectionPaper, Edge, Note, Paper, PaperAuthor
+from ..models import Author, Collection, CollectionPaper, Edge, Note, Paper, PaperAuthor, PaperChunk
+from ..services.paper_citations import citation_edges
 from ..providers import OpenAICompatibleProvider, get_model_provider
 from ..providers.config import MODEL_ENV_KEYS, clear_model_config, persist_model_config
 from ..schemas import (
@@ -217,6 +218,20 @@ def graph(
         if paper_ids
         else []
     )
+    chunks = session.scalars(select(PaperChunk).where(PaperChunk.paper_id.in_(paper_ids), or_(
+        PaperChunk.section.ilike('%references%'), PaperChunk.section.ilike('%bibliography%'),
+        PaperChunk.section.ilike('%参考文献%'))).order_by(
+        PaperChunk.paper_id, PaperChunk.page, PaperChunk.id)).all() if paper_ids else []
+    observed = {(edge['source'], edge['target'], edge['relation']): edge
+                for edge in citation_edges(papers, chunks)}
+    # Preserve stored provenance/description, supplementing source excerpts only.
+    projected = []
+    for edge in edges:
+        recovered = observed.pop((edge.source_paper_id, edge.target_paper_id, edge.relation), {})
+        projected.append({**recovered, 'id': edge.id, 'source': edge.source_paper_id,
+                          'target': edge.target_paper_id, 'relation': edge.relation,
+                          'description': edge.description, 'relation_source': edge.relation_source})
+    projected.extend(observed.values())
     return {
         "nodes": [
             {
@@ -228,15 +243,5 @@ def graph(
             }
             for p in papers
         ],
-        "edges": [
-            {
-                "id": e.id,
-                "source": e.source_paper_id,
-                "target": e.target_paper_id,
-                "relation": e.relation,
-                "description": e.description,
-                "relation_source": e.relation_source,
-            }
-            for e in edges
-        ],
+        "edges": projected,
     }

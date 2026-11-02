@@ -1,0 +1,23 @@
+.research-answer { min-width: 0; }
+.research-answer .intelligence-claim { position: relative; border: 0; padding: 0; margin: 0 0 26px; }
+.answer-kind-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.research-answer .answer-references { display: flex; gap: 3px; flex-wrap: wrap; margin: 7px 0 0; }
+.research-answer .answer-reference { display: inline-flex; align-items: center; min-height: 26px; padding: 2px 4px; background: none; border: 0; border-radius: 4px; color: var(--text-3); font-size: 11px; line-height: 1.6; font-variant-numeric: tabular-nums; }
+.research-answer .answer-reference:hover, .research-answer .answer-reference[aria-expanded=true] { color: var(--accent); background: var(--accent-soft); }
+.answer-source-panel { margin: 10px 0 5px; padding: 14px 16px; border-left: 2px solid var(--border-strong); background: var(--surface-subtle); border-radius: 0 7px 7px 0; }
+.answer-source-panel > header { display: flex; gap: 12px; align-items: center; justify-content: space-between; color: var(--text-2); font-size: 11px; line-height: 1.7; }
+.answer-source-panel .icon-btn { width: 24px; height: 24px; flex-shrink: 0; }
+.answer-source-title { margin: 8px 0; font-size: 12px; font-weight: 550; }
+.answer-source-quote { padding-top: 10px; }
+.answer-source-quote + .answer-source-quote { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.answer-source-quote .scientific-text { font-size: 13px; line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); }
+.answer-source-quote .text-btn { margin-top: 8px; font-size: 11px; color: var(--accent); }
+.answer-reading-limits { border-left: 2px solid var(--border); padding-left: 12px; margin: 22px 0; }
+.answer-reading-limits .research-markdown { font-size: 12px; color: var(--text-2); }
+.answer-details { color: var(--text-3); font-size: 11px; margin-top: 18px; }
+.answer-details > summary { display: flex; width: fit-content; align-items: center; gap: 4px; cursor: pointer; list-style: none; padding-block: 5px; }
+.answer-details > summary::-webkit-details-marker { display: none; }
+.answer-details > summary:hover { color: var(--text-2); }
+.answer-details[open] > summary > svg { transform: rotate(180deg); }
+.answer-details-body { padding: 8px 0; line-height: 1.8; }
+.answer-details-body > p { margin: 0 0 7px; font-size: 11px; }

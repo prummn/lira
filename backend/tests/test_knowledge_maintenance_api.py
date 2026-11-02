@@ -20,21 +20,22 @@ def seed_duplicate(client):
         session.commit()
 
 
-def test_run_persists_deterministic_issues_and_safe_batch(client):
+def test_run_persists_one_paper_checkpoint_without_promising_unperformed_repairs(client):
     seed_duplicate(client)
     created = client.post("/api/knowledge/maintenance/runs", json={"scope_type": "papers", "paper_ids": ["paper-a"]})
     assert created.status_code == 200, created.text
     payload = created.json()
     assert payload["scope_type"] == "papers"
-    assert any(issue["auto_eligible"] for issue in payload["issues"])
-    assert payload["safe_count"] >= 1
+    assert len(payload['issues']) == 1
+    assert payload['issues'][0]['proposed_action']['type'] == 'curate_paper'
+    assert payload['safe_count'] == 0
     run_id = payload["id"]
     applied = client.post(f"/api/knowledge/maintenance/runs/{run_id}/apply-safe")
     assert applied.status_code == 200, applied.text
-    assert applied.json()["results"]
+    assert applied.json()["results"] == []
     current = client.get(f"/api/knowledge/maintenance/runs/{run_id}")
     assert current.status_code == 200
-    assert current.json()["applied_count"] >= 1
+    assert current.json()["applied_count"] == 0
 
 
 def test_run_deduplicates_same_fingerprint_unless_forced(client):

@@ -7,6 +7,35 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $runtimeDir = Join-Path $projectRoot '.local-runtime'
 New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
+
+# Reuse a healthy instance recorded by the workspace instead of silently
+# creating another pair of ports. Multiple copies are especially dangerous
+# while the backend is being upgraded: an old process can keep serving an
+# outdated provider adapter behind a familiar-looking frontend URL.
+$statePath = Join-Path $runtimeDir 'processes.json'
+if (Test-Path -LiteralPath $statePath) {
+    try {
+        $state = Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json
+        if ($state.root -eq $projectRoot -and $state.backendPort -and $state.frontendPort) {
+            $backend = Get-CimInstance Win32_Process -Filter "ProcessId = $($state.backendPid)" -ErrorAction SilentlyContinue
+            $frontend = Get-CimInstance Win32_Process -Filter "ProcessId = $($state.frontendPid)" -ErrorAction SilentlyContinue
+            $backendOwned = $backend -and $backend.CommandLine -match 'uvicorn[/\\] backend\.app\.main:app|uvicorn backend\.app\.main:app'
+            $frontendOwned = $frontend -and $frontend.CommandLine -match 'vite[/\\]bin[/\\]vite\.js'
+            if ($backendOwned -and $frontendOwned) {
+                $health = Invoke-RestMethod -Uri "http://127.0.0.1:$($state.backendPort)/api/health" -TimeoutSec 1
+                $web = Invoke-WebRequest -Uri "http://127.0.0.1:$($state.frontendPort)" -TimeoutSec 1 -UseBasicParsing
+                if ($health.status -eq 'ok' -and $web.StatusCode -eq 200) {
+                    Write-Host "Research workspace is already running: $($state.url)"
+                    if (-not $NoBrowser) { Start-Process $state.url }
+                    return
+                }
+            }
+        }
+    } catch {
+        # A stale or partial record is harmless; normal startup below will
+        # choose available ports and write a fresh record.
+    }
+}
 . (Join-Path $PSScriptRoot 'port-selection.ps1')
 
 # Read configuration as data, never as PowerShell. Explicit environment variables win.

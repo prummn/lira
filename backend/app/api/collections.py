@@ -29,6 +29,7 @@ from ..schemas import (
     AskResponse,
     CollectionCreate,
     CollectionListResponse,
+    CollectionPapersAdd,
     CollectionRead,
     NoteCreate,
     NoteRead,
@@ -92,6 +93,35 @@ def create_collection(
     except IntegrityError as error:
         session.rollback()
         raise HTTPException(409, "同名集合已存在") from error
+    return collection_read(collection)
+
+
+@router.post('/collections/{collection_id}/papers', response_model=CollectionRead)
+def add_papers(
+    collection_id: str, payload: CollectionPapersAdd, session: Session = Depends(get_db)
+) -> CollectionRead:
+    collection = require_collection(session, collection_id)
+    paper_ids = set(payload.paper_ids)
+    found = set(session.scalars(select(Paper.id).where(Paper.id.in_(paper_ids))).all())
+    if found != paper_ids:
+        raise HTTPException(404, '部分论文已不存在，请刷新文献库后重试')
+    existing = set(session.scalars(
+        select(CollectionPaper.paper_id).where(CollectionPaper.collection_id == collection_id)
+    ).all())
+    session.add_all(CollectionPaper(collection_id=collection_id, paper_id=paper_id)
+                    for paper_id in paper_ids - existing)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        # Concurrent repeat submissions may have already inserted the full batch.
+        stored = set(session.scalars(select(CollectionPaper.paper_id).where(
+            CollectionPaper.collection_id == collection_id,
+            CollectionPaper.paper_id.in_(paper_ids),
+        )).all())
+        if stored != paper_ids:
+            raise HTTPException(409, '集合内容刚刚发生变化，请重试') from None
+    session.expire(collection, ['paper_links'])
     return collection_read(collection)
 
 

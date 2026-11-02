@@ -1,0 +1,11 @@
+# Remove test data from the personal library
+
+The live library contained 41 papers titled `Translation Reading <timestamp>`, created on October 30. Each PDF was verified as the same two-page Evidence Integration Test fixture, including its verifier-guided reasoning and 100-example experiment text. One older metadata-only `Knowledge panel fixture` with the exact fixture abstract was also confirmed. The stale ignored `vite.config.js` hardcoded the production backend, allowing an earlier test frontend to bypass the temporary backend.
+
+Before removal, SQLite's backup API created a complete consistent database snapshot and all 41 PDFs were copied to `C:/Users/15039/AppData/Local/Lira/backups/test-cleanup-20261030-155540/`. The directory includes an exact manifest. A transaction removed only the 42 identified paper IDs and their dependent test records. Untargeted paper, note, conversation, collection, knowledge and research rows were compared before/after and were unchanged. Foreign-key checks passed; associated search index rows and activity paper-ID references were removed. Remaining library count: 42, comprising 32 real papers and 10 pre-existing demo papers.
+
+The obsolete generated Vite config files were removed. Playwright now requires an isolated backend identity from both the direct backend and the frontend proxy before tests execute. The identity includes a per-run token and verifies the actual temporary database and storage. Production services do not expose that endpoint, so a misplaced proxy fails closed. Existing explicit TypeScript config selection and dedicated ports remain enforced; production ports cannot be selected as the E2E frontend port.
+
+Validation: two isolation tests passed, including rejection of ordinary health responses, wrong run tokens, non-temporary storage/database, missing identity, and nonlocal targets. Read-only probes against live ports 8000/5173 were rejected. One real browser translation regression passed through the new guard. A subsequent read-only live browser check confirmed zero identified test papers, 42 library rows, NL2Repo first, and no page errors. The production backend/frontend processes were preserved.
+
+Cleanup script and reports: `C:/Users/15039/AppData/Local/Temp/lira-clean-test-papers.py`, `lira-fixture-manifest.json`, `lira-clean-library-check.mjs`, `lira-library-clean.png`.

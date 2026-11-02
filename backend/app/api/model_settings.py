@@ -1,6 +1,6 @@
 """Named model connections. Credentials never appear in public responses."""
 from fastapi import APIRouter, HTTPException, Request
-from ..schemas import ModelProfileUpdate, ModelRoutingUpdate
+from ..schemas import CodexConcurrencyUpdate, ModelProfileUpdate, ModelRoutingUpdate
 
 router = APIRouter(prefix='/settings')
 
@@ -13,6 +13,11 @@ def codex_status(request: Request):
 @router.get('/codex/models')
 def codex_models(request: Request, refresh: bool = False):
     return request.app.state.model_profiles.codex.models(refresh=refresh)
+
+
+@router.put('/codex/concurrency')
+def codex_concurrency(payload: CodexConcurrencyUpdate, request: Request):
+    return change(lambda: request.app.state.model_profiles.set_codex_concurrency(payload.max_concurrency))
 
 
 @router.post('/codex/login')

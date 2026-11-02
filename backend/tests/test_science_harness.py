@@ -32,7 +32,8 @@ class ScienceProvider:
             entry = lambda content: {'content': content, 'citation_ids': refs}
             result = {'card': {'one_sentence_summary': entry('方法根据问题复杂度选择检索策略。'),
                 'main_results': entry('FLAN-T5-XL的单跳F1未超过单步基线。'),
-                'tldr': [entry('按复杂度路由。'), entry('标签自动生成。'), entry('单跳F1未超过单步基线。')]}}
+                'tldr': [entry('按复杂度路由。'), entry('标签自动生成。'), entry('单跳F1未超过单步基线。')]},
+                'knowledge_candidates': [], 'knowledge_relations': []}
         self.last_usage = {'input_tokens': 100, 'output_tokens': 20, 'total_tokens': 120}
         return result
 

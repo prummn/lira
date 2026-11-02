@@ -148,3 +148,36 @@ Citation Graph 的明确引用边应来自 `metadata` 或 `explicit`；Method Li
 当前自动 upgrade 到 `0007_intelligence`：增加三列、创建 intelligence_tasks 与 model_call_cache，不重建用户 PDF／notes／collections。已有 remote paper_analysis 来自旧有限上下文路径，迁移仅将其智能状态标为 partial，并写入 `{"legacy":true,"coverage":{"complete":false}}`，保留卡片内容供查看，不把历史卡片称作全文完成。Down migration 会删除智能任务／缓存及对应列；降级会丢失这些新增数据，执行前应备份。
 
 实际备份应停止服务后复制 SQLite、同名 WAL／SHM（若存在）和原始 PDF 目录；智能报告、个人笔记、翻译和模型输出缓存也属于研究数据。`.env`／用户环境配置须自行管理；数据库备份不包含模型凭证。完整目标软删除、回收站和所有扩展知识表不据迁移说明视为已实现。
+
+
+### 专题文章与后台研究（0013）
+
+`research_control` 单例保存全局订阅连接、空闲时间、额度阈值和每小时调用次数。`research_scopes` 按 collection_id 保存是否启用和研究方向。默认关闭，显式指定官方连接后才生成；只使用 Codex，不读取付费备用路由。
+
+`research_tasks` 保存材料指纹、原文快照、阶段检查点、尝试次数和调用记录。阶段为 synthesis → draft → review → published；状态为 queued/running/paused/completed/failed/cancelled/superseded。相同材料复用任务，变化后替代旧活动任务；恢复历史研究方向可继续被替代的任务。历史完成内容再次成为当前方向时建立新的版本任务，保留旧版本。每个阶段最多两次失败尝试，每小时调用上限另行限制；取消/重试只影响明确的任务。
+
+`research_revisions` 追加保存标题、导语、正文、更新说明、原文引语与定位、覆盖范围和审读模型。发布前匹配原句、检查全部引用目标并核对材料指纹；失败不得覆盖前版。引文匹配不等于论断被形式证明，语义由独立模型审读和用户回到原文检验。模型调用期间不持有写事务，重启及异常保存后的下一轮均恢复 stranded running 任务。
+
+### 研究线索与复习（0014）
+
+`research_scopes.work_types_json` 保存选择的 `essay/connections/gaps/review/questions`，迁移默认 `["essay"]`。`research_tasks.kind` 默认 `essay`，新增 `findings` 使用 discover → assess → published；两类任务的活动状态互不替代，仍共享原额度、每小时调用预算与前台优先通道。
+
+`research_findings` 按专题保存 `connection/gap/review/question`，内容包括标题、解释/参考答案、下一步、完整原文摘录与定位、模型；独立字段保存 unread/kept/dismissed/done、复习次数与下次时间。专题与 identity 唯一。模型沿用已有ID时可以修订标题和证据，但不会重置人工状态或复习计划。程序同时识别标题相同及正文/下一步/证据锚点相同的副本，语义复核负责其他同义表达。
+
+`research_finding_revisions` 追加保存线索ID、任务ID、内容摘要、完整内容快照和时间。完全相同的发布重放不追加历史；改写后的解释与原文保留为新修订。状态变更不改写内容历史，也不改变后台材料指纹。「记住了」按1/3/7/14/30/60天递增；「再复习」将熟悉次数重置并安排十分钟后，均由本地程序计算。
+
+### 阅读疑问与持久预算（0016）
+
+`research_control.budget_json` 独立于可编辑设置保存账号预算账本。每个长窗口包含日期、首次观测基线、用量高水位、固定日额度与重置时间。它记录账号整体观测增长，不是单任务的费用表。设置保存不得清空账本；同账号换模型不另起预算。
+
+`research_tasks.intent_key` 为可空、有索引的阅读意图身份，包含论文、问题、选段与定位。阅读任务继续使用 `kind=investigation`，通过材料中的 `origin` 保存问题笔记或原始提问身份，并产出 `research_findings.kind=reading`。同一论文跨专题只安排一次；取消、忽略和完成不自动复活。问题修改按新内容调度，原文更新可在原答案上增加修订。
+
+检查点中的 `reused_answer` 表示同义提问关联已有答案，没有正文更新时不伪造修订。后续调度同时读取正式修订与这个关联，以保留人工决定和修订目标。`validation_draft/validation_stage` 保留未通过校验的结构化输出供有限重试；成功后清除。历史引用复用仍核对论文、页码、章节与全文片段。
+
+### 持久段落翻译（0017）
+
+`translation_jobs` 保存论文、selected/full 模式、固定连接 ID、provider/config/prompt 身份、模型、状态、等待原因、错误和调用账本。queued/running/paused/completed/cancelled/failed 区分排队、运行、人工暂停、完成、取消和内容失败；额度等待不算内容失败。模型密钥仍只在连接配置中。
+
+`translation_items` 保存作业、原始/当前段落 ID、合并 aliases、原文 refs 与快照、文中顺序、优先级、页码、状态、checking/translating 阶段、有限尝试次数和错误。跨批次重叠通过 `work_item_id` 引用共享段落工作，各作业保留自己的暂停与取消意图。`translation_id` 指向既有 `translations`；不重复保存译文正文。删除论文级联删除作业与项，移除某条译文会清空结果外键。
+
+作业内按段持久化，刷新浏览器不影响执行。恢复时 running 项回到 queued，completed 项保持。模型或原文更新时不会将旧响应写入新身份；暂停和取消不删除已有译文。暂时网络故障的 `next_retry_at` 与退避次数保存在作业账本，调度期间跳过等待中的作业。全文调用时间纳入研究与知识维护共用的小时账本。

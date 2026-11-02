@@ -68,6 +68,9 @@ class Writer:
 
 def test_queue_fingerprint_is_scoped_and_notes_trigger_finite_update(research):
     client, worker = research
+    with worker.database.sessions() as db:
+        db.get(Note, 'n1').kind = 'note'
+        db.commit()
     a = worker.enqueue('topic')
     assert worker.enqueue('topic')['id'] == a['id']
     with worker.database.sessions() as db:
@@ -151,6 +154,78 @@ def test_unknown_quota_pauses_without_paid_fallback(research):
     assert worker.status()['reason'] == 'quota_unknown'
 
 
+@pytest.mark.parametrize('code,reason', [('transport_timeout', 'quota_timeout'),
+    ('transport_error', 'quota_unavailable'), ('codex_account_error', 'quota_unavailable')])
+def test_failed_quota_read_has_a_distinct_reason_and_refresh_recovers_without_cooldown(research, code, reason):
+    _, worker = research
+    worker.profiles.codex.status = lambda **kw: {'authenticated': True, 'limits': [],
+        'limits_error_code': code, 'limits_retryable': True}
+    assert not worker._eligible(worker.settings())
+    status = worker.status()
+    assert status['reason'] == reason
+    assert status['quota_error_code'] == code
+    refreshed = worker.refresh_quota()
+    assert refreshed['available'] is True and refreshed['quota_error_code'] == code
+    assert worker._retry_at > time.time()
+    worker.profiles.codex.status = lambda **kw: {'authenticated': True, 'limits': [
+        dict(name='primary', used_percent=10, window_minutes=300, resets_at=time.time()+300)]}
+    refreshed = worker.refresh_quota()
+    assert refreshed['quota_error_code'] is None
+    assert worker._eligible(worker.settings())
+    assert worker.status()['quota_error_code'] is None
+
+
+@pytest.mark.parametrize('reason', ['quota_timeout', 'quota_unavailable'])
+def test_maintenance_quota_failure_survives_outer_scheduler(research, monkeypatch, reason):
+    _, worker = research
+    worker.settings(worker.settings().model_copy(update={'maintenance_enabled': True}))
+    worker._next_scan = worker._next_reading_scan = time.time()+600
+    worker._quota_at = time.time()
+    def maintenance(settings):
+        worker._reason = reason
+        return False
+    monkeypatch.setattr(worker, '_process_maintenance', maintenance)
+    assert not worker.process_next()
+    assert worker.status()['reason'] == reason
+
+
+def test_repeated_preparation_gates_allow_official_short_lived_status_cache(research, monkeypatch):
+    _, worker = research
+    requests = []
+    def status(**kwargs):
+        requests.append(kwargs)
+        return {'authenticated': True, 'limits': [dict(name='primary', used_percent=10,
+            window_minutes=300, resets_at=time.time()+300)]}
+    monkeypatch.setattr(worker.profiles.codex, 'status', status)
+    assert worker._eligible(worker.settings())
+    assert worker._eligible(worker.settings())
+    assert all(not request.get('refresh') for request in requests)
+    worker.refresh_quota()
+    assert requests[-1]['refresh'] is True
+
+
+def test_recent_official_quota_survives_network_failure_but_expires_and_preserves_reserves(research):
+    _, worker = research
+    checked = time.time()-40
+    state = {'authenticated': True, 'limits_checked_at': checked,
+        'limits_attempted_at': time.time(), 'limits_error_code': 'transport_timeout',
+        'limits': [dict(name='primary', used_percent=10, window_minutes=300, resets_at=time.time()+600)]}
+    worker.profiles.codex.status = lambda **kwargs: state
+    assert worker._eligible(worker.settings())
+    assert worker.status()['quota_checked_at'] == checked
+    assert worker.status()['quota_using_recent'] is True
+    state['limits'][0]['used_percent'] = 80
+    assert not worker._eligible(worker.settings())
+    assert worker.status()['reason'] == 'quota_reserve'
+    worker._retry_at = 0
+    state['limits'][0]['used_percent'] = 10
+    state['limits_checked_at'] = time.time()-121
+    assert not worker._eligible(worker.settings())
+    assert worker.status()['reason'] == 'quota_timeout'
+    assert worker.status()['quota_using_recent'] is False
+    assert worker.status()['quota_checked_at'] == state['limits_checked_at']
+
+
 def test_presence_preempts_and_settings_validate_profile_and_thresholds(research):
     client, worker = research
     assert client.put('/api/research/settings', json={'start_remaining': 20, 'stop_remaining': 35}).status_code == 422
@@ -173,7 +248,7 @@ class MaintenanceWriter:
 
     def audit_knowledge_bundle(self, bundle):
         self.calls.append(bundle)
-        return {'issues': [], 'model_version': self.model, 'prompt_version': 'fixture'}
+        return {'summary': 'Checked the supplied paper', 'candidates': [], 'relations': [], 'reviews': []}
 
 
 def test_maintenance_waits_for_reading_and_uses_shared_quota_gate(research):
@@ -196,10 +271,12 @@ def test_maintenance_waits_for_reading_and_uses_shared_quota_gate(research):
     assert worker.status()['reason'] == 'reading'
     worker.profiles.priority.presence('reading-tab', False)
     assert worker.process_next() is True, worker.status()
+    assert worker.status()['maintenance']['status'] == 'partial'
+    assert worker.process_next() is True, worker.status()
     assert worker.status()['maintenance']['status'] == 'complete'
     with worker.database.sessions() as db:
         run = db.scalar(select(KnowledgeMaintenanceRun).order_by(KnowledgeMaintenanceRun.created_at.desc()))
-        assert json.loads(run.usage_json)['total_tokens'] == 52
+        assert json.loads(run.usage_json)['total_tokens'] == 104
 
 
 def test_partial_maintenance_run_resumes_unchecked_issues(research):
@@ -222,12 +299,11 @@ def test_partial_maintenance_run_resumes_unchecked_issues(research):
     worker._next_maintenance_scan = 0
     assert worker.process_next() is True, worker.status()
     worker._next_maintenance_scan = 0
-    assert worker.process_next() is True
     assert worker.status()['maintenance']['status'] == 'complete'
-    assert len(writer.calls) == 3
+    assert len(writer.calls) == 2
     with worker.database.sessions() as db:
         run = db.scalar(select(KnowledgeMaintenanceRun).order_by(KnowledgeMaintenanceRun.created_at.desc()))
-        assert len(json.loads(run.usage_json)['processed_issue_ids']) == 3
+        assert len(json.loads(run.usage_json)['processed_issue_ids']) == 2
 
 
 def test_reverting_focus_resumes_superseded_work(research):
@@ -385,6 +461,7 @@ def test_previous_prose_is_read_for_insights_but_not_reused_as_writer_template(r
     worker.enqueue('topic')
     for _ in range(3): worker.process_next()
     with worker.database.sessions() as db:
+        db.get(Note, 'n1').kind = 'note'
         db.get(Note, 'n1').content = 'Explain the actual retrieval process.'
         db.commit()
     worker.enqueue('topic')

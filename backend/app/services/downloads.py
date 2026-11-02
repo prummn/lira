@@ -6,16 +6,20 @@ import ipaddress
 from pathlib import PurePosixPath
 import re
 import socket
+import ssl
 import time
 from typing import Callable
 from urllib.parse import unquote, urljoin
+import urllib.request
 
 from fastapi import HTTPException
 import httpx
 
 MAX_PDF_BYTES = 50 * 1024 * 1024
 MAX_REDIRECTS = 5
-PDF_DOWNLOAD_DEADLINE = 180.0
+# A large PDF can keep making progress at 30–40 KB/s and need several minutes.
+# Keep the per-read timeout short so a stalled transfer still fails promptly.
+PDF_DOWNLOAD_DEADLINE = 600.0
 ARXIV_ID = re.compile(r'(?P<base>(?:\d{4}\.\d{4,5}|[a-z][a-z.\-]+/\d{7}))(?P<version>v[1-9]\d*)?', re.I)
 ARXIV_HOSTS = {'arxiv.org', 'www.arxiv.org', 'export.arxiv.org'}
 Resolver = Callable[[str, int], list[str]]
@@ -99,20 +103,68 @@ def validate_public_url(value: str, resolver: Resolver | None = None) -> tuple[h
     return url.copy_with(fragment=None), addresses
 
 
+class _ProxyOriginTLSContext(ssl.SSLContext):
+    """Verify a pinned proxy tunnel against its original DNS hostname.
+
+    httpcore's CONNECT path ignores the direct transport's sni_hostname extension.
+    Keep this context scoped to one origin; the proxy uses its own TLS context.
+    """
+
+    def __new__(cls, hostname: str):
+        return super().__new__(cls, ssl.PROTOCOL_TLS_CLIENT)
+
+    def __init__(self, hostname: str) -> None:
+        self._hostname = hostname
+        defaults = httpx.create_ssl_context(trust_env=False)
+        self.options = defaults.options
+        self.verify_flags = defaults.verify_flags
+        self.minimum_version = defaults.minimum_version
+        self.load_verify_locations(cadata=''.join(
+            ssl.DER_cert_to_PEM_cert(cert) for cert in defaults.get_ca_certs(binary_form=True)
+        ))
+
+    def wrap_socket(self, sock, *, server_hostname=None, **kwargs):
+        return super().wrap_socket(sock, server_hostname=self._hostname, **kwargs)
+
+    def wrap_bio(self, incoming, outgoing, *, server_hostname=None, **kwargs):
+        return super().wrap_bio(incoming, outgoing, server_hostname=self._hostname, **kwargs)
+
+
 class PublicHTTPTransport(httpx.BaseTransport):
     """Connect to the validated IP; preserve HTTP Host and TLS SNI/cert validation."""
     def __init__(self) -> None:
         self._transport = httpx.HTTPTransport(retries=0, trust_env=False)
+        self._proxies = urllib.request.getproxies()
+        self._proxy_transports: dict[tuple[str, str, str], httpx.HTTPTransport] = {}
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         pinned_ip = request.extensions['validated_ip']
         extensions = dict(request.extensions)
         extensions['sni_hostname'] = request.url.host
         pinned = httpx.Request(request.method, request.url.copy_with(host=pinned_ip), headers=request.headers, stream=request.stream, extensions=extensions)
-        return self._transport.handle_request(pinned)
+        # Select the user's route by the original host, then connect the proxy
+        # to the validated IP as well. Redirects retain the same public-IP checks.
+        proxy = self._proxies.get(request.url.scheme) or self._proxies.get('all')
+        transport = self._transport
+        if proxy and not urllib.request.proxy_bypass(request.url.netloc.decode('ascii')):
+            # Do not leak the origin SNI into the proxy's own TLS connection.
+            pinned.extensions.pop('sni_hostname', None)
+            key = (proxy, request.url.host, pinned_ip)
+            if key not in self._proxy_transports:
+                try:
+                    self._proxy_transports[key] = httpx.HTTPTransport(
+                        proxy=proxy, verify=_ProxyOriginTLSContext(request.url.host),
+                        retries=0, trust_env=False,
+                    )
+                except (ValueError, ImportError):
+                    raise HTTPException(502, '系统代理配置无法使用，请检查 HTTP(S) 代理设置') from None
+            transport = self._proxy_transports[key]
+        return transport.handle_request(pinned)
 
     def close(self) -> None:
         self._transport.close()
+        for transport in self._proxy_transports.values():
+            transport.close()
 
 
 def fetch_public(value: str, *, max_bytes: int, timeout: float = 15.0, deadline: float = 60.0, transport: httpx.BaseTransport | None = None, resolver: Resolver | None = None) -> PublicResponse:

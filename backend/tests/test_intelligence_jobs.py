@@ -245,7 +245,7 @@ def test_partial_attempt_retains_previous_remote_card_but_can_publish_first_card
     assert attempt['report']['retained_previous_card'] is prior_remote
 
 
-def test_prompt_change_during_job_preserves_previous_ready_result(client, monkeypatch, tmp_path):
+def test_prompt_change_during_job_keeps_valid_result_and_its_original_version(client, monkeypatch, tmp_path):
     import app.providers.harness as harness
     client.app.state.intelligence_worker.stop()
     paper = import_paper(client)
@@ -256,6 +256,8 @@ def test_prompt_change_during_job_preserves_previous_ready_result(client, monkey
     monkeypatch.setattr(harness, 'PROMPTS_DIR', prompt_dir)
     class ChangingPromptProvider(FailingProvider):
         def complete_json(self, system, payload, **kwargs):
+            if payload.get('stage') == 'review_card_science':
+                return {'items': [{'field': item['field'], 'decision': 'supported'} for item in payload['items']]}
             if 'chunks' in payload:
                 (prompt_dir / 'paper_reduce.txt').write_text('Changed reduction policy during this job.', encoding='utf-8')
                 part = payload['chunks'][0]
@@ -266,5 +268,10 @@ def test_prompt_change_during_job_preserves_previous_ready_result(client, monkey
     client.post('/api/intelligence/tasks', json={'paper_ids': [paper['id']]})
     assert client.app.state.intelligence_worker.process_next(provider)
     after = client.get(f"/api/papers/{paper['id']}").json()
-    assert after['intelligence_status'] == 'failed'
-    assert after['analysis'] == paper['analysis'] and after['evidence'] == paper['evidence']
+    assert after['intelligence_status'] == 'completed'
+    assert after['analysis']['mode'] == 'remote'
+    assert after['analysis']['method'] == 'Supported method.'
+    with client.app.state.database.sessions() as session:
+        from app.models import Paper
+        row = session.get(Paper, paper['id'])
+        assert after['intelligence_report']['result_fingerprint'] != harness.analysis_fingerprint(provider, list(row.chunks))

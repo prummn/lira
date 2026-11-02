@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 from .schemas import GeometryModel
+from .conversation_schemas import ChatRequest, ChatResponse
 
 
 class ConversationTurn(BaseModel):
@@ -11,11 +12,13 @@ class ConversationTurn(BaseModel):
     content: str = Field(min_length=1, max_length=8000)
 
 
-class LibraryQuestion(BaseModel):
+class LibraryQuestion(ChatRequest):
+    conversation_kind: Literal['paper', 'librarian'] = 'librarian'
     question: str = Field(min_length=1, max_length=4000)
     collection_id: str | None = Field(default=None, max_length=64)
     paper_ids: list[str] | None = Field(default=None, min_length=1, max_length=50)
     history: list[ConversationTurn] = Field(default_factory=list, max_length=12)
+    reading_page: int | None = Field(default=None, ge=1, le=10000)
 
     @field_validator('question')
     @classmethod
@@ -41,11 +44,11 @@ class LibraryCitation(GeometryModel):
 
 class LibraryAnswerItem(BaseModel):
     content: str
-    kind: Literal['fact', 'comparison', 'inference', 'user_note', 'metadata']
+    kind: Literal['fact', 'comparison', 'inference', 'user_note', 'metadata', 'background']
     citations: list[LibraryCitation]
 
 
-class LibraryAnswer(BaseModel):
+class LibraryAnswer(ChatResponse):
     answer: str
     items: list[LibraryAnswerItem]
     citations: list[LibraryCitation]

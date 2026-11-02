@@ -1,10 +1,11 @@
 """Validated API contracts; geometry always belongs to original PDF coordinates."""
 
 from __future__ import annotations
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 import math
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from .conversation_schemas import ChatRequest, ChatResponse
 from .services.downloads import normalize_arxiv_id
 from .services.metadata import normalize_doi
 
@@ -12,6 +13,216 @@ BBox = tuple[float, float, float, float]
 ReadingStatus = Literal["unread", "skimming", "reading", "read", "important"]
 NoteKind = Literal["note", "idea", "question", "todo", "highlight"]
 IntelligenceStatus = Literal['unanalyzed', 'queued', 'running', 'completed', 'partial', 'failed', 'cancelled']
+ActivityKind = Literal['reading', 'notes', 'language', 'search', 'imports']
+KnowledgeEntityType = Literal['paper', 'method', 'dataset', 'benchmark', 'task', 'metric', 'concept', 'venue']
+KnowledgeCandidateStatus = Literal['candidate', 'confirmed', 'rejected', 'conflict', 'unresolved', 'new', 'known', 'alias']
+KnowledgeEntityStatus = Literal['active', 'needs_review', 'unsupported']
+KnowledgeRelationKind = Literal['builds_on', 'extends', 'compares_with', 'replaces', 'uses_dataset', 'evaluated_on', 'inspired_by', 'contrasts_with', 'requires_concept']
+KnowledgePresentationLayer = Literal['primary', 'baseline', 'ablation', 'component', 'evaluation', 'comparison']
+KnowledgeImportance = Literal['core', 'supporting', 'context']
+KnowledgeRelationFamily = Literal['lineage', 'comparison', 'ablation', 'evaluation', 'dependency']
+
+
+class ActivityCreate(BaseModel):
+    kind: ActivityKind
+    paper_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class ActivityDayRead(BaseModel):
+    date: date
+    reading: int
+    notes: int
+    language: int
+    search: int
+    imports: int
+    total: int
+    paper_ids: list[str] = Field(default_factory=list)
+
+
+class ActivityRead(BaseModel):
+    days: list[ActivityDayRead]
+    total: int
+    active_days_30: int
+    streak: int
+
+
+class KnowledgeEvidence(BaseModel):
+    paper_id: str | None = None
+    paper_title: str | None = None
+    chunk_id: str = Field(min_length=1, max_length=64)
+    page: int | None = Field(default=None, ge=1)
+    section: str | None = Field(default=None, max_length=100)
+    quote: str = Field(min_length=1, max_length=4000)
+    bbox: BBox | None = None
+    page_width: float | None = Field(default=None, gt=0)
+    page_height: float | None = Field(default=None, gt=0)
+
+
+class KnowledgeCandidateRead(BaseModel):
+    id: str
+    paper_id: str
+    entity_id: str | None = None
+    extracted_name: str | None = None
+    entity_type: KnowledgeEntityType
+    name: str
+    normalized_name: str
+    aliases: list[str] = Field(default_factory=list)
+    description: str | None = None
+    role: Literal['proposed', 'used', 'baseline', 'ablation', 'component', 'cited', 'compared'] = 'cited'
+    confidence: float = Field(ge=0, le=1)
+    status: KnowledgeCandidateStatus
+    evidence: list[KnowledgeEvidence] = Field(min_length=1)
+    conflict: dict = Field(default_factory=dict)
+    run_id: str | None = None
+    model_version: str | None = None
+    prompt_version: str | None = None
+    layer: KnowledgePresentationLayer = 'comparison'
+    importance: KnowledgeImportance = 'supporting'
+
+
+class KnowledgeRelationRead(BaseModel):
+    id: str
+    paper_id: str
+    relation: KnowledgeRelationKind
+    source_name: str
+    source_normalized_name: str
+    target_name: str
+    target_normalized_name: str
+    source_candidate_id: str | None = None
+    target_candidate_id: str | None = None
+    source_entity_id: str | None = None
+    target_entity_id: str | None = None
+    description: str | None = None
+    confidence: float = Field(ge=0, le=1)
+    status: KnowledgeCandidateStatus
+    evidence: list[KnowledgeEvidence] = Field(min_length=1)
+    conflict: dict = Field(default_factory=dict)
+    run_id: str | None = None
+    model_version: str | None = None
+    prompt_version: str | None = None
+    family: KnowledgeRelationFamily = 'comparison'
+    importance: KnowledgeImportance = 'supporting'
+
+
+class KnowledgePaperRead(BaseModel):
+    paper_id: str
+    paper_status: Literal['unread', 'candidates', 'partially_settled', 'settled', 'needs_review']
+    candidates: list[KnowledgeCandidateRead] = Field(default_factory=list)
+    relations: list[KnowledgeRelationRead] = Field(default_factory=list)
+    counts: dict[str, int] = Field(default_factory=dict)
+
+
+class KnowledgeAuditRead(BaseModel):
+    """Deterministic, source-grounded coverage projection for one paper."""
+
+    paper_id: str
+    coverage: dict[str, dict[str, dict]] = Field(default_factory=dict)
+    suggestions: list[dict] = Field(default_factory=list)
+
+
+class KnowledgeEntityPaperRead(BaseModel):
+    paper_id: str
+    title: str
+    role: str = 'related'
+    status: str = 'candidate'
+    evidence_count: int = 0
+
+
+class KnowledgeEntityLinkRead(BaseModel):
+    kind: Literal['official', 'repository', 'paper', 'search', 'github', 'dataset']
+    label: str
+    url: str
+    source: str = 'curated'
+
+
+class KnowledgeEntityDetailRead(BaseModel):
+    id: str
+    entity_type: KnowledgeEntityType
+    name: str
+    normalized_name: str
+    aliases: list[str] = Field(default_factory=list)
+    description: str | None = None
+    status: KnowledgeEntityStatus
+    candidates: list[KnowledgeCandidateRead] = Field(default_factory=list)
+    papers: list[KnowledgeEntityPaperRead] = Field(default_factory=list)
+    relations: list[KnowledgeRelationRead] = Field(default_factory=list)
+    evidence: list[KnowledgeEvidence] = Field(default_factory=list)
+    links: list[KnowledgeEntityLinkRead] = Field(default_factory=list)
+    history: list[dict] = Field(default_factory=list)
+
+
+class KnowledgeLinkInput(BaseModel):
+    kind: Literal['official', 'repository', 'paper', 'dataset']
+    label: str = Field(min_length=1, max_length=150)
+    url: str = Field(min_length=1, max_length=2048)
+
+    @field_validator('url')
+    @classmethod
+    def http_link(cls, value: str) -> str:
+        from urllib.parse import urlsplit
+        value = value.strip()
+        parsed = urlsplit(value)
+        if parsed.scheme not in {'http', 'https'} or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError('资料链接必须是有效的 http 或 https 地址')
+        return value
+
+
+class KnowledgeEntityUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=300)
+    entity_type: KnowledgeEntityType
+    aliases: list[str] = Field(default_factory=list, max_length=100)
+    description: str | None = Field(default=None, max_length=12000)
+    links: list[KnowledgeLinkInput] = Field(default_factory=list, max_length=30)
+
+    @field_validator('name')
+    @classmethod
+    def meaningful_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError('名称不能为空')
+        return value.strip()
+
+
+class KnowledgeEntityMerge(BaseModel):
+    target_id: str = Field(min_length=1, max_length=64)
+
+
+class KnowledgeRelationUpdate(BaseModel):
+    source_candidate_id: str = Field(min_length=1, max_length=64)
+    target_candidate_id: str = Field(min_length=1, max_length=64)
+    relation: KnowledgeRelationKind
+    description: str | None = Field(default=None, max_length=12000)
+
+
+class KnowledgeRelationCreate(KnowledgeRelationUpdate):
+    evidence: list[KnowledgeEvidence] = Field(min_length=1, max_length=12)
+
+
+class KnowledgeRelationResolution(BaseModel):
+    target_name: str = Field(min_length=1, max_length=300)
+    target_type: KnowledgeEntityType
+
+    @field_validator('target_name')
+    @classmethod
+    def clean_target_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError('目标实体名称不能为空')
+        return value
+
+
+class CandidateDecision(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=300)
+    description: str | None = Field(default=None, max_length=8000)
+
+    @field_validator('name')
+    @classmethod
+    def clean_name(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None and value.strip() else value
+
+
+class CandidateBatchDecision(BaseModel):
+    candidate_ids: list[str] = Field(min_length=1, max_length=64)
+    decision: Literal['confirm', 'reject']
 
 
 class ModelSettingsUpdate(BaseModel):
@@ -51,6 +262,10 @@ class ModelRoutingUpdate(BaseModel):
     active_id: str | None = None
     fallback_ids: list[str] = Field(default_factory=list, max_length=20)
     auto_fallback: bool = False
+
+
+class CodexConcurrencyUpdate(BaseModel):
+    max_concurrency: int = Field(ge=1, le=8)
 
 
 class TaskRead(BaseModel):
@@ -108,6 +323,7 @@ class EvidenceRead(GeometryModel):
     section: str | None = None
     confidence: float
     source_type: str
+    source_url: str | None = None
     chunk_id: str | None = None
     page_width: float | None = None
     page_height: float | None = None
@@ -271,6 +487,7 @@ class PaperSummary(BaseModel):
     intelligence_report: dict | None = None
     intelligence_task: TaskRead | None = None
     intelligence_analyzed_at: datetime | None = None
+    knowledge_status: Literal['unread', 'candidates', 'partially_settled', 'settled', 'needs_review'] = 'unread'
     tags: list[str] = Field(default_factory=list)
     authors: list[str] = Field(default_factory=list)
     collection_ids: list[str] = Field(default_factory=list)
@@ -287,6 +504,8 @@ class PaperDetail(PaperSummary):
     chunks: list[ChunkRead] = Field(default_factory=list)
     notes: list[NoteRead] = Field(default_factory=list)
     translations: list[TranslationRead] = Field(default_factory=list)
+    knowledge_candidates: list[KnowledgeCandidateRead] = Field(default_factory=list)
+    knowledge_relations: list[KnowledgeRelationRead] = Field(default_factory=list)
 
 
 class PaperListResponse(BaseModel):
@@ -391,6 +610,10 @@ class CollectionCreate(BaseModel):
         return value.strip()
 
 
+class CollectionPapersAdd(BaseModel):
+    paper_ids: list[str] = Field(min_length=1, max_length=500)
+
+
 class CollectionRead(BaseModel):
     id: str
     name: str
@@ -406,7 +629,9 @@ class CollectionListResponse(BaseModel):
     total: int
 
 
-class AskRequest(BaseModel):
+
+
+class AskRequest(ChatRequest):
     question: str = Field(min_length=1, max_length=4000)
 
     @field_validator("question")
@@ -417,18 +642,29 @@ class AskRequest(BaseModel):
         return value.strip()
 
 
-class AskResponse(BaseModel):
+class AskResponse(ChatResponse):
     answer: str
     provider: str
     mode: str
     citations: list[EvidenceRead]
     insufficient_evidence: bool
+    context_scope: Literal['selection', 'paragraph', 'section', 'related', 'full', 'paper', 'external'] = 'paper'
+    external_sources: bool = False
+    visual_used: bool = False
+    facts: list[str] = Field(default_factory=list)
+    inferences: list[str] = Field(default_factory=list)
+    unknowns: list[str] = Field(default_factory=list)
+    needs_more_context: bool = False
 
 
 class TranslateRequest(BaseModel):
     chunk_id: str | None = Field(default=None, min_length=1)
     paragraph_id: str | None = Field(default=None, min_length=1)
     force: bool = False
+
+
+class ParagraphReviewRequest(BaseModel):
+    paragraph_id: str = Field(min_length=1,max_length=100)
 
 
 class QuickTranslationRequest(BaseModel):
@@ -460,13 +696,79 @@ class QuickTranslationResponse(BaseModel):
     cached: bool
 
 
-class ExplainRequest(BaseModel):
-    chunk_id: str = Field(min_length=1)
-    selected_text: str = Field(min_length=1,max_length=12000)
+class ExplainRequest(ChatRequest):
+    chunk_id: str | None = Field(default=None, min_length=1)
+    selected_text: str | None = Field(default=None, max_length=12000)
+    translated_text: str | None = Field(default=None, max_length=12000)
+    page: int | None = Field(default=None, ge=1)
+    bbox: BBox | None = None
+    image_data_url: str | None = Field(default=None, max_length=8000000)
+    visual_kind: Literal['figure','table'] | None = None
+    visual_label: str | None = Field(default=None, max_length=100)
+    question: str | None = Field(default=None, max_length=4000)
     style: Literal['technical','simple','mathematical','prerequisites'] = 'technical'
+    context_scope: Literal['auto','paragraph','section','full'] = 'auto'
+    allow_external: bool = False
+    history: list['ExplainTurn'] = Field(default_factory=list, max_length=8)
     @field_validator('selected_text')
     @classmethod
-    def nonempty_selection(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError('请先选择原文片段')
+    def clean_selection(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+    @field_validator('translated_text')
+    @classmethod
+    def clean_translation_selection(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+    @field_validator('image_data_url')
+    @classmethod
+    def valid_image_data_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not value.startswith(('data:image/png;base64,', 'data:image/jpeg;base64,', 'data:image/webp;base64,')):
+            raise ValueError('图像必须是 PNG、JPEG 或 WebP 的 data URL')
+        if len(value) > 8000000:
+            raise ValueError('图像过大，请降低阅读器缩放后重试')
         return value
+
+    @model_validator(mode='after')
+    def require_context(self):
+        if not self.selected_text and not self.image_data_url:
+            raise ValueError('请先选择原文或已识别的图表')
+        if self.image_data_url and self.page is None:
+            raise ValueError('图表提问需要当前页码')
+        if self.bbox is not None and not self.image_data_url:
+            raise ValueError('图表区域需要对应的裁剪图像')
+        # A detected figure/table may carry nearby extracted text without a
+        # single canonical chunk id. The cropped image is the primary evidence
+        # in that case, so do not reject the request when the region crosses
+        # columns, captions, or layout fragments.
+        if self.selected_text and not self.chunk_id and not self.image_data_url:
+            raise ValueError('原文选段缺少来源')
+        return self
+
+    @field_validator('question')
+    @classmethod
+    def valid_question(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+
+class ExplainTurn(BaseModel):
+    """A bounded prior turn used to make selection questions conversational."""
+
+    question: str = Field(min_length=1, max_length=4000)
+    answer: str = Field(min_length=1, max_length=16000)
+
+    @field_validator('question', 'answer')
+    @classmethod
+    def trim_turn_text(cls, value: str) -> str:
+        return value.strip()

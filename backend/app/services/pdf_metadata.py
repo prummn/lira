@@ -24,6 +24,9 @@ ORGANIZATION = re.compile(r"\b(?:university|institute|department|school|laborato
 VENUE = re.compile(r"\b(?:conference|proceedings|journal|workshop|transactions|symposium)\b", re.I)
 PUBLICATION_YEAR = re.compile(r"(?:\bpublished(?:\s+online)?\b|\bcopyright\b|©)\D{0,30}\b((?:19|20)\d{2})\b", re.I)
 TEMPLATE = re.compile(r"make sure to enter|your rights confirmation|conference acronym|\b[xn]{4,}\b", re.I)
+CONFERENCE_PUBLICATION = re.compile(
+    r"^\s*Published\s+as\s+a\s+conference\s+paper\s+at\s+(.+?\b((?:19|20)\d{2}))\s*\.?\s*$", re.I,
+)
 
 
 @dataclass(frozen=True)
@@ -196,6 +199,12 @@ def extract_bibliography(metadata: dict, lines: list[LayoutLine], height: float,
     for line in front:
         if TEMPLATE.search(line.text):
             continue
+        # This exact front-matter declaration is publication evidence, even
+        # though the generic license filter also contains the word published.
+        if (not facts["venue"] and line.horizontal and line.bbox[1] < abstract_y
+                and (publication := CONFERENCE_PUBLICATION.fullmatch(line.text))):
+            facts["venue"] = publication.group(1).strip()[:200]
+            sources["venue"] = "pdf_front_matter"
         if not facts["arxiv_id"] and (match := ARXIV.search(line.text)):
             candidate = match.group(1)
             date_code = candidate.split("/")[-1][:4].replace(".", "")
@@ -413,7 +422,7 @@ def acm_abstract_lines(pages: list, title_keys: set, body_size: float) -> set[tu
 
 
 def section_reading_order(blocks: list[dict], lines: list[LayoutLine], width: float,
-                          body_size: float) -> list[int]:
+                          body_size: float, *, require_overlap: bool = True) -> list[int]:
     """Order section propagation by body columns, without changing source blocks.
 
     PyMuPDF's geometric sort can interleave columns and can sort a long paragraph
@@ -449,7 +458,7 @@ def section_reading_order(blocks: list[dict], lines: list[LayoutLine], width: fl
         return list(range(len(blocks)))
     overlap = min(max(r[3] for r in prose[0]), max(r[3] for r in prose[1])) - max(
         min(r[1] for r in prose[0]), min(r[1] for r in prose[1]))
-    if overlap < body_size * 2:
+    if require_overlap and overlap < body_size * 2:
         return list(range(len(blocks)))
 
     ordered: list[int] = []

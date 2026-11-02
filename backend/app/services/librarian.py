@@ -19,7 +19,7 @@ from sqlalchemy.orm import selectinload
 
 from ..db import Database
 from ..library_schemas import LibraryAnswer, LibraryAnswerItem, LibraryCitation, LibraryQuestion
-from ..models import Collection, CollectionPaper, Note, Paper, PaperAuthor
+from ..models import Collection, CollectionPaper, Note, Paper, PaperAuthor, PaperChunk
 from ..providers.base import ProviderError
 from ..providers.mock import STOPWORDS, tokens
 from ..providers.validation import canonical_quote
@@ -30,6 +30,8 @@ PROMPTS = Path(__file__).resolve().parents[3] / 'prompts'
 CATALOG_LIMIT = 200
 SOURCE_BUDGET = 48000
 SOURCE_LIMIT = 72
+FULL_PAPER_CHARS = 160000
+FULL_PAPER_PAYLOAD_CHARS = 260000
 
 
 def json_call(*args, **kwargs):
@@ -69,6 +71,7 @@ def library_scope(session, payload: LibraryQuestion) -> list[Paper]:
     statement = select(Paper).options(
         selectinload(Paper.author_links).selectinload(PaperAuthor.author),
         selectinload(Paper.collection_links), selectinload(Paper.analysis),
+        selectinload(Paper.knowledge_candidates),
     )
     if payload.collection_id:
         if session.get(Collection, payload.collection_id) is None:
@@ -87,6 +90,7 @@ def library_scope(session, payload: LibraryQuestion) -> list[Paper]:
 
 
 def catalog_record(paper: Paper, note_count: int) -> dict:
+    settled = [item for item in getattr(paper, 'knowledge_candidates', []) if item.status == 'confirmed']
     return {'paper_id': paper.id, 'title': paper.title,
             'authors': [link.author.name for link in paper.author_links],
             'year': paper.year, 'venue': paper.venue, 'arxiv_id': paper.arxiv_id,
@@ -99,7 +103,12 @@ def catalog_record(paper: Paper, note_count: int) -> dict:
             'summary': (paper.analysis.one_liner if paper.analysis else paper.abstract or '') or '',
             'summary_source': 'ai' if paper.analysis else 'paper',
             'metadata_sources': json.loads(paper.metadata_sources_json or '{}'),
-            'notes_count': note_count}
+            'notes_count': note_count,
+            'knowledge_status': getattr(paper, 'knowledge_status', 'unread'),
+            'confirmed_knowledge': [
+                {'entity_type': item.entity_type, 'name': item.name, 'description': item.description, 'role': item.role}
+                for item in settled
+            ]}
 
 
 def catalog_snapshot(database: Database, payload: LibraryQuestion) -> tuple[list[dict], dict]:
@@ -341,7 +350,7 @@ def collect_sources(database: Database, records: list[dict], plan: dict, questio
                                   ensure_ascii=False, sort_keys=True)
             sources['metadata:' + record['paper_id']] = Source('metadata:' + record['paper_id'], record['paper_id'], record['title'], rendered, 'external_metadata')
         options = (selectinload(Paper.notes),) if intent == 'notes' else (
-            selectinload(Paper.chunks), selectinload(Paper.notes), selectinload(Paper.analysis), selectinload(Paper.evidence))
+            selectinload(Paper.chunks), selectinload(Paper.notes), selectinload(Paper.analysis), selectinload(Paper.evidence), selectinload(Paper.knowledge_candidates))
         papers = [] if intent == 'metadata' else list(session.scalars(
             select(Paper).where(Paper.id.in_(candidates)).options(*options)).unique())
         terms = _terms(queries + [question])
@@ -412,6 +421,47 @@ def collect_sources(database: Database, records: list[dict], plan: dict, questio
                   'sources': len(sent), 'retrieval_is_partial': True}
 
 
+def complete_paper_sources(database: Database, record: dict) -> tuple[list[Source], dict] | None:
+    """Supply every stored text block of one explicitly selected paper.
+
+    Completeness refers to extracted text, not unseen figure pixels. Every
+    selector stays bound to one original chunk or its unchanged bounded slice.
+    """
+    with database.sessions() as session:
+        chunks = list(session.scalars(select(PaperChunk).where(PaperChunk.paper_id == record['paper_id'])))
+        total = sum(len(c.content) for c in chunks)
+        if not chunks or total > FULL_PAPER_CHARS:
+            return None
+        from .reading_paragraphs import ordered_source_chunks
+        paper = session.get(Paper, record['paper_id'])
+        chunks = ordered_source_chunks(chunks, paper.pdf_path if paper else None)
+        sources = []
+        sections: dict[str, dict] = {}
+        for chunk in chunks:
+            if chunk.section:
+                section = sections.setdefault(chunk.section, {'title': chunk.section, 'pages': []})
+                if chunk.page not in section['pages']:
+                    section['pages'].append(chunk.page)
+            for offset in range(0, len(chunk.content), 6000):
+                content = chunk.content[offset:offset + 6000]
+                if not content.strip():
+                    continue
+                suffix = f':{offset}' if len(chunk.content) > 6000 else ''
+                sources.append(Source('chunk:' + chunk.id + suffix, record['paper_id'], record['title'], content,
+                    'paper', chunk.page, chunk.section, chunk.id, values(chunk.bbox_json) or None,
+                    chunk.page_width, chunk.page_height))
+        if not sources or len(json.dumps([s.payload() for s in sources], ensure_ascii=False)) > FULL_PAPER_PAYLOAD_CHARS:
+            return None
+        return sources, {'reading_mode': 'full_paper', 'retrieval_is_partial': False,
+            'candidate_paper_ids': [record['paper_id']], 'selected_paper_ids': [record['paper_id']],
+            'sources': len(sources), 'source_characters': sum(len(s.content) for s in sources),
+            'paper_context': {'paper_id': record['paper_id'], 'total_chunks': len(chunks),
+                'provided_chunks': len({s.chunk_id for s in sources}), 'total_characters': total,
+                'provided_characters': sum(len(s.content) for s in sources),
+                'pages': sorted({s.page for s in sources if s.page is not None}),
+                'sections': list(sections.values()), 'basis': 'stored_extracted_text', 'images_included': False}}
+
+
 def validate_answer(data: dict, sources: list[Source]) -> tuple[list[LibraryAnswerItem], int]:
     lookup = {source.id: source for source in sources}
     items = []
@@ -427,8 +477,8 @@ def validate_answer(data: dict, sources: list[Source]) -> tuple[list[LibraryAnsw
             continue
         content, kind, references = raw.get('content'), raw.get('kind'), raw.get('citations')
         if (not isinstance(content, str) or not content.strip() or len(content) > 8000
-                or not isinstance(kind, str) or kind not in {'fact', 'comparison', 'inference', 'user_note', 'metadata'}
-                or not isinstance(references, list) or not 1 <= len(references) <= 12):
+                or not isinstance(kind, str) or kind not in {'fact', 'comparison', 'inference', 'user_note', 'metadata', 'background'}
+                or not isinstance(references, list) or not (0 if kind == 'background' else 1) <= len(references) <= 12):
             rejected += 1
             continue
         citations = []
@@ -458,7 +508,7 @@ def validate_answer(data: dict, sources: list[Source]) -> tuple[list[LibraryAnsw
                     break
                 # A valid selector must not bypass an invalid optional legacy quote.
                 canonical = canonical_quote(source.content, quote)
-            if canonical is None or (kind in {'fact', 'comparison', 'inference'} and source.kind != 'paper'):
+            if canonical is None or (kind in {'fact', 'comparison', 'inference', 'background'} and source.kind != 'paper'):
                 valid = False
                 break
             if (kind == 'user_note' and source.kind != 'user') or (kind == 'metadata' and source.kind != 'external_metadata'):
@@ -472,8 +522,9 @@ def validate_answer(data: dict, sources: list[Source]) -> tuple[list[LibraryAnsw
                 page_height=source.page_height))
         if kind == 'comparison' and len({c.paper_id for c in citations}) < 2:
             valid = False
-        if valid and citations:
-            items.append(LibraryAnswerItem(content=content.strip(), kind=kind, citations=citations))
+        if valid and (citations or kind == 'background'):
+            items.append(LibraryAnswerItem(content=content.strip(), kind=kind,
+                citations=list({citation.id: citation for citation in citations}.values())))
         else:
             rejected += 1
     return items, rejected
@@ -619,14 +670,30 @@ def answer_library(database: Database, provider, payload: LibraryQuestion) -> Li
             or planner.data['intent'] not in {'metadata', 'research', 'notes', 'comparison'}):
         evict_call(database, planner.actual_provider or provider, planner_system, planner_payload, **planner_options)
         raise ProviderError('模型检索计划格式无效，请重试；论文和笔记已保留')
+    complete = complete_paper_sources(database, records[0]) if (
+        payload.paper_ids and len(payload.paper_ids) == 1 and len(records) == 1
+        and planner.data['intent'] == 'research') else None
     sources, retrieval = collect_sources(database, records, planner.data, payload.question)
+    if complete:
+        originals, document_coverage = complete
+        # Keep typed notes/cards as context, without letting them replace any
+        # original block. Their edits must also invalidate a cached answer.
+        combined = originals + [s for s in sources if s.kind != 'paper']
+        if len(json.dumps([s.payload() for s in combined], ensure_ascii=False)) <= FULL_PAPER_PAYLOAD_CHARS:
+            sources = combined
+            retrieval.update(document_coverage, sources=len(sources), source_characters=sum(len(s.content) for s in sources))
     original_ids = {f'S{index:05d}': source.id for index, source in enumerate(sources, 1)}
     sources = [Source(**{**source.__dict__, 'id': alias, 'original_id': source.id})
                for alias, source in zip(original_ids, sources)]
     coverage.update(retrieval)
     answer_system = (PROMPTS / 'librarian_answer.txt').read_text('utf-8')
-    answer_payload = {'question': payload.question, 'history': history, 'catalog': records,
-                      'sources': [s.payload() for s in sources], 'coverage': dict(coverage)}
+    # Put stable paper context before variable conversation data so providers
+    # supporting prefix caching can reuse it across different questions.
+    answer_payload = {'catalog': records, 'sources': [s.payload() for s in sources],
+                      'coverage': dict(coverage), 'history': history, 'question': payload.question}
+    if payload.reading_page is not None:
+        answer_payload['reading_context'] = {'current_pdf_page': payload.reading_page,
+            'note': 'Current location only; it does not prove which pages the reader has finished.'}
     answer_options = {'operation': 'library_answer_v1', 'max_output_tokens': 10000, 'reasoning_effort': 'high'}
     answer = json_call(database, provider, answer_system, answer_payload, **answer_options)
     if not isinstance(answer.data.get('insufficient_evidence'), bool) or not isinstance(answer.data.get('items'), list):

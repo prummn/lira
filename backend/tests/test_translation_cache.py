@@ -142,3 +142,19 @@ def import_fixture_with_distinct_content(client: TestClient) -> dict:
     response = client.post("/api/papers/import", files={"file": ("distinct.pdf", data)})
     assert response.status_code == 201
     return response.json()
+
+
+@pytest.mark.parametrize('text', ['', '  ', '未提供待翻译的原文。', '请提供需要翻译的文本。', 'No source text was provided.'])
+def test_translation_validation_rejects_empty_or_missing_source_replies(text):
+    from app.services.translations import translation_error
+    assert translation_error('The agent executes the repository test suite.', text)
+
+
+@pytest.mark.parametrize('source,text', [
+    ('No source text was provided.', '未提供待翻译的原文。'),
+    ('Please provide the source text.', '请提供待翻译的原文。'),
+    ('The prompt contains the phrase no input text was provided.', '提示词包含未提供原文这一表述。'),
+])
+def test_translation_validation_accepts_source_discussing_missing_input(source, text):
+    from app.services.translations import translation_error
+    assert translation_error(source, text) is None

@@ -7,13 +7,17 @@ import { essayCitations } from '../lib/essayCitations'
 import { ErrorBanner, Loading, Modal } from './Shared'
 import { ResearchMarkdown } from './ResearchMarkdown'
 import { ResearchFindings } from './ResearchFindings'
+import { ResearchBudget } from './ResearchBudget'
+import { useUi } from '../lib/i18n'
 import './collection-research.css'
 
 const reasons:Record<string,string> = {
   disabled:'后台研究已暂停', profile_required:'选择官方连接后即可开始', reading:'正在让出通道，优先保障阅读',
   foreground_queue:'先完成你安排的论文分析', hourly_budget:'本轮预算已用完，稍后继续', cooldown:'稍后重试，已完成的步骤保留',
   account_unavailable:'等待官方账号恢复连接', quota_unknown:'暂时无法读取额度，后台等待中', quota_stale:'等待刷新官方额度',
+  quota_timeout:'官方额度查询超时，稍后自动重试', quota_unavailable:'官方额度查询失败，稍后自动重试',
   quota_reserve:'为你的阅读保留额度', working:'后台正在研究', up_to_date:'材料没有变化，暂时无需更新',
+  daily_budget:'今日后台预算已用完，按周节奏稍后继续',
   maintenance_partial:'维护批次已完成一段，等待下一次空闲额度', maintenance_error:'维护批次暂时失败，已有体检结果已保留',
   task_error:'本次研究需要重试，已有文章仍可阅读', service_error:'后台服务暂时未完成，已有成果已保留', ready:'等待开始研究',
 }
@@ -54,11 +58,16 @@ function useEssayDialog(open:boolean, selector:string, close:()=>void) {
   },[open,selector])
 }
 
-export function ResearchStatusButton({open}:{open:()=>void}) {
-  const [status,setStatus]=useState<ResearchStatus|null>(null)
-  useEffect(()=>{let active=true;const load=()=>api.researchStatus().then(s=>{if(active)setStatus(s)}).catch(()=>{});void load();const timer=setInterval(load,15000);return()=>{active=false;clearInterval(timer)}},[])
-  const working=status?.tasks.some(t=>t.status==='running')
-  return <button className="research-sidebar" aria-label="后台研究" onClick={open} title={reasons[status?.reason??'disabled']}><span className={'research-status-dot '+(working?'is-working':'')}/><span>后台研究</span><small>{working?'研读中':status?.settings.enabled?'待命':'暂停'}</small></button>
+export function ResearchStatusButton({open,status,error}:{open:()=>void;status:ResearchStatus|null;error:string}) {
+  const {t}=useUi()
+  const jobs=(status?.translation_jobs??[]).filter(job=>['queued','running','paused'].includes(job.status))
+  const translating=jobs.find(job=>job.status==='running')
+  const analyses=(status?.analysis_tasks??[]).filter(task=>['queued','running'].includes(task.status))
+  const analyzing=analyses.find(task=>task.status==='running')
+  const count=jobs.length+analyses.length
+  const working=!!analyzing||!!translating||!!status?.tasks.some(task=>task.status==='running')||status?.reason==='maintenance_working'
+  const label=error?t('backgroundDisconnected'):analyzing?(analyzing.total_steps>0?`${t('backgroundAnalyzing')} ${analyzing.completed_steps} / ${analyzing.total_steps}`:t('aiRunning')):translating?`${translating.completed} / ${translating.total}`:count?`${count} ${t('backgroundTaskUnit')}`:working?t('backgroundWorking'):status?.settings.enabled?t('backgroundStandby'):t('queuePaused')
+  return <button className="research-sidebar" aria-label={t('background')} onClick={open} title={`${t('background')} · ${label}`}><span className={'research-status-dot '+(working?'is-working':'')}/><span>{t('background')}</span><small>{label}</small></button>
 }
 
 export function CollectionResearch({collection,back,openPaper,openSettings,notify}:{collection:Collection;back:()=>void;openPaper:(id:string,locator?:PdfLocator)=>void;openSettings:()=>void;notify:(message:string)=>void}) {
@@ -113,7 +122,7 @@ export function CollectionResearch({collection,back,openPaper,openSettings,notif
   return <div className="collection-research">
     <div className="essay-workspace-nav"><button onClick={back}><ArrowLeft size={15}/><span>{collection.name}</span></button><div className="essay-view-switch" aria-label="专题视图"><button onClick={back}>文献</button><button className={view==='essay'?'is-selected':''} aria-current={view==='essay'?'page':undefined} onClick={()=>setView('essay')}>专题文章</button><button className={view==='findings'?'is-selected':''} aria-current={view==='findings'?'page':undefined} onClick={()=>setView('findings')}>研究线索</button></div><button onClick={()=>setSettingsOpen(true)} aria-label="专题研究设置"><Settings2 size={16}/><span>研究设置</span></button></div>
     {error&&<ErrorBanner error={error} retry={()=>void load().catch(e=>setError(errorMessage(e)))}/>}
-    {view==='findings'&&<ResearchFindings collectionId={collection.id} openSource={setSource} setup={()=>setSettingsOpen(true)} notify={notify}/>}
+    {view==='findings'&&<ResearchFindings collectionId={collection.id} openSource={setSource} openOrigin={origin=>openPaper(origin.paper_id,{page:origin.page??1,source_text:origin.selected_text??undefined})} setup={()=>setSettingsOpen(true)} notify={notify}/>}
     {view==='essay'&&<>
     {!data&&!error&&<Loading text="打开专题文章…"/>}
     {data&&!revision&&<section className="essay-empty">
@@ -146,6 +155,7 @@ export function CollectionResearch({collection,back,openPaper,openSettings,notif
 }
 
 function ResearchSetup({collection,data,status,close,saved,openSettings}:{collection:Collection;data:CollectionResearchState;status:ResearchStatus;close:()=>void;saved:()=>void;openSettings:()=>void}) {
+  const {t}=useUi()
   const [focus,setFocus]=useState(data.scope.focus)
   const [workTypes,setWorkTypes]=useState<ResearchWorkType[]>(data.scope.work_types??['essay'])
   const [enabled,setEnabled]=useState(data.scope.enabled)
@@ -153,11 +163,14 @@ function ResearchSetup({collection,data,status,close,saved,openSettings}:{collec
   const [profiles,setProfiles]=useState<ModelProfile[]>([])
   const [quota,setQuota]=useState(status.quota)
   const [quotaAt,setQuotaAt]=useState(status.quota_checked_at)
+  const [quotaError,setQuotaError]=useState(status.quota_error_code)
+  const [quotaRecent,setQuotaRecent]=useState(status.quota_using_recent)
+  const [budget,setBudget]=useState(status.budget)
   const [quotaBusy,setQuotaBusy]=useState(false)
   const [busy,setBusy]=useState(false)
   const [error,setError]=useState('')
   useEssayDialog(true,'.essay-setup-dialog',()=>{if(!busy)close()})
-  const refreshQuota=async()=>{setQuotaBusy(true);try{const s=await api.researchQuota();setQuota(s.quota);setQuotaAt(s.checked_at)}catch(e){setError(errorMessage(e))}finally{setQuotaBusy(false)}}
+  const refreshQuota=async()=>{setQuotaBusy(true);try{const s=await api.researchQuota();setQuota(s.quota);setQuotaAt(s.checked_at);setQuotaError(s.quota_error_code);setQuotaRecent(s.quota_using_recent);setBudget(s.budget)}catch(e){setError(errorMessage(e))}finally{setQuotaBusy(false)}}
   useEffect(()=>{let active=true;void api.modelProfiles().then(s=>{if(!active)return;const official=s.profiles.filter(p=>p.provider_kind==='codex');setProfiles(official);if(!settings.profile_id&&official.length)setSettings(old=>({...old,profile_id:official[0].id}))}).catch(e=>{if(active)setError(errorMessage(e))});return()=>{active=false}},[])
   const save=async(directionOnly=false)=>{
     if(busy)return;setBusy(true);setError('')
@@ -166,19 +179,22 @@ function ResearchSetup({collection,data,status,close,saved,openSettings}:{collec
       await api.researchScope(collection.id,{enabled:directionOnly?data.scope.enabled:enabled,focus:focus.trim(),work_types:workTypes})
       if(!directionOnly&&enabled){
         if(workTypes.includes('essay'))await api.updateResearch(collection.id)
-        if(workTypes.some(t=>t!=='essay'))await api.updateResearch(collection.id,'findings')
+        if(workTypes.some(t=>t!=='essay'&&t!=='reading'))await api.updateResearch(collection.id,'findings')
       }
       saved()
     }catch(e){setError(errorMessage(e))}finally{setBusy(false)}
   }
   return <Modal title="专题研究设置" className="essay-setup-dialog" close={()=>{if(!busy)close()}}><p className="essay-setup-intro">为「{collection.name}」留一个值得持续思考的问题。</p><label className="essay-field">研究方向<textarea autoFocus aria-label="研究方向" maxLength={3000} value={focus} onChange={e=>setFocus(e.target.value)} placeholder="例如：这些方法分别在什么时刻使用记忆？哪些区别真正影响实验结果？"/></label><label className="essay-toggle"><input type="checkbox" checked={enabled} onChange={e=>setEnabled(e.target.checked)}/><span>允许这个专题在闲时研究<small>原文、笔记、方向或任务类型变化时才安排新一轮。</small></span></label>
     <fieldset className="research-work-types"><legend>让后台做些什么</legend>{([
-      ['essay','整理专题文章','研读 → 写作 → 审读'],['connections','发现论文联系','比较有解释力的机制'],['gaps','检查知识缺口','找到值得补齐的一环'],['review','准备复习题','用回忆恢复理解'],['questions','提出研究问题','留一个能验证的想法'],
+      ['reading','跟进阅读疑问','接着问题笔记与未完成的提问查原文'],['essay','整理专题文章','研读 → 写作 → 审读'],['connections','发现论文联系','比较有解释力的机制'],['gaps','检查知识缺口','找到值得补齐的一环'],['review','准备复习题','用回忆恢复理解'],['questions','提出研究问题','留一个能验证的想法'],
     ] as [ResearchWorkType,string,string][]).map(([value,label,hint])=><label key={value}><input type="checkbox" aria-label={label} checked={workTypes.includes(value)} onChange={e=>setWorkTypes(old=>e.target.checked?[...old,value]:old.filter(t=>t!==value))}/><span>{label}</span><small>{hint}</small></label>)}</fieldset>
     <div className="essay-policy"><div className="essay-policy-heading"><span>闲时工作方式 · 全局策略</span><label><input type="checkbox" checked={settings.enabled} onChange={e=>setSettings({...settings,enabled:e.target.checked})}/>后台总开关</label></div><label className="essay-field">使用的官方连接<select aria-label="后台官方连接" value={settings.profile_id??''} onChange={e=>setSettings({...settings,profile_id:e.target.value||null})}><option value="">选择 Codex 订阅连接</option>{profiles.map(p=><option value={p.id} key={p.id}>{p.name} · {p.model}</option>)}</select></label>{!profiles.length&&<p className="essay-profile-hint">还没有官方连接。<button onClick={openSettings}>去设置登录 ChatGPT<ArrowUpRight size={12}/></button></p>}
-      <div className="essay-policy-grid"><label>闲置多久开始<select value={settings.idle_seconds} onChange={e=>setSettings({...settings,idle_seconds:Number(e.target.value)})}>{![60,180,300,600].includes(settings.idle_seconds)&&<option value={settings.idle_seconds}>{settings.idle_seconds} 秒</option>}<option value={60}>1 分钟</option><option value={180}>3 分钟</option><option value={300}>5 分钟</option><option value={600}>10 分钟</option></select></label><label>每小时最多调用<input type="number" min={1} max={18} value={settings.calls_per_hour} onChange={e=>setSettings({...settings,calls_per_hour:Number(e.target.value)})}/></label></div>
+      <div className="essay-policy-grid"><label>闲置多久开始<select value={settings.idle_seconds} onChange={e=>setSettings({...settings,idle_seconds:Number(e.target.value)})}>{![60,180,300,600].includes(settings.idle_seconds)&&<option value={settings.idle_seconds}>{settings.idle_seconds} 秒</option>}<option value={60}>1 分钟</option><option value={180}>3 分钟</option><option value={300}>5 分钟</option><option value={600}>10 分钟</option></select></label><label>每小时最多调用<input type="number" min={1} max={60} value={settings.calls_per_hour} onChange={e=>setSettings({...settings,calls_per_hour:Number(e.target.value)})}/></label></div>
+      <label className="essay-toggle"><input type="checkbox" checked={!!settings.investigations_enabled} onChange={e=>setSettings({...settings,investigations_enabled:e.target.checked})}/><span>继续深入专题<small>阅读疑问优先跟进；基础整理后规划至多六个专题问题。每项研读、核验并保存，同一问题不会循环生成。</small></span></label>
+      <ResearchBudget budget={budget}/>
+      {quotaError&&<p className="essay-profile-hint" role="status">{t(quotaError==='transport_timeout'?'quotaQueryTimeout':'quotaQueryFailed')}。{t(quotaRecent?'quotaRecentHint':'quotaQueryHint')}</p>}
       <div className="maintenance-policy"><div className="essay-policy-heading"><span>知识网络维护 · 空闲时运行</span><label><input type="checkbox" checked={settings.maintenance_enabled} onChange={e=>setSettings({...settings,maintenance_enabled:e.target.checked})}/>开启维护</label></div><p>程序先检查重复对象、证据定位和悬空关系；模型只审阅可疑邻域。阅读、论文分析、翻译和提问会自动让路。</p><div className="essay-policy-grid"><label>两轮维护间隔<select value={settings.maintenance_interval_minutes} onChange={e=>setSettings({...settings,maintenance_interval_minutes:Number(e.target.value)})}><option value={30}>30 分钟</option><option value={120}>2 小时</option><option value={720}>12 小时</option><option value={1440}>1 天</option></select></label><label>每轮最多模型调用<input type="number" min={1} max={12} value={settings.maintenance_calls_per_run} onChange={e=>setSettings({...settings,maintenance_calls_per_run:Number(e.target.value)})}/></label><label>维护范围<select value={settings.maintenance_scope} onChange={e=>setSettings({...settings,maintenance_scope:e.target.value as ResearchSettings['maintenance_scope']})}><option value="library">整个文献库</option><option value="enabled_collections">已开启专题</option></select></label></div></div>
-      <details><summary>额度保留策略</summary><div className="essay-policy-grid"><label>短窗口启动阈值（%）<input type="number" min={10} max={95} value={settings.start_remaining} onChange={e=>setSettings({...settings,start_remaining:Number(e.target.value)})}/></label><label>短窗口停止阈值（%）<input type="number" min={5} max={90} value={settings.stop_remaining} onChange={e=>setSettings({...settings,stop_remaining:Number(e.target.value)})}/></label><label>长窗口至少保留（%）<input type="number" min={10} max={90} value={settings.long_reserve} onChange={e=>setSettings({...settings,long_reserve:Number(e.target.value)})}/></label></div><p>窗口以官方返回为准。无法读取额度时等待；仅使用选中的官方连接。</p></details>
+      <details><summary>额度保留策略</summary><div className="essay-policy-grid"><label>短窗口启动阈值（%）<input type="number" min={1} max={100} value={settings.start_remaining} onChange={e=>setSettings({...settings,start_remaining:Number(e.target.value)})}/></label><label>短窗口停止阈值（%）<input type="number" min={0} max={99} value={settings.stop_remaining} onChange={e=>setSettings({...settings,stop_remaining:Number(e.target.value)})}/></label><label>长窗口至少保留（%）<input type="number" min={0} max={100} value={settings.long_reserve} onChange={e=>setSettings({...settings,long_reserve:Number(e.target.value)})}/></label></div><p>窗口以官方返回为准。无法读取额度时等待；仅使用选中的官方连接。</p></details>
       <div className="essay-quota-heading"><span>{quotaAt?`额度读取于 ${new Date(quotaAt*1000).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}`:'尚未读取额度'}</span><button type="button" disabled={quotaBusy} onClick={()=>void refreshQuota()}><RefreshCw size={12} className={quotaBusy?'spin':''}/>刷新额度</button></div>{quota.length>0&&<div className="essay-quota" aria-label="官方剩余额度">{quota.map((w,i)=><div key={i}><span>{w.window_minutes? w.window_minutes>=1440?`${Math.round(w.window_minutes/1440)} 天窗口`:`${Math.round(w.window_minutes/60*10)/10} 小时窗口`:'额度窗口'}{w.limit_id&&w.limit_id!=='codex'?` · ${w.limit_id}`:''}</span><strong>{w.used_percent===null?'暂未读取':`剩余 ${Math.round(100-w.used_percent)}%`}</strong><meter min="0" max="100" value={w.used_percent===null?0:100-w.used_percent}/></div>)}</div>}
     </div><p className="essay-setup-footnote"><Pause size={13}/>阅读、翻译或提问时自动让出通道。已完成步骤保留，被中断的一步可能需要重做。</p>{error&&<ErrorBanner error={error}/>}<div className="modal-actions"><button className="btn secondary" disabled={busy} onClick={()=>void save(true)}>保存研究方向</button><button className="btn primary" disabled={busy||!settings.profile_id} onClick={()=>void save()}>{busy?<LoaderCircle className="spin" size={14}/>:<Check size={14}/>}保存设置</button></div></Modal>
 }

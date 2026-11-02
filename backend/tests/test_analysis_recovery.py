@@ -99,6 +99,45 @@ def test_nontransient_error_is_not_retried(tmp_path):
     assert len(provider.calls) == 1
 
 
+@pytest.mark.parametrize(('configured', 'stage', 'expected'), [
+    ('xhigh', 'extract', 'medium'),
+    ('xhigh', 'reduce', 'medium'),
+    ('xhigh', 'synthesize', 'high'),
+    ('xhigh', 'science_review', 'high'),
+    ('high', 'synthesize', 'high'),
+])
+def test_first_pass_reasoning_budget_keeps_long_paper_stages_bounded(configured, stage, expected):
+    from app.providers.harness import stage_reasoning_effort
+
+    provider = ScriptedProvider(lambda payload: {})
+    provider.reasoning_effort = configured
+    assert stage_reasoning_effort(provider, stage) == expected
+
+
+def test_synthesis_timeout_falls_back_to_medium_and_still_publishes(tmp_path):
+    db, chunks = setup(tmp_path)
+
+    class SynthesisTimeoutProvider(ScriptedProvider):
+        def __init__(self):
+            super().__init__(normal)
+            self.reasoning_effort = 'xhigh'
+            self.efforts = []
+
+        def complete_json(self, system, payload, **options):
+            self.efforts.append((payload.get('stage', 'synthesize' if 'chunks' not in payload else 'extract'), options.get('reasoning_effort')))
+            if 'chunks' not in payload and payload.get('stage') != 'review_card_science' and options.get('reasoning_effort') == 'high':
+                raise ProviderError('synthesis timed out', 504, code='transport_timeout', retryable=True)
+            return super().complete_json(system, payload, **options)
+
+    provider = SynthesisTimeoutProvider()
+    result = analyze_full_paper(db, provider, chunks)
+
+    assert result.analysis.method == 'Keep this accepted entry.'
+    assert ('synthesize', 'high') in provider.efforts
+    assert ('synthesize', 'medium') in provider.efforts
+    assert any(item['kind'] == 'synthesis_effort_fallback' for item in result.report['recoveries'])
+
+
 def test_terminal_failure_records_safe_stage_diagnostics_even_without_retry(tmp_path):
     db, chunks = setup(tmp_path)
     failure = ProviderError('Service refused the request', code='upstream_error')
@@ -127,6 +166,7 @@ def test_cancellation_during_recovery_prevents_another_paid_call(tmp_path, monke
 def test_missing_reduction_lineage_gets_one_group_correction_with_short_ids(tmp_path, monkeypatch):
     import app.providers.harness as harness
     monkeypatch.setattr(harness, 'REDUCE_CHARS', 2500)
+    monkeypatch.setattr(harness, 'SYNTHESIS_CHARS', 2500)
     db, chunks = setup(tmp_path)
     bad = False
     def respond(payload):
@@ -156,6 +196,156 @@ def test_missing_reduction_lineage_gets_one_group_correction_with_short_ids(tmp_
     again = analyze_full_paper(db, provider, chunks)
     assert len(provider.calls) == count
     assert again.report['usage']['remote_calls'] == 0
+
+
+def test_full_evidence_that_fits_synthesis_does_not_need_recursive_reduction(tmp_path):
+    db, chunks = setup(tmp_path)
+
+    def respond(payload):
+        if 'chunks' in payload:
+            return {'facts': [{'content': f'Condition {i}: ' + 'x' * 2100,
+                'source_ids': [payload['chunks'][0]['source_id']]} for i in range(32)]}
+        assert payload.get('stage') not in {'reduce', 'repair_reduce'}
+        assert len(payload['facts']) == 32
+        assert all(payload['facts'][i]['content'].startswith(f'Condition {i}:') for i in range(32))
+        assert payload['evidence'][0]['source_text'] == chunks[0].content
+        return normal(payload)
+
+    result = analyze_full_paper(db, ScriptedProvider(respond), chunks)
+    assert result.report['fact_coverage'] == {'total': 32, 'retained': 32, 'complete': True}
+    assert result.report['synthesis_context']['strategy'] == 'direct'
+    assert result.report['synthesis_context']['chars'] > 48000
+    assert not result.report['partial']
+
+
+def test_synthesis_omits_internal_identifiers_before_reducing_verified_content(tmp_path, monkeypatch):
+    """Internal fact/chunk IDs must not force another lossy reduction round."""
+    import app.providers.harness as harness
+    db, chunks = setup(tmp_path)
+    sources = harness.source_passages(harness.pack_windows(chunks)[0])
+    raw = [{'content': f'Condition {i}: ' + 'x' * 240,
+        'source_ids': [next(iter(sources))]} for i in range(32)]
+    parts = {part.part_id: part for part in sources.values()}
+    facts, invalid = harness._facts(raw, parts, sources=sources)
+    assert invalid == 0
+    pool = harness._citation_pool(facts, parts)
+    full = harness._model_context(facts, pool)
+    compact = {
+        'facts': [{key: value for key, value in fact.items() if key != 'id'} for fact in full['facts']],
+        'evidence': [{key: value for key, value in cite.items() if key != 'chunk_id'} for cite in full['evidence']],
+    }
+    limit = (len(json.dumps(full, ensure_ascii=False)) + len(json.dumps(compact, ensure_ascii=False))) // 2
+    monkeypatch.setattr(harness, 'SYNTHESIS_CHARS', limit)
+
+    def respond(payload):
+        if 'chunks' in payload:
+            return {'facts': raw}
+        assert payload.get('stage') not in {'reduce', 'repair_reduce'}
+        assert payload['facts'] == compact['facts']
+        assert payload['evidence'] == compact['evidence']
+        return normal(payload)
+
+    provider = ScriptedProvider(respond)
+    result = analyze_full_paper(db, provider, chunks)
+    assert not result.report['partial']
+    assert result.report['fact_coverage'] == {'total': 32, 'retained': 32, 'complete': True}
+    assert result.report['synthesis_context']['chars'] <= limit
+    assert result.report['synthesis_context']['strategy'] == 'direct'
+    assert result.analysis.citations[0].chunk.id == chunks[0].id
+    assert result.analysis.citations[0].chunk.bbox_json == chunks[0].bbox_json
+    count = len(provider.calls)
+    repeated = analyze_full_paper(db, provider, chunks)
+    assert len(provider.calls) == count
+    assert repeated.report['usage']['remote_calls'] == 0
+
+
+def test_invalid_extraction_source_gets_targeted_repair_without_replacing_valid_facts(tmp_path):
+    db, chunks = setup(tmp_path)
+
+    def respond(payload):
+        if payload.get('stage') == 'repair_extract':
+            assert [target['field'] for target in payload['targets']] == ['facts[1]']
+            return {'repairs': [{'field': 'facts[1]', 'decision': 'corrected', 'value': {
+                'content': 'A repaired negative condition.', 'source_ids': [payload['chunks'][0]['source_id']]}}]}
+        if 'chunks' in payload:
+            return {'facts': normal(payload)['facts'] + [
+                {'content': 'A negative condition.', 'source_ids': ['unknown-source']}]}
+        assert {fact['content'] for fact in payload['facts']} == {
+            'A measured result with a negative condition.', 'A repaired negative condition.'}
+        return normal(payload)
+
+    provider = ScriptedProvider(respond)
+    result = analyze_full_paper(db, provider, chunks)
+    assert result.report['repaired_entries'] == 1
+    assert result.report['invalid_entries'] == 0
+    assert not result.report['partial']
+    count = len(provider.calls)
+    repeated = analyze_full_paper(db, provider, chunks)
+    assert repeated.report['usage']['remote_calls'] == 0
+    assert len(provider.calls) == count
+
+
+@pytest.mark.parametrize('kind', ['foreign_source', 'duplicate_field', 'unknown_field', 'malformed_field'])
+def test_bad_extraction_repairs_do_not_replace_accepted_facts_or_block_a_valid_card(tmp_path, kind):
+    db, chunks = setup(tmp_path)
+
+    def respond(payload):
+        if payload.get('stage') == 'repair_extract':
+            item = {'field': 'facts[1]', 'decision': 'corrected', 'value': {
+                'content': 'Unverified replacement.', 'source_ids': ['foreign-source']}}
+            if kind == 'duplicate_field':
+                item['value']['source_ids'] = [payload['chunks'][0]['source_id']]
+                return {'repairs': [item, item]}
+            if kind == 'unknown_field':
+                item['field'] = 'facts[0]'
+            if kind == 'malformed_field':
+                item['field'] = ['facts[1]']
+            return {'repairs': [item]}
+        if 'chunks' in payload:
+            return {'facts': normal(payload)['facts'] + [
+                {'content': 'A malformed claim.', 'source_ids': ['unknown']}]}
+        assert [fact['content'] for fact in payload['facts']] == ['A measured result with a negative condition.']
+        return normal(payload)
+
+    result = analyze_full_paper(db, ScriptedProvider(respond), chunks)
+    assert result.report['partial']
+    assert result.report['invalid_entries'] == 1
+    assert result.report['repaired_entries'] == 0
+    assert result.analysis.method == 'Keep this accepted entry.'
+
+
+def test_incomplete_reduction_keeps_omitted_original_facts_without_a_repair_call(tmp_path, monkeypatch):
+    import app.providers.harness as harness
+    monkeypatch.setattr(harness, 'REDUCE_CHARS', 12000)
+    monkeypatch.setattr(harness, 'SYNTHESIS_CHARS', 5000)
+    db, chunks = setup(tmp_path)
+
+    def respond(payload):
+        if 'chunks' in payload:
+            return {'facts': [{'content': f'Condition {i}: ' + 'x' * 1000,
+                'source_ids': [payload['chunks'][0]['source_id']]} for i in range(6)]}
+        assert payload.get('stage') != 'repair_reduce'
+        if payload.get('stage') == 'reduce':
+            return {'facts': [{'content': 'Four measured conditions.',
+                'fact_ids': [fact['id'] for fact in payload['facts'][:4]],
+                'citation_ids': payload['facts'][0]['citation_ids']},
+                {'content': 'Invalid compressed condition.',
+                    'fact_ids': [payload['facts'][-1]['id']], 'citation_ids': ['foreign-evidence']}]}
+        assert any(fact['content'].startswith('Condition 4:') for fact in payload['facts'])
+        assert any(fact['content'].startswith('Condition 5:') for fact in payload['facts'])
+        return normal(payload)
+
+    provider = ScriptedProvider(respond)
+    result = analyze_full_paper(db, provider, chunks)
+    assert result.report['fact_coverage'] == {'total': 6, 'retained': 6, 'complete': True}
+    assert not result.report['partial']
+    assert any(item['kind'] == 'lineage_preserving_fallback' for item in result.report['recoveries'])
+    calls = len(provider.calls)
+    repeated = analyze_full_paper(db, provider, chunks)
+    assert repeated.report['usage']['remote_calls'] == 0
+    assert len(provider.calls) == calls
+    assert repeated.report['rejections']
+    assert all(item.get('resolved') for item in repeated.report['rejections'])
 
 
 def test_targeted_card_repairs_preserve_accepted_entries_and_replay_without_calls(tmp_path):
@@ -338,6 +528,7 @@ def test_noncompressing_corrections_are_all_evicted_before_explicit_retry(tmp_pa
     from app.models import ModelCallCache
     import app.providers.harness as harness
     monkeypatch.setattr(harness, 'REDUCE_CHARS', 1500)
+    monkeypatch.setattr(harness, 'SYNTHESIS_CHARS', 1500)
     db, chunks = setup(tmp_path)
     def respond(payload):
         if 'chunks' in payload:

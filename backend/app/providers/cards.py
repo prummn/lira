@@ -36,7 +36,33 @@ def card_schema() -> dict:
     for field in LIST_FIELDS:
         schema = field_schema(field)
         properties[field] = {'anyOf': [schema, {'type': 'array', 'maxItems': 0}]} if field == 'tldr' else {**schema, 'minItems': 0}
-    return {'type': 'object', 'properties': properties}
+    evidence_ids = {'type': 'array', 'minItems': 1, 'maxItems': 8, 'uniqueItems': True, 'items': {'type': 'string'}}
+    candidate = {
+        'type': 'object',
+        'required': ['entity_type', 'name', 'role', 'confidence', 'citation_ids'],
+        'properties': {
+            'entity_type': {'type': 'string', 'enum': ['paper', 'method', 'dataset', 'benchmark', 'task', 'metric', 'concept', 'venue']},
+            'name': {'type': 'string', 'minLength': 1, 'maxLength': 300},
+            'aliases': {'type': 'array', 'maxItems': 8, 'items': {'type': 'string', 'maxLength': 300}},
+            'description': {'type': ['string', 'null'], 'maxLength': 8000},
+            'role': {'type': 'string', 'enum': ['proposed', 'used', 'baseline', 'ablation', 'component', 'cited', 'compared']},
+            'confidence': {'type': 'number', 'minimum': 0, 'maximum': 1},
+            'citation_ids': evidence_ids,
+        },
+    }
+    relation = {
+        'type': 'object',
+        'required': ['relation', 'source_name', 'target_name', 'confidence', 'citation_ids'],
+        'properties': {
+            'relation': {'type': 'string', 'enum': ['builds_on', 'extends', 'compares_with', 'replaces', 'uses_dataset', 'evaluated_on', 'inspired_by', 'contrasts_with', 'requires_concept']},
+            'source_name': {'type': 'string', 'minLength': 1, 'maxLength': 300},
+            'target_name': {'type': 'string', 'minLength': 1, 'maxLength': 300},
+            'description': {'type': ['string', 'null'], 'maxLength': 8000},
+            'confidence': {'type': 'number', 'minimum': 0, 'maximum': 1},
+            'citation_ids': evidence_ids,
+        },
+    }
+    return {'type': 'object', 'properties': {**properties, 'knowledge_candidates': {'type': 'array', 'maxItems': 64, 'items': candidate}, 'knowledge_relations': {'type': 'array', 'maxItems': 96, 'items': relation}}}
 
 
 def extractive_card(chunks: list[PaperChunk], analysis: AnalysisResult) -> dict[str, CardEntry | list[CardEntry] | None]:

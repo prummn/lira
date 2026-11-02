@@ -12,6 +12,8 @@ import subprocess
 import threading
 import time
 from urllib.parse import urlsplit
+from urllib import request as urllib_request
+from urllib.request import getproxies
 
 from .base import ProviderError
 
@@ -32,8 +34,10 @@ class CodexAccount:
         self._login_error = None
         self._cached = None
         self._cached_at = 0.0
+        self._cached_includes_limits = False
         self._model_cache = None
         self._model_cache_at = 0.0
+        self._reset_limits()
 
     def environment(self) -> dict[str, str]:
         # Only the child receives this home. Never inherit the desktop agent's
@@ -41,7 +45,51 @@ class CodexAccount:
         result = {k: v for k, v in os.environ.items()
                   if not k.upper().startswith(('CODEX_', 'OPENAI_', 'PAPER_READER_'))}
         result['CODEX_HOME'] = str(self.home)
+        # Rust HTTP clients do not reliably discover the Windows system proxy.
+        # Apply it only to this child; explicit environment routes always win.
+        # urllib's combined lookup skips the registry when NO_PROXY alone is
+        # present, so obtain Windows routes independently before merging.
+        routes = dict(getattr(urllib_request, 'getproxies_registry', lambda: {})())
+        routes.update(getproxies())
+        existing = {key.casefold() for key in result}
+        for scheme, proxy in routes.items():
+            name = {'http': 'HTTP_PROXY', 'https': 'HTTPS_PROXY', 'all': 'ALL_PROXY', 'no': 'NO_PROXY'}.get(scheme)
+            if not name or name.casefold() in existing:
+                continue
+            if scheme in ('http', 'https') and 'all_proxy' in existing:
+                continue
+            result[name] = proxy if scheme == 'no' or '://' in proxy else 'http://' + proxy
         return result
+
+    def _reset_limits(self):
+        self._limits_snapshot, self._limits_identity = [], None
+        self._limits_checked_at = self._limits_attempted_at = self._limits_next_refresh = 0
+        self._limits_error_code = None
+        self._limits_retryable = False
+
+    def _quota_status(self, identity, *, refresh=False, include_limits=True):
+        if identity != self._limits_identity:
+            self._reset_limits()
+            self._limits_identity = identity
+        if include_limits and (refresh or time.monotonic() >= self._limits_next_refresh):
+            self._limits_attempted_at = time.time()
+            try:
+                self._limits_snapshot = self._limits(self._request('account/rateLimits/read'))
+                self._limits_checked_at = time.time()
+                self._limits_error_code, self._limits_retryable = None, False
+                self._limits_next_refresh = time.monotonic() + 60
+            except ProviderError as error:
+                self._limits_error_code, self._limits_retryable = error.code, error.retryable
+                if error.code in {'authentication', 'rate_limit'}:
+                    self._limits_snapshot, self._limits_checked_at = [], 0
+                self._limits_next_refresh = time.monotonic() + 15
+        state = {'limits': deepcopy(self._limits_snapshot),
+            'limits_checked_at': self._limits_checked_at or None,
+            'limits_attempted_at': self._limits_attempted_at or None}
+        if self._limits_error_code:
+            state.update(limits_error_code=self._limits_error_code, limits_retryable=self._limits_retryable,
+                limits_error=('官方额度查询超时' if self._limits_error_code == 'transport_timeout' else '官方额度查询失败') + '；稍后自动重试，已有额度按上次成功读取时间判断有效期。')
+        return state
 
     @staticmethod
     def options(*, https=False) -> list[str]:
@@ -148,7 +196,10 @@ class CodexAccount:
             self._cached_at = 0
         elif method in {'account/updated', 'account/rateLimits/updated'}:
             self._cached_at = 0
-            if method == 'account/updated': self._model_cache = None
+            self._limits_next_refresh = 0
+            if method == 'account/updated':
+                self._model_cache = None
+                self._reset_limits()
 
     def _request(self, method, params=None):
         self._sequence += 1
@@ -166,6 +217,18 @@ class CodexAccount:
                 raise ProviderError('Codex 账户服务已退出，请刷新后重试', 503, code='transport_error', retryable=True)
             if value.get('id') == identifier:
                 if 'error' in value:
+                    if method == 'account/rateLimits/read':
+                        # Classify locally; never return upstream text, URLs or credentials.
+                        error = value['error']
+                        message = str(error.get('message', '') if isinstance(error, dict) else '').casefold()
+                        if any(term in message for term in ('unauthorized', '401', '403', 'authentication')):
+                            raise ProviderError('官方额度查询需要重新登录', 401, code='authentication')
+                        if any(term in message for term in ('429', 'rate limit', 'usage limit', 'quota exceeded')):
+                            raise ProviderError('官方连接暂时受限，稍后重试', 503, code='rate_limit', retryable=True)
+                        if any(term in message for term in ('timed out', 'timeout', 'deadline exceeded')):
+                            raise ProviderError('官方额度查询超时，稍后自动重试', 504, code='transport_timeout', retryable=True)
+                        if any(term in message for term in ('error sending request', 'connection', 'dns', 'network', 'tls')):
+                            raise ProviderError('官方额度查询连接失败，稍后自动重试', 503, code='transport_error', retryable=True)
                     raise ProviderError('Codex 账户操作未完成，请刷新账户状态后重试', 502, code='codex_account_error', retryable=True)
                 result = value.get('result')
                 return result if isinstance(result, dict) else {}
@@ -176,6 +239,11 @@ class CodexAccount:
 
     @staticmethod
     def _limits(data):
+        buckets = data.get('rateLimitsByLimitId')
+        if isinstance(buckets, dict) and buckets:
+            return [{**window, 'limit_id': str(limit_id)[:200]}
+                    for limit_id, bucket in buckets.items() if isinstance(bucket, dict)
+                    for window in CodexAccount._limits({'rateLimits': bucket})]
         result = []
         limits = data.get('rateLimits')
         if not isinstance(limits, dict):
@@ -186,22 +254,23 @@ class CodexAccount:
                 continue
             percent = window.get('usedPercent')
             if not isinstance(percent, (float, int)) or isinstance(percent, bool) or not math.isfinite(percent):
-                continue
+                percent = None
             def number(key):
                 value = window.get(key)
                 return value if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0 else None
-            result.append({'name': name, 'used_percent': min(100, max(0, percent)),
+            result.append({'name': name, 'used_percent': min(100, max(0, percent)) if percent is not None else None,
                 'window_minutes': number('windowDurationMins'), 'resets_at': number('resetsAt')})
         return result
 
-    def status(self, *, refresh=False):
+    def status(self, *, refresh=False, include_limits=True):
         with self._lock:
             while not self._messages.empty():
                 try:
                     self._notification(self._messages.get_nowait())
                 except queue.Empty:
                     break
-            if not refresh and self._cached is not None and time.monotonic() - self._cached_at < 10:
+            if (not refresh and self._cached is not None and time.monotonic() - self._cached_at < 10
+                    and (not include_limits or self._cached_includes_limits)):
                 return dict(self._cached)
             state = {'available': bool(self.command), 'authenticated': False, 'pending': bool(self._login_id),
                 'email': None, 'plan': None, 'limits': [], 'login_url': self._login_url, 'error': self._login_error}
@@ -217,15 +286,16 @@ class CodexAccount:
                     state['plan'] = str(account['planType'])[:60] if account.get('planType') else None
                     self._login_id = self._login_url = None
                     self._login_error = None
-                    try:
-                        state['limits'] = self._limits(self._request('account/rateLimits/read'))
-                    except ProviderError:
-                        state['limits_error'] = '暂时无法读取额度，可稍后刷新'
+                    state.update(self._quota_status((state['email'], state['plan']),
+                        refresh=refresh, include_limits=include_limits))
+                else:
+                    self._reset_limits()
                 state.update(pending=bool(self._login_id), login_url=self._login_url, error=self._login_error)
             except ProviderError as error:
                 state.update(error=str(error), error_code=error.code, retryable=error.retryable,
                     available=error.code != 'codex_unavailable', pending=False, login_url=None)
             self._cached, self._cached_at = state, time.monotonic()
+            self._cached_includes_limits = include_limits
             return dict(state)
 
     def login(self):
@@ -234,6 +304,7 @@ class CodexAccount:
             self._model_cache = None
             if self._login_id:
                 return self.status()
+            self._reset_limits()
             data = self._request('account/login/start', {'type': 'chatgpt'})
             url = data.get('authUrl', '')
             parsed = urlsplit(url)
@@ -260,6 +331,7 @@ class CodexAccount:
             if self._login_id:
                 self.cancel_login()
             self._request('account/logout')
+            self._reset_limits()
             self._model_cache = None
             self._cached_at = 0
             return self.status(refresh=True)
@@ -267,7 +339,7 @@ class CodexAccount:
     def models(self, *, refresh=False):
         """The official catalog is the sole source of picker models and efforts."""
         with self._lock:
-            state = self.status()
+            state = self.status(include_limits=False)
             if state.get('error_code'):
                 raise ProviderError(state['error'], 503, code=state['error_code'],
                     retryable=bool(state.get('retryable')), diagnostics={'request_sent': False})

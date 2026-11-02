@@ -222,6 +222,7 @@ class ResearchControl(Base):
     __tablename__ = 'research_control'
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     settings_json: Mapped[str] = mapped_column(Text, nullable=False)
+    budget_json: Mapped[str] = mapped_column(Text, default='{}', server_default='{}', nullable=False)
 
 
 class ResearchScope(Base, TimestampMixin):
@@ -239,6 +240,7 @@ class ResearchTask(Base, TimestampMixin):
     collection_id: Mapped[str] = mapped_column(ForeignKey('collections.id', ondelete='CASCADE'), nullable=False, index=True)
     kind: Mapped[str] = mapped_column(String(24), default='essay', server_default='essay', nullable=False)
     fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    intent_key: Mapped[Optional[str]] = mapped_column(String(64), index=True)
     status: Mapped[str] = mapped_column(String(24), default='queued', nullable=False)
     stage: Mapped[str] = mapped_column(String(24), default='synthesis', nullable=False)
     material_json: Mapped[str] = mapped_column(Text, nullable=False)
@@ -389,6 +391,50 @@ class Translation(Base):
     prompt_version: Mapped[str] = mapped_column(String(100), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     paper: Mapped[Paper] = relationship(back_populates="translations")
+
+
+class TranslationJob(Base, TimestampMixin):
+    __tablename__ = 'translation_jobs'
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    paper_id: Mapped[str] = mapped_column(ForeignKey('papers.id', ondelete='CASCADE'), nullable=False, index=True)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    profile_id: Mapped[Optional[str]] = mapped_column(String(100))
+    provider: Mapped[str] = mapped_column(String(100), nullable=False)
+    config_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default='queued', nullable=False, index=True)
+    reason: Mapped[Optional[str]] = mapped_column(String(64))
+    error: Mapped[Optional[str]] = mapped_column(Text)
+    calls: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    usage_json: Mapped[str] = mapped_column(Text, default='{}', nullable=False)
+    # Full pretranslation keeps the eligible body separate from the skipped
+    # appendix/reference tail so progress never suggests the whole PDF was
+    # translated. Selected jobs leave the scope counters at zero.
+    scope_total: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    scope_skipped: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    scope_reason: Mapped[Optional[str]] = mapped_column(String(64))
+    items: Mapped[list['TranslationItem']] = relationship(cascade='all, delete-orphan', order_by='TranslationItem.position')
+
+
+class TranslationItem(Base, TimestampMixin):
+    __tablename__ = 'translation_items'
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey('translation_jobs.id', ondelete='CASCADE'), nullable=False, index=True)
+    work_item_id: Mapped[Optional[str]] = mapped_column(ForeignKey('translation_items.id', ondelete='SET NULL'), index=True)
+    paragraph_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    original_paragraph_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    aliases_json: Mapped[str] = mapped_column(Text, default='[]', nullable=False)
+    refs_json: Mapped[str] = mapped_column(Text, nullable=False)
+    source_text: Mapped[str] = mapped_column(Text, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    page: Mapped[Optional[int]] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(24), default='queued', nullable=False)
+    phase: Mapped[Optional[str]] = mapped_column(String(24))
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error: Mapped[Optional[str]] = mapped_column(Text)
+    translation_id: Mapped[Optional[str]] = mapped_column(ForeignKey('translations.id', ondelete='SET NULL'))
 
 
 class Edge(Base, TimestampMixin):

@@ -14,6 +14,14 @@ from ..services import knowledge_maintenance as maintenance
 router = APIRouter()
 
 
+@router.get('/knowledge/maintenance/backlog')
+def backlog(scope_type: str = Query('library', pattern='^(library|collection|papers)$'),
+            scope_id: str | None = None, paper_ids: str | None = None,
+            session: Session = Depends(get_db)):
+    return maintenance.backlog(session, scope_type=scope_type, scope_id=scope_id,
+        paper_ids=[value for value in (paper_ids or '').split(',') if value])
+
+
 def _issue(session: Session, issue_id: str) -> KnowledgeMaintenanceIssue:
     row = session.get(KnowledgeMaintenanceIssue, issue_id)
     if row is None:

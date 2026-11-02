@@ -99,6 +99,140 @@ def test_cross_page_sentence_can_continue_after_a_figure_caption():
     assert paragraphs[1]['kind'] == 'caption'
 
 
+def test_abstract_with_pass_at_metric_is_kept_as_one_reading_paragraph():
+    """Metrics such as pass@1 are prose, not email/layout noise."""
+    from app.models import PaperChunk
+    from app.services.reading_paragraphs import build_reading_paragraphs
+
+    chunk = PaperChunk(
+        id='abstract-pass-at-one', paper_id='p', page=1, section='Abstract',
+        content=(
+            'We introduce Reflexion, a framework for language agents. '
+            'It reaches 91% pass@1 accuracy on HumanEval and improves coding results.'
+        ),
+        bbox_json=json.dumps([50, 100, 550, 140]), page_width=600, page_height=800,
+    )
+
+    paragraphs = build_reading_paragraphs([chunk])
+
+    assert len(paragraphs) == 1
+    assert paragraphs[0]['section'] == 'Abstract'
+    assert 'pass@1' in paragraphs[0]['text']
+
+
+def test_inline_formula_fragments_stay_in_the_self_reflection_paragraph():
+    """Overlapping PDF text blocks at a wrapped formula do not split prose."""
+    from app.models import PaperChunk
+    from app.services.reading_paragraphs import build_reading_paragraphs
+
+    def chunk(index, text, bounds):
+        return PaperChunk(
+            id=str(index), paper_id='p', page=4,
+            section='3 Reflexion: reinforcement via verbal reflection',
+            content=text, bbox_json=json.dumps(bounds),
+            page_width=612, page_height=792,
+        )
+
+    chunks = [
+        chunk('base', 'Self-reflection\nThe model stores an experience and should have taken action a��', [108, 554, 505, 641]),
+        chunk('inline-1', 'i, which would have resulted in a��', [358, 629, 493, 643]),
+        chunk('inline-2', 'i+1\nand a��', [108, 635, 504, 653]),
+        chunk('inline-3', 'i+2, and store this experience in its memory', [108, 643, 504, 665]),
+        chunk('tail', 'i. This iterative process improves the agent.', [108, 655, 504, 687]),
+    ]
+
+    paragraphs = build_reading_paragraphs(chunks)
+
+    prose = [item for item in paragraphs if item['kind'] == 'prose']
+    assert len(prose) == 1
+    assert 'i, which would have resulted' in prose[0]['text']
+    assert prose[0]['text'].endswith('agent.')
+
+
+def test_radical_and_midline_capital_continuation_stay_in_the_same_real_paragraph(monkeypatch):
+    """DeepSWE 5.5: a raised radical is emitted before its containing paragraph."""
+    from pathlib import Path
+    from app.models import PaperChunk
+    from app.services.pdf_metadata import LayoutLine
+    from app.services.reading_paragraphs import build_reading_paragraphs
+
+    fixture = json.loads((Path(__file__).parent / 'fixtures/deepswe_uncertainty_layout.json').read_text(encoding='utf-8'))
+    lines = [LayoutLine(key=tuple(row['key']), text=row['text'], bbox=tuple(row['bbox']),
+                        size=row['size'], bold=row['bold'], horizontal=row['horizontal'], spans=[])
+             for row in fixture['lines']]
+    ranks = {row['key'][1]: row['rank'] for row in fixture['lines']}
+    monkeypatch.setattr('app.services.reading_paragraphs._read_layout', lambda path: ({12: lines}, {12: ranks}))
+    chunks = [PaperChunk(id=row['id'], paper_id='p', page=row['page'], section=row['section'],
+                         content=row['content'], bbox_json=json.dumps(row['bbox']), page_width=612, page_height=792)
+              for row in fixture['chunks']]
+    snapshots = [chunk.content for chunk in chunks]
+    paragraphs = build_reading_paragraphs(chunks)
+
+    assert len(paragraphs) == 2
+    first, following = paragraphs
+    assert first['text'].startswith('Running every task')
+    assert 'std(s1, . . . , sR)/ √ R. This convention follows' in first['text']
+    assert first['text'].endswith('not statistically separated.')
+    assert following['text'].startswith('This interval captures only one source of noise:')
+    assert [ref['chunk_id'] for ref in first['refs']] == ['uncertainty-2', 'uncertainty-1', 'uncertainty-3']
+    assert [chunk.content for chunk in chunks] == snapshots
+    sources = {chunk.id: chunk.content for chunk in chunks}
+    assert first['source_text'] == '\n'.join(sources[ref['chunk_id']][ref['start']:ref['end']] for ref in first['refs'])
+
+
+def test_sentence_can_continue_after_an_inline_figure_caption():
+    from app.models import PaperChunk
+    from app.services.reading_paragraphs import build_reading_paragraphs
+    def chunk(index, text, bounds):
+        return PaperChunk(id=str(index), paper_id='p', page=1, section='Results', content=text,
+                          bbox_json=json.dumps(bounds), page_width=600, page_height=800)
+    chunks = [
+        chunk(0, 'The model predicts a calibrated score', [50, 100, 500, 125]),
+        chunk(1, 'Figure 3: Calibration curves for all datasets.', [50, 150, 500, 175]),
+        chunk(2, 'using a held-out validation set.', [50, 190, 500, 215]),
+    ]
+    paragraphs = build_reading_paragraphs(chunks)
+    prose = [item for item in paragraphs if item['kind'] == 'prose']
+    assert len(prose) == 1
+    assert prose[0]['text'].endswith('held-out validation set.')
+    assert any(item['kind'] == 'caption' for item in paragraphs)
+
+
+def test_cross_page_sentence_survives_running_header_table_and_footnote_artifacts():
+    """ReAct 3.2 resumes below a figure/table on the next page.
+
+    The PDF text extractor emits the running header, table rows, captions and
+    footnotes as independent blocks between the two prose fragments.  Those
+    blocks must not become the previous paragraph or prevent the page-boundary
+    continuation from being recognized.
+    """
+    from app.models import PaperChunk
+    from app.services.reading_paragraphs import build_reading_paragraphs
+
+    def chunk(index, page, text, bounds):
+        return PaperChunk(id=str(index), paper_id='p', page=page, section='ReAct Prompting', content=text,
+                          bbox_json=json.dumps(bounds), page_width=612, page_height=792)
+
+    chunks = [
+        chunk(0, 4, 'ReAct Prompting\nFor HotpotQA and Fever, we randomly select cases and guide', [108, 632, 506, 711]),
+        chunk(1, 5, 'Published as a conference paper at ICLR 2023', [108, 28, 293, 38]),
+        chunk(2, 5, 'Prompt Methoda\nHotpotQA\nFever', [113, 85, 269, 103]),
+        chunk(3, 5, 'Standard\n28.7\n57.1\nReAct\n27.4\n60.9', [113, 107, 267, 175]),
+        chunk(4, 5, 'Table 1: PaLM-540B prompting results on HotpotQA and Fever.', [108, 204, 274, 225]),
+        chunk(5, 5, 'aHotpotQA EM is 27.1, 28.9, 33.8 for Standard, CoT.', [108, 233, 275, 250]),
+        chunk(6, 5, 'b(Zhu et al., 2021; Lewis et al., 2020)', [121, 250, 211, 260]),
+        chunk(7, 5, 'search reformulation (maybe I can search x instead), and synthesize the final answer.', [108, 275, 504, 296]),
+    ]
+
+    paragraphs = build_reading_paragraphs(chunks)
+    prose = [item for item in paragraphs if item['kind'] == 'prose']
+    assert len(prose) == 1
+    assert prose[0]['text'].startswith('ReAct Prompting For HotpotQA')
+    assert prose[0]['text'].endswith('synthesize the final answer.')
+    assert [anchor['page'] for anchor in prose[0]['anchors']] == [4, 5]
+    assert all(artifact.content not in prose[0]['source_text'] for artifact in chunks[1:-1])
+
+
 def test_short_formula_fragments_remain_with_the_paragraph_that_introduces_them():
     from app.models import PaperChunk
     from app.services.reading_paragraphs import build_reading_paragraphs
@@ -176,3 +310,147 @@ def test_math_in_another_column_is_not_attached_to_unrelated_prose():
             PaperChunk(id='right',paper_id='p',page=2,section='Method',content='R = 64',
                       bbox_json=json.dumps([330,100,550,114]),page_width=600,page_height=800)]
     assert len(build_reading_paragraphs(chunks))==2
+
+
+def test_adjacent_diagram_labels_do_not_use_the_inline_math_join(tmp_path):
+    from app.services.reading_paragraphs import build_reading_paragraphs
+    chunks, pdf = _layout_fixture(tmp_path, [
+        (1, [(50,100,'Input records remain available to the retrieval module')]),
+        (1, [(272,100,'Output'), (50,111,'The labels refer to separate nodes in this diagram.')]),
+    ])
+    assert len(build_reading_paragraphs(chunks, pdf)) == 2
+
+
+def _layout_fixture(tmp_path, groups):
+    """Exact source blocks with realistic indentation and two-column geometry."""
+    import pymupdf as fitz
+    from app.models import PaperChunk
+    pdf = tmp_path / 'column-flow.pdf'
+    chunks = []
+    with fitz.open() as doc:
+        for number in range(max(group[0] for group in groups)):
+            doc.new_page(width=612, height=792)
+        for index, (number, rows) in enumerate(groups):
+            page = doc[number - 1]
+            for x, y, text in rows:
+                page.insert_text((x, y), text, fontsize=9)
+            # Text line bounds use the actual font metrics, never guessed offsets.
+            boxes = [page.search_for(text)[-1] for _, _, text in rows]
+            chunks.append(PaperChunk(id=f'layout-{index}', paper_id='p', page=number,
+                section='1 Introduction', content='\n'.join(text for _, _, text in rows),
+                bbox_json=json.dumps([min(b.x0 for b in boxes),min(b.y0 for b in boxes),max(b.x1 for b in boxes),max(b.y1 for b in boxes)]),
+                page_width=612, page_height=792))
+        doc.save(pdf)
+    return chunks, pdf
+
+
+def test_paragraph_continues_from_left_column_bottom_to_right_column_top(tmp_path):
+    from app.services.reading_paragraphs import build_reading_paragraphs
+    chunks, pdf = _layout_fixture(tmp_path, [
+        (1, [(64,680,'In this paper, we introduce agents that draw on'),
+             (54,691,'generative models to simulate believable behavior and')]),
+        (1, [(318,100,'demonstrate that they produce believable human behavior.'),
+             (318,111,'Their memories inform the actions they take every day.')]),
+        (1, [(328,140,'A different paragraph begins with an indented first line.'),
+             (318,151,'It must stay separate from the preceding paragraph.')]),
+    ])
+    paragraphs = build_reading_paragraphs(chunks, pdf)
+    assert len(paragraphs) == 2
+    assert 'behavior and demonstrate' in paragraphs[0]['text']
+    assert [ref['chunk_id'] for ref in paragraphs[0]['refs']] == ['layout-0','layout-1']
+    assert paragraphs[1]['text'].startswith('A different paragraph')
+
+
+def test_sentence_final_footnote_does_not_split_an_unindented_continuation(tmp_path):
+    from app.services.reading_paragraphs import build_reading_paragraphs
+    chunks, pdf = _layout_fixture(tmp_path, [
+        (1, [(328,410,'This architecture suggests applications in many domains.'),
+             (318,421,'We focus on a society inspired by games such as The Sims.2')]),
+        (1, [(318,432,'By connecting our architecture to a language model,'),
+             (318,443,'we manifest a society of twenty-five agents in a game.')]),
+        (1, [(328,465,'We conducted two evaluations of the resulting agents.'),
+             (318,476,'This really is the start of a different paragraph.')]),
+    ])
+    paragraphs = build_reading_paragraphs(chunks, pdf)
+    assert len(paragraphs) == 3
+    assert paragraphs[0]['text'].endswith('The Sims.2')
+    assert paragraphs[1]['text'].startswith('By connecting')
+    assert paragraphs[2]['text'].startswith('We conducted')
+
+
+def test_paragraph_continues_from_right_column_to_next_page_left_column(tmp_path):
+    from app.services.reading_paragraphs import build_reading_paragraphs
+    chunks, pdf = _layout_fixture(tmp_path, [
+        (1, [(328,650,'The agents spread the word about the party and then'),
+             (318,661,'coordinate their plans so that they can all')]),
+        (2, [(54,100,'show up, with one agent even asking another on a date.'),
+             (54,111,'All this emerges from a single seed suggestion.')]),
+    ])
+    paragraphs = build_reading_paragraphs(chunks, pdf)
+    assert len(paragraphs) == 1
+    assert [a['page'] for a in paragraphs[0]['anchors']] == [1,2]
+
+
+def test_inline_caption_does_not_break_a_capitalized_sentence_fragment(tmp_path):
+    from app.services.reading_paragraphs import build_reading_paragraphs
+    chunks, pdf = _layout_fixture(tmp_path, [
+        (1, [(64,100,'The evaluated agents perform well on'),
+             (54,111,'a range of tasks, including')]),
+        (1, [(54,220,'Figure 2: Performance on all evaluated tasks.')]),
+        (1, [(54,270,'HotpotQA and other benchmarks of factual reasoning.'),
+             (54,281,'The model can use observations to improve its answer.')]),
+    ])
+    paragraphs = build_reading_paragraphs(chunks, pdf)
+    prose = [p for p in paragraphs if p['kind'] == 'prose']
+    assert len(prose) == 1
+    assert 'including HotpotQA' in prose[0]['text']
+    assert 'Figure 2' not in prose[0]['text']
+
+
+def test_unfinished_text_in_adjacent_columns_on_the_same_row_does_not_merge():
+    from app.models import PaperChunk
+    from app.services.reading_paragraphs import build_reading_paragraphs
+    chunks = [PaperChunk(id='col-left',paper_id='p',page=1,section='Intro',
+        content='A left-column fragment with an unfinished thought',bbox_json=json.dumps([54,100,290,140]),page_width=612,page_height=792),
+        PaperChunk(id='col-right',paper_id='p',page=1,section='Intro',
+        content='another independent fragment in the right column.',bbox_json=json.dumps([318,100,560,140]),page_width=612,page_height=792)]
+    assert len(build_reading_paragraphs(chunks)) == 2
+
+
+def test_column_rollover_keeps_following_unindented_sentences_in_the_same_paragraph(tmp_path):
+    from app.services.reading_paragraphs import build_reading_paragraphs
+    chunks,pdf = _layout_fixture(tmp_path,[
+        (1,[(64,680,'In this paper, we introduce an architecture'),(54,691,'that remembers experiences and')]),
+        (1,[(318,100,'demonstrates believable behavior in an open world.'),(318,111,'The agents can stop to talk to one another.1')]),
+        (1,[(318,122,'A society full of agents has emergent social dynamics.'),(318,133,'Information diffuses and coordination arises.')]),
+        (1,[(328,155,'To enable these agents, we describe their architecture.'),(318,166,'This is a genuinely different paragraph.')]),
+    ])
+    paragraphs=build_reading_paragraphs(chunks,pdf)
+    assert len(paragraphs)==3
+    assert paragraphs[0]['text'].endswith('one another.1')
+    assert paragraphs[1]['text'].startswith('A society')
+    assert len(paragraphs[0]['refs'])==2
+    assert paragraphs[2]['text'].startswith('To enable')
+
+
+def test_abstract_continues_in_an_unlabelled_adjacent_column(tmp_path):
+    from app.services.reading_paragraphs import build_reading_paragraphs
+    chunks,pdf = _layout_fixture(tmp_path,[
+        (1,[(54,564,'Believable agents can empower interactive applications.'),(54,575,'Artists paint, while')]),
+        (1,[(318,550,'authors write and remember their daily experiences.'),(318,561,'The agents make plans for the following day.')]),
+    ])
+    chunks[0].section='Abstract';chunks[1].section=None
+    paragraphs=build_reading_paragraphs(chunks,pdf)
+    assert len(paragraphs)==1
+    assert paragraphs[0]['section']=='Abstract'
+    assert 'while authors write' in paragraphs[0]['text']
+
+
+@pytest.mark.parametrize('start',['mRNA expression','pH measurements','3D reconstruction'])
+def test_scientific_prefixes_are_not_mistaken_for_footnote_markers(start):
+    from app.models import PaperChunk
+    from app.services.reading_paragraphs import build_reading_paragraphs
+    text=start+' was evaluated across several different experimental conditions.'
+    chunk=PaperChunk(id='scientific',paper_id='p',page=2,section='Results',content=text,
+        bbox_json=json.dumps([54,100,290,130]),page_width=612,page_height=792)
+    assert build_reading_paragraphs([chunk])[0]['text']==text

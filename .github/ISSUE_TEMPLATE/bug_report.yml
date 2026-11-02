@@ -1,0 +1,23 @@
+name: 问题反馈
+description: 报告阅读、翻译、知识整理或后台任务的问题
+body:
+  - type: markdown
+    attributes:
+      value: 请勿附上 API key、登录令牌、个人数据库或未脱敏的论文与对话。
+  - type: textarea
+    id: behavior
+    attributes:
+      label: 出现了什么问题
+      description: 描述实际结果、期望结果和最短复现步骤。
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 版本与运行环境
+      placeholder: 版本号或 commit、操作系统、浏览器
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 脱敏后的截图或错误信息
+      description: 若与模型有关，注明连接类型、模型和错误码，不要粘贴密钥或账号资料。

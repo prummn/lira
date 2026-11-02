@@ -6,7 +6,7 @@ import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { useUi } from '../lib/i18n'
-import type { NoteAnchor, ReadingParagraph } from '../types'
+import type { NoteAnchor, PdfVisualRegion, ReadingParagraph, TranslationQueueEntry } from '../types'
 import { capturePdfSelection } from '../lib/pdfAnnotations'
 import type { PdfAnnotation } from '../lib/pdfAnnotations'
 import { PdfPage, clamp, evidenceRectangle, normalizeText, sourceTextRectangle } from './PdfPage'
@@ -26,16 +26,39 @@ export interface PdfLocator {
   /** Increment to revisit an already selected piece of evidence. */
   nonce?: number
 }
-export interface PdfSelection { page: number; text: string; bbox: number[]; anchors?:NoteAnchor[] }
+export interface PdfSelection {
+  page: number
+  text: string
+  bbox: number[]
+  anchors?: NoteAnchor[]
+  /** Text selected in the bilingual margin, with the original kept as evidence. */
+  origin?: 'pdf' | 'translation'
+  sourceText?: string
+  visualKind?: 'figure'|'table'
+  visualLabel?: string
+  /** Selection bounds in viewport coordinates, used to place the action bar. */
+  selectionRect?: { left: number; top: number; width: number; height: number }
+}
+export interface PdfRegionSelection {
+  page: number
+  imageDataUrl: string
+  selectedText: string
+  bbox: number[]
+  kind: 'figure'|'table'
+  label: string
+}
 export interface PdfViewerProps {
   url: string
   initialPage?: number
   locator?: PdfLocator | null
   onSelection?: (selection: PdfSelection) => void
+  visualRegions?: PdfVisualRegion[]
+  onAskVisualRegion?: (selection: PdfRegionSelection) => void
   onPageChange?: (page: number) => void
   paragraphs?: ReadingParagraph[]
   activeParagraphId?: string | null
   translatedParagraphIds?: string[]
+  paragraphQueueItems?: Record<string,TranslationQueueEntry>
   onTranslateParagraph?: (paragraph: ReadingParagraph) => void
   annotations?:PdfAnnotation[]
   activeNoteId?:string|null
@@ -67,7 +90,7 @@ function flattenOutline(entries: Awaited<ReturnType<PDFDocumentProxy['getOutline
   })
 }
 
-export function PdfViewer({ url, initialPage = 1, locator, onSelection, onPageChange, paragraphs = EMPTY_PARAGRAPHS, activeParagraphId, translatedParagraphIds = EMPTY_IDS, onTranslateParagraph, annotations=EMPTY_ANNOTATIONS,activeNoteId,onOpenAnnotation }: PdfViewerProps) {
+export function PdfViewer({ url, initialPage = 1, locator, onSelection, visualRegions = [], onAskVisualRegion, onPageChange, paragraphs = EMPTY_PARAGRAPHS, activeParagraphId, translatedParagraphIds = EMPTY_IDS, paragraphQueueItems, onTranslateParagraph, annotations=EMPTY_ANNOTATIONS,activeNoteId,onOpenAnnotation }: PdfViewerProps) {
   const { t } = useUi()
   const [document, setDocument] = useState<PDFDocumentProxy | null>(null)
   const [measures, setMeasures] = useState<PageMeasure[]>([])
@@ -121,8 +144,24 @@ export function PdfViewer({ url, initialPage = 1, locator, onSelection, onPageCh
       const container=readyTextRef.current.get(geometry.page)
       return container?.isConnected?[{geometry,container}]:[]
     })
-    const selected=capturePdfSelection(selection.getRangeAt(0),pages)
-    if(selected?.text)callbacksRef.current.onSelection?.(selected)
+    const range = selection.getRangeAt(0)
+    const selected=capturePdfSelection(range,pages)
+    if(selected?.text) {
+      // A DOM range spanning several lines can include off-screen pages. Use
+      // the visible line rectangles for the action bar anchor so the controls
+      // remain reachable while zooming or reading a long selection.
+      const visible = Array.from(range.getClientRects()).filter(rect => rect.width > 1 && rect.height > 1
+        && rect.bottom >= 0 && rect.top <= window.innerHeight)
+      const rects = visible.length ? visible : Array.from(range.getClientRects()).filter(rect => rect.width > 1 && rect.height > 1)
+      if (rects.length) {
+        const left = Math.min(...rects.map(rect => rect.left))
+        const top = Math.min(...rects.map(rect => rect.top))
+        const right = Math.max(...rects.map(rect => rect.right))
+        const bottom = Math.max(...rects.map(rect => rect.bottom))
+        selected.selectionRect = { left, top, width: right - left, height: bottom - top }
+      }
+      callbacksRef.current.onSelection?.(selected)
+    }
   }
   const locatorKey = locator ? JSON.stringify([locator.page, locator.bbox, locator.page_width, locator.page_height, locator.source_text, locator.nonce, locator.kind]) : ''
 
@@ -417,7 +456,7 @@ export function PdfViewer({ url, initialPage = 1, locator, onSelection, onPageCh
           {loading && <div className="pdfv-state" role="status"><LoaderCircle size={24} className="pdfv-spin" /><strong>{t('pdfvLoading')}</strong><span>{progress === null ? t('pdfvLoadingHint') : `${t('pdfvLoaded')} ${progress}%`}</span></div>}
           {!loading && loadError && <div className="pdfv-state pdfv-error-state" role="alert"><AlertCircle size={26} /><strong>{t('pdfvUnavailable')}</strong><p>{loadError}</p><button className="pdfv-retry" type="button" onClick={() => setRetry(value => value + 1)}><RotateCcw size={14} />{t('retry')}</button></div>}
           <div className={`pdfv-page-area ${!document ? 'pdfv-hidden' : ''}`}>
-            {document && layout.map(({ geometry }) => <PdfPage key={geometry.page} document={document} geometry={geometry} active={activePages.includes(geometry.page)} maxPixels={maxPixels} locator={locator?.page === geometry.page ? locator : null} query={searchOpen ? query : ''} paragraphs={paragraphs} activeParagraphId={activeParagraphId} translatedParagraphIds={translatedParagraphIds} onTranslateParagraph={onTranslateParagraph} annotations={annotations} activeNoteId={activeNoteId} onOpenAnnotation={onOpenAnnotation} onText={onText} onReady={onReady} />)}
+            {document && layout.map(({ geometry }) => <PdfPage key={geometry.page} document={document} geometry={geometry} active={activePages.includes(geometry.page)} maxPixels={maxPixels} locator={locator?.page === geometry.page ? locator : null} query={searchOpen ? query : ''} paragraphs={paragraphs} visualRegions={visualRegions} onAskVisualRegion={onAskVisualRegion} activeParagraphId={activeParagraphId} translatedParagraphIds={translatedParagraphIds} paragraphQueueItems={paragraphQueueItems} onTranslateParagraph={onTranslateParagraph} annotations={annotations} activeNoteId={activeNoteId} onOpenAnnotation={onOpenAnnotation} onText={onText} onReady={onReady} />)}
           </div>
         </div>
       </div>

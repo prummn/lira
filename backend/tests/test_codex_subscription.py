@@ -124,7 +124,10 @@ if 'app-server' in sys.argv:
     result={'data':[{'id':'limited','model':'limited-model','displayName':'Limited','description':'Limited effort choices','defaultReasoningEffort':'medium','supportedReasoningEfforts':[{'reasoningEffort':'medium','description':'Balanced'},{'reasoningEffort':'high','description':'Thorough'}],'isDefault':False}],'nextCursor':None}
    else:
     result={'data':[{'id':'gpt-6.1-sol','model':'gpt-6.1-sol','displayName':'Official Sol','description':'Research model','defaultReasoningEffort':'medium','supportedReasoningEfforts':[{'reasoningEffort':value,'description':value} for value in ('low','medium','high','xhigh','max','ultra')],'isDefault':True,'accessToken':'NEVER-RETURN-THIS'},{'id':'hidden','model':'hidden','hidden':True}],'nextCursor':'next'}
-  elif method=='account/rateLimits/read':result={'rateLimits':{'primary':{'usedPercent':25,'windowDurationMins':300,'resetsAt':1800000000,'accessToken':'NEVER-RETURN-THIS'},'secondary':None},'accessToken':'NEVER-RETURN-THIS'}
+  elif method=='account/rateLimits/read':
+   if (home/'limits-failure').exists():
+    send({'id':identifier,'error':{'code':-32603,'message':(home/'limits-failure').read_text()+' NEVER-RETURN-THIS'}});continue
+   result={'rateLimits':{'primary':{'usedPercent':25,'windowDurationMins':300,'resetsAt':1800000000,'accessToken':'NEVER-RETURN-THIS'},'secondary':None},'accessToken':'NEVER-RETURN-THIS'}
   else:result={}
   send({'id':identifier,'result':result})
 else:
@@ -138,6 +141,19 @@ else:
  if mode=='overflow':print('x'*1000001,flush=True);sys.exit(0)
  if mode=='incomplete':send({'type':'item.completed','item':{'type':'agent_message','text':'{"text":"{}"}'}});sys.exit(0)
  if mode=='recovered':send({'type':'error','message':'Reconnecting... 2/5 (temporary network error)'})
+ if mode=='curation':
+  schema=json.loads(pathlib.Path(sys.argv[sys.argv.index('--output-schema')+1]).read_text())
+  (home/'last-output-schema.json').write_text(json.dumps(schema))
+  send({'type':'item.completed','item':{'type':'agent_message','text':json.dumps({'summary':'Checked the core method','candidates':[],'relations':[],'reviews':[],'object_reviews':[]})}})
+  send({'type':'turn.completed','usage':{'input_tokens':100,'output_tokens':40}});sys.exit(0)
+ if mode in ('answer','answer-unverified'):
+  schema=json.loads(pathlib.Path(sys.argv[sys.argv.index('--output-schema')+1]).read_text())
+  (home/'last-output-schema.json').write_text(json.dumps(schema))
+  answer='The upstream pytest suite is the original project test collection. For example, a test may assert parse(\"1,000\") == [1000].'
+  data={'answer':answer,'facts':[],'inferences':[],'unknowns':[],'needs_more_context':False,'citations':[{'chunk_id':'pytest-source','source_text':'Invented quotation.' if mode=='answer-unverified' else 'The generated library passes the upstream pytest suite.'}],'insufficient_evidence':False}
+  value=data if 'answer' in schema.get('properties',{}) else {'text':answer}
+  send({'type':'item.completed','item':{'type':'agent_message','text':json.dumps(value)}})
+  send({'type':'turn.completed','usage':{'input_tokens':100,'output_tokens':40}});sys.exit(0)
  send({'type':'item.completed','item':{'type':'agent_message','text':json.dumps({'text':'{"answer":"ok"}'})}})
  send({'type':'turn.completed','usage':{'input_tokens':100,'cached_input_tokens':80,'output_tokens':10}})
 ''', encoding='utf-8')
@@ -147,6 +163,58 @@ else:
 def account_for(tmp_path, fake_cli):
     from app.providers.codex_account import CodexAccount
     return CodexAccount(tmp_path / 'account', command=fake_cli)
+
+
+def test_subscription_curation_uses_direct_batch_schema(tmp_path, fake_cli):
+    from app.providers.codex_subscription import CodexSubscriptionProvider
+    account=account_for(tmp_path,fake_cli)
+    account.home.mkdir(parents=True,exist_ok=True)
+    (account.home/'signed-in').touch();(account.home/'mode').write_text('curation')
+    try:
+        provider=CodexSubscriptionProvider(account=account,model='gpt-6.1-sol',timeout=30)
+        result=provider.audit_knowledge_bundle({'mode':'paper_curation','chunks':[]})
+        assert result['summary']=='Checked the core method'
+        schema=json.loads((account.home/'last-output-schema.json').read_text())
+        assert set(schema['required'])=={'summary','candidates','relations','reviews','object_reviews'}
+        assert 'text' not in schema['properties']
+    finally:account.close()
+
+
+@pytest.mark.parametrize('visual',[False,True])
+def test_subscription_questions_constrain_the_answer_object_without_nested_json_strings(tmp_path,fake_cli,visual):
+    from app.providers.codex_subscription import CodexSubscriptionProvider
+    from app.models import PaperChunk
+    account=account_for(tmp_path,fake_cli)
+    account.home.mkdir(parents=True,exist_ok=True)
+    (account.home/'signed-in').touch();(account.home/'mode').write_text('answer')
+    chunk=PaperChunk(id='pytest-source',paper_id='paper-one',page=3,content='The generated library passes the upstream pytest suite.')
+    try:
+        provider=CodexSubscriptionProvider(account=account,model='gpt-6.1-sol',timeout=30)
+        result=provider.ask_with_image('What is the upstream pytest suite?',[chunk],'data:image/png;base64,ZmFrZQ==') if visual else provider.ask('What is the upstream pytest suite?',[chunk])
+        assert result.insufficient_evidence is False
+        assert 'original project test collection' in result.answer
+        assert result.citations[0].source_text==chunk.content
+        schema=json.loads((account.home/'last-output-schema.json').read_text())
+        assert schema['properties']['answer']['type']=='string'
+        assert 'text' not in schema['properties']
+        assert provider.last_usage['output_tokens']==40
+    finally:account.close()
+
+
+def test_subscription_structured_questions_still_reject_invented_citations(tmp_path,fake_cli):
+    from app.providers.codex_subscription import CodexSubscriptionProvider
+    from app.models import PaperChunk
+    account=account_for(tmp_path,fake_cli)
+    account.home.mkdir(parents=True,exist_ok=True)
+    (account.home/'signed-in').touch();(account.home/'mode').write_text('answer-unverified')
+    try:
+        provider=CodexSubscriptionProvider(account=account,model='gpt-6.1-sol',timeout=30)
+        chunk=PaperChunk(id='pytest-source',paper_id='paper-one',page=3,content='The generated library passes the upstream pytest suite.')
+        from app.providers.base import ProviderError
+        with pytest.raises(ProviderError) as error:
+            provider.ask('What is the upstream pytest suite?',[chunk])
+        assert error.value.code == 'invalid_response'
+    finally:account.close()
 
 
 def test_official_account_rpc_filters_tokens_and_isolates_parent_environment(tmp_path, fake_cli, monkeypatch):
@@ -185,6 +253,168 @@ def test_missing_cli_is_reported_without_launching_a_model(tmp_path, monkeypatch
     with pytest.raises(ProviderError) as caught:
         account.login()
     assert caught.value.code == 'codex_unavailable'
+
+
+def test_official_child_inherits_system_proxy_without_changing_parent_or_explicit_routes(tmp_path, fake_cli, monkeypatch):
+    from app.providers.codex_account import CodexAccount
+    for name in list(os.environ):
+        if name.lower() in ('http_proxy', 'https_proxy', 'all_proxy', 'no_proxy'):
+            monkeypatch.delenv(name)
+    monkeypatch.setattr('app.providers.codex_account.getproxies', lambda: {
+        'http': 'http://127.0.0.1:7890', 'https': 'http://127.0.0.1:7890',
+        'no': 'localhost,127.0.0.1', 'ftp': 'http://unused.invalid'})
+    account = account_for(tmp_path, fake_cli)
+    env = account.environment()
+    assert env['HTTP_PROXY'] == env['HTTPS_PROXY'] == 'http://127.0.0.1:7890'
+    assert env['NO_PROXY'] == 'localhost,127.0.0.1'
+    assert 'FTP_PROXY' not in env
+    assert 'HTTPS_PROXY' not in os.environ
+    monkeypatch.setenv('https_proxy', 'http://explicit.invalid:8080')
+    env = account.environment()
+    assert {key.casefold():value for key,value in env.items()}['https_proxy'] == 'http://explicit.invalid:8080'
+    assert len([key for key in env if key.casefold() == 'https_proxy']) == 1
+    monkeypatch.delenv('https_proxy')
+    monkeypatch.setenv('ALL_PROXY', 'socks5://explicit.invalid:7891')
+    env = account.environment()
+    assert not any(key.casefold() in ('http_proxy', 'https_proxy') for key in env)
+    assert env['CODEX_HOME'] == str(account.home)
+
+
+def test_no_proxy_only_environment_still_inherits_windows_system_routes(tmp_path, fake_cli, monkeypatch):
+    import urllib.request
+    for name in list(os.environ):
+        if name.lower() in ('http_proxy', 'https_proxy', 'all_proxy', 'no_proxy'):
+            monkeypatch.delenv(name)
+    monkeypatch.setenv('NO_PROXY', 'localhost,127.0.0.1')
+    monkeypatch.setattr(urllib.request, 'getproxies_registry', lambda: {
+        'http':'http://127.0.0.1:7890', 'https':'http://127.0.0.1:7890'}, raising=False)
+    # urllib's combined helper stops at a nonempty NO_PROXY environment.
+    monkeypatch.setattr('app.providers.codex_account.getproxies', lambda: {'no':'localhost,127.0.0.1'})
+    env = account_for(tmp_path, fake_cli).environment()
+    assert env['HTTP_PROXY'] == env['HTTPS_PROXY'] == 'http://127.0.0.1:7890'
+    assert env['NO_PROXY'] == 'localhost,127.0.0.1'
+
+
+def test_quota_snapshot_survives_a_transient_read_failure_with_original_timestamp(tmp_path, fake_cli, monkeypatch):
+    account = account_for(tmp_path, fake_cli)
+    account.home.mkdir()
+    (account.home / 'signed-in').touch()
+    try:
+        first = account.status(refresh=True)
+        assert first['limits']
+        (account.home / 'limits-failure').write_text('request timed out')
+        failed = account.status(refresh=True)
+        assert failed['limits'] == first['limits']
+        assert failed['limits_checked_at'] == first['limits_checked_at']
+        assert failed['limits_error_code'] == 'transport_timeout'
+        assert failed['limits_attempted_at'] >= failed['limits_checked_at']
+        methods=[]
+        original = account._request
+        def request(method, params=None):
+            methods.append(method)
+            return original(method, params)
+        monkeypatch.setattr(account, '_request', request)
+        account._cached_at = 0
+        assert account.status()['limits'] == first['limits']
+        assert 'account/rateLimits/read' not in methods
+        # Success replaces the old timestamp and removes the transient error.
+        (account.home / 'limits-failure').unlink()
+        recovered = account.status(refresh=True)
+        assert recovered['limits_checked_at'] > first['limits_checked_at']
+        assert not recovered.get('limits_error_code')
+    finally:
+        account.close()
+
+
+@pytest.mark.parametrize('message,code', [('Unauthorized 401', 'authentication'),
+    ('usage limit reached 429', 'rate_limit')])
+def test_quota_auth_or_limit_rejection_never_reuses_old_headroom(tmp_path, fake_cli, message, code):
+    account = account_for(tmp_path, fake_cli)
+    account.home.mkdir()
+    (account.home / 'signed-in').touch()
+    try:
+        assert account.status(refresh=True)['limits']
+        (account.home / 'limits-failure').write_text(message)
+        rejected = account.status(refresh=True)
+        assert rejected['limits'] == []
+        assert rejected['limits_error_code'] == code
+    finally:
+        account.close()
+
+
+def test_quota_snapshot_cannot_cross_account_change_or_logout(tmp_path, fake_cli, monkeypatch):
+    account = account_for(tmp_path, fake_cli)
+    account.home.mkdir()
+    (account.home / 'signed-in').touch()
+    try:
+        assert account.status(refresh=True)['limits']
+        original = account._request
+        def request(method, params=None):
+            result = original(method, params)
+            if method == 'account/read' and result.get('account'):
+                result['account']['email'] = 'different-reader@example.com'
+            return result
+        monkeypatch.setattr(account, '_request', request)
+        (account.home / 'limits-failure').write_text('request timed out')
+        changed = account.status(refresh=True)
+        assert changed['authenticated'] and changed['limits'] == []
+        assert changed['limits_checked_at'] is None
+        assert changed['limits_error_code'] == 'transport_timeout'
+        assert account.logout()['authenticated'] is False
+        assert not account._limits_snapshot and account._limits_checked_at == 0
+    finally:
+        account.close()
+
+
+def test_generation_and_model_catalog_do_not_query_quota(tmp_path, fake_cli, monkeypatch):
+    from app.providers.codex_subscription import CodexSubscriptionProvider
+    account = account_for(tmp_path, fake_cli)
+    account.home.mkdir()
+    (account.home / 'signed-in').touch()
+    original = account._request
+    methods = []
+    def request(method, params=None):
+        methods.append(method)
+        return original(method, params)
+    monkeypatch.setattr(account, '_request', request)
+    try:
+        provider = CodexSubscriptionProvider(account=account, model='gpt-6.1-sol', timeout=5)
+        assert provider.configured
+        assert provider.complete_json('JSON', {}, max_output_tokens=200) == {'answer': 'ok'}
+        assert 'account/rateLimits/read' not in methods
+        # A login-only cache must not prevent an explicit quota read.
+        assert account.status()['limits']
+        assert methods.count('account/rateLimits/read') == 1
+    finally:
+        account.close()
+
+
+@pytest.mark.parametrize('message,code', [
+    ('request timed out', 'transport_timeout'),
+    ('error sending request for url (https://chatgpt.com/backend-api/wham/usage)', 'transport_error'),
+    ('unexpected upstream error', 'codex_account_error'),
+])
+def test_quota_rpc_failure_retains_sign_in_and_safe_diagnosis_without_blocking_generation(tmp_path, fake_cli, message, code):
+    from app.providers.codex_subscription import CodexSubscriptionProvider
+    account = account_for(tmp_path, fake_cli)
+    account.home.mkdir()
+    (account.home / 'signed-in').touch()
+    (account.home / 'limits-failure').write_text(message)
+    try:
+        state = account.status(refresh=True)
+        assert state['authenticated'] and not state.get('error_code')
+        assert state['limits'] == []
+        assert state['limits_error_code'] == code
+        assert state['limits_retryable'] is True
+        assert 'NEVER-RETURN-THIS' not in json.dumps(state)
+        assert 'backend-api/wham' not in json.dumps(state)
+        provider = CodexSubscriptionProvider(account=account, model='gpt-6.1-sol', timeout=5)
+        assert provider.complete_json('JSON', {}, max_output_tokens=200) == {'answer': 'ok'}
+        (account.home / 'limits-failure').unlink()
+        recovered = account.status(refresh=True)
+        assert recovered['limits'] and not recovered.get('limits_error_code')
+    finally:
+        account.close()
 
 
 def test_model_catalog_paginates_filters_and_refreshes_with_account_bound_cache(tmp_path, fake_cli):
@@ -326,17 +556,49 @@ def test_subscription_rejects_oversized_and_unfinished_cli_output(tmp_path, fake
         account.close()
 
 
+def test_codex_request_temp_directory_retries_transient_windows_cleanup_lock(monkeypatch):
+    from app.providers import codex_subscription
+
+    original = codex_subscription.shutil.rmtree
+    attempts = []
+
+    def flaky_rmtree(path, *args, **kwargs):
+        attempts.append(path)
+        if len(attempts) < 3:
+            raise PermissionError(32, 'fixture lock')
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(codex_subscription.shutil, 'rmtree', flaky_rmtree)
+    with pytest.raises(RuntimeError, match='provider failed'):
+        with codex_subscription._codex_tempdir() as directory:
+            marker = Path(directory) / 'marker.txt'
+            marker.write_text('ok', encoding='utf-8')
+            assert marker.exists()
+            raise RuntimeError('provider failed')
+    assert len(attempts) == 3
+    assert not Path(directory).exists()
+
+
 def test_codex_profiles_share_one_account_capacity_gate(client):
+    from threading import Event
     from app.schemas import ModelProfileUpdate
     store = client.app.state.model_profiles
+    store.set_codex_concurrency(1)
     store.codex = AccountStub()
     first = store.save(ModelProfileUpdate(**codex_profile()))
     second = store.save(ModelProfileUpdate(**codex_profile()))
-    with store.provider(first['id'])._capacity():
-        with pytest.raises(ProviderError) as caught:
-            with store.provider(second['id'])._capacity():
-                pytest.fail('Subscription requests must share account capacity')
-        assert caught.value.code == 'local_capacity'
+    waiting, entered = Event(), Event()
+    def run():
+        waiting.set()
+        with store.provider(second['id'])._capacity():
+            entered.set()
+    with ThreadPoolExecutor(1) as pool:
+        with store.provider(first['id'])._capacity():
+            task = pool.submit(run)
+            assert waiting.wait(1)
+            assert not entered.wait(.05)
+        task.result(2)
+    assert entered.is_set()
 
 
 def test_subscription_exec_uses_stdin_no_tools_and_reports_real_usage(tmp_path, fake_cli, monkeypatch):
@@ -362,6 +624,24 @@ def test_subscription_exec_uses_stdin_no_tools_and_reports_real_usage(tmp_path, 
         assert 'model_providers.lira_chatgpt_https.supports_websockets=false' in captured['argv']
         assert 'web_search="disabled"' in captured['argv']
         assert captured['env'] == {'CODEX_HOME':str(account.home)}
+    finally:
+        account.close()
+
+
+def test_subscription_exec_attaches_visual_input_with_official_image_flag(tmp_path, fake_cli):
+    from app.providers.codex_subscription import CodexSubscriptionProvider
+    account = account_for(tmp_path, fake_cli)
+    account.home.mkdir(parents=True, exist_ok=True)
+    (account.home / 'signed-in').touch()
+    try:
+        provider = CodexSubscriptionProvider(account=account, model='gpt-6.1-sol', timeout=30)
+        provider._complete('Read the attached page image.', 'Describe the figure.', json_output=False,
+                           max_output_tokens=80, image_data_url='data:image/png;base64,ZmFrZQ==')
+        captured = json.loads((account.home / 'last-exec.json').read_text())
+        argv = captured['argv']
+        assert '--image' in argv
+        image_path = argv[argv.index('--image') + 1]
+        assert image_path.endswith('paper-page-image.png')
     finally:
         account.close()
 

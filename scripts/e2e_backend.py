@@ -8,6 +8,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'backend'))
 
 if __name__ == '__main__':
+    isolation_token = os.environ.get('RIW_E2E_TOKEN')
+    if not isolation_token:
+        raise RuntimeError('Start the disposable backend through Playwright; an isolation token is required')
     # Browser tests must be deterministic and must not use personal model credentials.
     for name in list(os.environ):
         if name.startswith('PAPER_READER_MODEL_') or name == 'OPENAI_API_KEY':
@@ -32,4 +35,11 @@ if __name__ == '__main__':
     with tempfile.TemporaryDirectory(prefix='riw-browser-') as temporary:
         directory = Path(temporary)
         app = create_app('sqlite:///' + (directory / 'test.db').as_posix(), directory / 'pdfs', model_config_path=directory / 'model.env')
+        @app.get('/api/e2e/identity')
+        def identity():
+            return {
+                'marker': 'RIW_E2E_ISOLATED_V1', 'token': isolation_token,
+                'database_is_temporary': app.state.database.url == 'sqlite:///' + (directory / 'test.db').as_posix(),
+                'storage_is_temporary': app.state.storage_dir.resolve() == (directory / 'pdfs').resolve(),
+            }
         uvicorn.run(app, host='127.0.0.1', port=8010)

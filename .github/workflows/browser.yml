@@ -1,0 +1,48 @@
+name: Browser regression
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser:
+    name: Isolated Windows browser tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Prepare isolated test environment
+        run: |
+          python -m venv backend/.venv
+          backend/.venv/Scripts/python.exe -m pip install -r backend/requirements.txt
+          npm.cmd --prefix frontend ci
+      - name: Install Chromium
+        working-directory: frontend
+        run: npx.cmd playwright install chromium
+      - name: Run browser regressions
+        working-directory: frontend
+        run: npm.cmd run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: isolated-browser-failures
+          path: |
+            frontend/test-results/
+            frontend/playwright-report/
+          retention-days: 7

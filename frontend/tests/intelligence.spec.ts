@@ -23,6 +23,63 @@ async function settings(page:Page, configured=true) {
   await page.route('**/api/settings',route=>route.fulfill({json:configured?remote:{...remote,provider:'MockProvider',mode:'extractive',configured:false,translation_available:false}}))
 }
 
+test('first analysis separates English source excerpts from the upcoming model card',async({page})=>{
+  const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message))
+  const paper=await realPaper(page,'First analysis state','first analysis state')
+  await settings(page)
+  let complete=false
+  const task=()=>({id:'first-analysis',paper_id:paper.id,status:complete?'completed':'running',phase:complete?'complete':'reduce',completed_steps:complete?5:3,total_steps:5,report:{},error:null,updated_at:complete?'finished':'processing'})
+  const detail=()=>({...paper,intelligence_status:task().status,intelligence_task:task(),analysis:complete?{...paper.analysis,provider:'FixtureProvider',mode:'remote',card:{...paper.analysis.card,one_sentence_summary:{content:'这是完成后发布的中文分析。',evidence_ids:[]}}}:paper.analysis})
+  await page.route('**/api/papers?*',async route=>{const json=await(await route.fetch()).json();json.items=json.items.map((p:any)=>p.id===paper.id?detail():p);await route.fulfill({json})})
+  await page.route(`**/api/papers/${paper.id}`,route=>route.fulfill({json:detail()}))
+  await page.route('**/api/intelligence/tasks{,?*}',route=>route.fulfill({json:{tasks:[task()]}}))
+  await page.goto('/')
+  await page.locator('.paper-row').filter({hasText:paper.title}).locator('.paper-name > button').click()
+  const notebook=page.locator('.notebook-panel')
+  await expect(notebook).toContainText('中文分析正在生成')
+  await expect(notebook).not.toContainText('MockProvider')
+  await expect(notebook).not.toContainText('未配置生成模型')
+  await expect(page.locator('.paper-card')).toBeHidden()
+  await page.getByText('查看原文摘录',{exact:true}).click()
+  await expect(page.locator('.paper-card')).toBeVisible()
+  complete=true
+  await expect(page.locator('.analysis-control')).toContainText('智能分析完成')
+  await expect(page.locator('.paper-card')).toContainText('这是完成后发布的中文分析。')
+  await expect(page.locator('.analysis-source-preview')).toHaveCount(0)
+  await expect(notebook).not.toContainText('中文分析正在生成')
+  expect(errors).toEqual([])
+})
+
+test('reading preparation explains the dependency and offers immediate analysis without cancelling translations',async({page})=>{
+  const paper=await realPaper(page,'Reading-first workflow','reading-first workflow')
+  await settings(page)
+  let started=false,posts=0,currentPhase='queued',currentStatus='queued'
+  const task=()=>({id:'reading-first',paper_id:paper.id,status:currentStatus,phase:started?currentPhase:'awaiting_translation',completed_steps:0,total_steps:0,report:{workflow:{kind:'reading_first'}},error:null})
+  const detail=()=>({...paper,intelligence_status:currentStatus,intelligence_task:task()})
+  await page.route('**/api/papers?*',async route=>{const json=await(await route.fetch()).json();json.items=json.items.map((p:any)=>p.id===paper.id?detail():p);await route.fulfill({json})})
+  await page.route(`**/api/papers/${paper.id}`,route=>route.fulfill({json:detail()}))
+  await page.route('**/api/intelligence/tasks{,?*}',route=>{
+    if(route.request().method()==='POST'){started=true;posts++}
+    return route.fulfill({json:{tasks:[task()]}})
+  })
+  await page.goto('/')
+  await page.locator('.paper-row').filter({hasText:paper.title}).locator('.paper-name > button').click()
+  const control=page.locator('.analysis-control')
+  await expect(control).toContainText('预译正文后继续分析')
+  await expect(control).not.toContainText('0 / 0')
+  await expect(page.locator('.analysis-source-state')).toContainText('先开始阅读')
+  await expect(control.getByRole('button',{name:'立即分析',exact:true})).toBeVisible()
+  await page.screenshot({path:'test-artifacts/reading-first-reader.png'})
+  await control.getByRole('button',{name:'立即分析',exact:true}).click()
+  await expect(control).toContainText('等待执行')
+  await expect(control.getByRole('button',{name:'立即分析',exact:true})).toHaveCount(0)
+  expect(posts).toBe(1)
+  currentStatus='running';currentPhase='knowledge_intake'
+  await expect(control).toContainText('补充知识对象与关系')
+  currentPhase='science_review'
+  await expect(control).toContainText('核验分析与原文证据')
+})
+
 test('file batches require preflight, default opt-out and explain unavailable AI', async({page})=>{
   await settings(page,false)
   let imports=0
@@ -32,8 +89,8 @@ test('file batches require preflight, default opt-out and explain unavailable AI
   const dialog=page.getByRole('dialog',{name:'确认批量导入'})
   await expect(dialog).toBeVisible()
   expect(imports).toBe(0)
-  await expect(dialog.getByRole('checkbox',{name:'导入后智能分析'})).not.toBeChecked()
-  await expect(dialog.getByRole('checkbox',{name:'导入后智能分析'})).toBeDisabled()
+  await expect(dialog.getByRole('checkbox',{name:'预译正文并后台分析'})).not.toBeChecked()
+  await expect(dialog.getByRole('checkbox',{name:'预译正文并后台分析'})).toBeDisabled()
   await expect(dialog).toContainText('先在后端配置远程模型')
   await dialog.getByRole('button',{name:'开始导入',exact:true}).click()
   await expect(page.locator('.import-report')).toContainText('不是有效 PDF')
@@ -80,7 +137,7 @@ test('URL opt-in remembers preference and collection retry reuses saved PDF',asy
   await page.getByRole('button',{name:collection.name,exact:true}).click()
   await page.getByRole('button',{name:'链接导入',exact:true}).click()
   const dialog=page.getByRole('dialog')
-  await dialog.getByRole('checkbox',{name:'导入后智能分析'}).check()
+  await dialog.getByRole('checkbox',{name:'预译正文并后台分析'}).check()
   await dialog.getByRole('textbox',{name:'论文链接'}).fill('https://example.org/real.pdf')
   await dialog.getByRole('button',{name:'下载并导入'}).click()
   await expect(dialog).toContainText('论文已保存')
@@ -89,7 +146,7 @@ test('URL opt-in remembers preference and collection retry reuses saved PDF',asy
   expect(imports).toBe(1);expect(memberships).toBe(2)
   await dialog.getByRole('button',{name:'关闭',exact:true}).last().click()
   await page.locator('input[type=file]').setInputFiles(path.resolve('test-artifacts/import-fixture.pdf'))
-  await expect(page.getByRole('dialog').getByRole('checkbox',{name:'导入后智能分析'})).toBeChecked()
+  await expect(page.getByRole('dialog').getByRole('checkbox',{name:'预译正文并后台分析'})).toBeChecked()
 })
 
 test('batch analysis shows task progress, cancellation and stops polling at terminal state',async({page})=>{
@@ -126,21 +183,30 @@ test('librarian scopes real papers, distinguishes claims and preserves conversat
   const source=paper.chunks.find((c:any)=>c.page===2)
   const citation={id:'fixture-source',paper_id:paper.id,title:paper.title,source_id:source.id,source_text:source.content,source_type:'paper',page:2,section:source.section,chunk_id:source.id,bbox:source.bbox,page_width:source.page_width,page_height:source.page_height}
   const secondSource=second.chunks.find((c:any)=>c.page===2)
-  const secondCitation={...citation,id:'second-source',paper_id:second.id,title:second.title,source_id:secondSource.id,chunk_id:secondSource.id,source_text:secondSource.content}
+  const secondCitation={...citation,id:'second-source',paper_id:second.id,title:second.title,source_id:secondSource.id,chunk_id:secondSource.id,source_text:secondSource.content.repeat(28)}
   let asked=0
-  await page.route('**/api/intelligence/ask',route=>{
+  const archived=new Map<string,any[]>()
+  await page.route('**/api/conversations/*',async route=>{
+    const result=await route.fetch(),saved=await result.json()
+    await route.fulfill({json:{...saved,turns:archived.get(saved.id)??saved.turns}})
+  })
+  await page.route('**/api/intelligence/ask',async route=>{
     const body=route.request().postDataJSON();expect(body).not.toHaveProperty('paper_ids');expect(body).not.toHaveProperty('collection_id');asked++
     if(asked===2)expect(body.history).toHaveLength(2)
-    return route.fulfill({json:{answer:'Evidence-backed fixture response',items:[
+    const response={answer:'Evidence-backed fixture response',items:[
       {content:'The method verifies candidate traces.',kind:'fact',citations:[citation]},
       {content:'Both papers expose evidence sources.',kind:'comparison',citations:[citation,secondCitation]},
       {content:'Bibliographic record',kind:'metadata',citations:[{...citation,id:'metadata-source',source_type:'external_metadata',page:null,bbox:null}]},
       {content:'A personal research question.',kind:'user_note',citations:[{...citation,id:'note-source',source_id:note.id,source_type:'user',page:null,bbox:null,source_text:note.content}]},
       {content:'A possible comparison requires review.',kind:'inference',citations:[citation]},
-    ],citations:[citation],provider:'FixtureProvider',mode:'remote',insufficient_evidence:false,limitations:['UI fixture; not live quality'],retrieved_paper_ids:[paper.id],queries:['verification'],coverage:{},usage:{input_tokens:100,output_tokens:30,total_tokens:130,model_calls:2,cache_hits:0},cached:false}})
+    ],citations:[citation],provider:'FixtureProvider',mode:'remote',insufficient_evidence:false,limitations:['UI fixture; not live quality'],retrieved_paper_ids:[paper.id],queries:['verification'],coverage:{},usage:{input_tokens:100,output_tokens:30,total_tokens:130,model_calls:2,cache_hits:0},cached:false}
+    // The mocked provider endpoint must also implement its archive contract.
+    archived.set(body.conversation_id,[...(archived.get(body.conversation_id)??[]),{id:body.request_id,question:body.question,response,status:'completed',error:null,created_at:new Date().toISOString()}])
+    await route.fulfill({json:response})
   })
   await page.goto('/')
   await page.getByRole('button',{name:'AI 文献员',exact:true}).click()
+  await page.getByRole('button',{name:'新对话',exact:true}).click()
   await expect(page.locator('.librarian-page')).toContainText('仅真实论文')
   await page.getByRole('textbox',{name:'向文献员提问'}).fill('哪些方法使用验证器？')
   await page.getByRole('button',{name:'提问',exact:true}).click()
@@ -156,10 +222,20 @@ test('librarian scopes real papers, distinguishes claims and preserves conversat
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await page.getByRole('button',{name:'返回文献员',exact:true}).click()
   await page.locator('.claim-comparison .claim-citations button').nth(1).click()
+  await page.locator('.answer-details > summary').click()
+  await page.locator('.librarian-sources > summary').click()
+  const sourceJump=page.locator('.claim-comparison .answer-source-panel').getByRole('button',{name:'定位原文',exact:true})
+  await sourceJump.scrollIntoViewIfNeeded()
+  const beforeSource=await page.locator('.librarian-conversation').evaluate(el=>el.scrollTop)
+  await sourceJump.click()
   await expect(page.locator('.reader-title')).toContainText(second.title)
   await expect(page.getByRole('textbox',{name:'页码',exact:true})).toHaveValue('2')
   await page.getByRole('button',{name:'返回文献员',exact:true}).click()
   await expect(page.locator('.librarian-conversation')).toContainText('The method verifies candidate traces.')
+  await expect(page.locator('.claim-comparison .answer-source-panel')).toBeVisible()
+  await expect(page.locator('.answer-details')).toHaveAttribute('open','')
+  await expect(page.locator('.librarian-sources')).toHaveAttribute('open','')
+  await expect.poll(async()=>Math.abs(await page.locator('.librarian-conversation').evaluate(el=>el.scrollTop)-beforeSource)).toBeLessThan(2)
   await page.getByRole('textbox',{name:'向文献员提问'}).fill('证据有什么局限？')
   await page.getByRole('button',{name:'提问',exact:true}).click()
   await expect(page.locator('.librarian-answer')).toHaveCount(2)
@@ -194,6 +270,7 @@ test('Notebook keeps PDF and cached card available, reports coverage honestly, a
   await page.locator('.paper-row').filter({hasText:paper.title}).locator('.paper-name > button').click()
   await expect(page.locator('.pdfv-canvas').first()).toBeVisible()
   await expect(page.locator('.analysis-control')).toContainText('1 / 3')
+  await page.getByText('查看原文摘录',{exact:true}).click()
   await expect(page.locator('.paper-card')).toBeVisible()
   await expect(page.locator('.analyze-btn')).toHaveCount(0)
   complete=true
@@ -339,11 +416,18 @@ test('librarian discards stale requests after scope change and offers a useful r
   const question=page.getByRole('textbox',{name:'向文献员提问'})
   await question.fill('请查找论文中的证据')
   await page.getByRole('button',{name:'提问',exact:true}).click()
-  await page.getByRole('combobox',{name:'检索范围'}).selectOption('selected')
-  await expect(page.locator('.librarian-dialogue')).toContainText('范围已改变')
+  await expect.poll(()=>calls).toBe(1)
+  await page.getByRole('button',{name:'检索范围',exact:true}).click()
+  const dialog=page.getByRole('dialog',{name:'检索范围',exact:true})
+  await dialog.getByRole('combobox',{name:'检索范围'}).selectOption('selected')
+  await dialog.getByRole('checkbox').first().check()
+  await dialog.getByRole('button',{name:'应用范围',exact:true}).click()
+  await expect(page.getByRole('button',{name:'检索范围',exact:true})).toContainText('指定论文')
   await page.waitForTimeout(1500)
   await expect(page.locator('.librarian-dialogue')).not.toContainText('STALE ANSWER')
-  await page.getByRole('combobox',{name:'检索范围'}).selectOption('')
+  await page.getByRole('button',{name:'检索范围',exact:true}).click()
+  await dialog.getByRole('combobox',{name:'检索范围'}).selectOption('')
+  await dialog.getByRole('button',{name:'应用范围',exact:true}).click()
   await page.getByRole('button',{name:'提问',exact:true}).click()
   await expect(page.getByRole('alert')).toContainText('Fixture retrieval unavailable')
   await page.getByRole('button',{name:'重试',exact:true}).click()
@@ -369,21 +453,27 @@ test('librarian uses server scopes and limits explicit selection to fifty papers
   await page.getByRole('button',{name:'提问',exact:true}).click()
   await expect(page.locator('.librarian-answer')).toContainText('Scope response 1')
   expect(requests[0]).not.toHaveProperty('paper_ids');expect(requests[0]).not.toHaveProperty('collection_id')
-  await page.getByRole('combobox',{name:'检索范围'}).selectOption('fixture-collection')
+  const scope=page.getByRole('button',{name:'检索范围',exact:true}),dialog=page.getByRole('dialog',{name:'检索范围',exact:true})
+  await scope.click()
+  await dialog.getByRole('combobox',{name:'检索范围'}).selectOption('fixture-collection')
+  await dialog.getByRole('button',{name:'应用范围',exact:true}).click()
   await question.fill('检查集合')
   await page.getByRole('button',{name:'提问',exact:true}).click()
   await expect(page.locator('.librarian-answer')).toContainText('Scope response 2')
   expect(requests[1].collection_id).toBe('fixture-collection');expect(requests[1]).not.toHaveProperty('paper_ids')
-  await page.getByRole('combobox',{name:'检索范围'}).selectOption('selected')
-  const choices=page.locator('.librarian-paper-selection input[type=checkbox]')
+  await scope.click()
+  await dialog.getByRole('combobox',{name:'检索范围'}).selectOption('selected')
+  const choices=dialog.locator('.librarian-scope-list input[type=checkbox]')
   await expect(choices).toHaveCount(51)
   for(let i=0;i<50;i++)await choices.nth(i).check()
   await expect(choices.nth(50)).toBeDisabled()
-  await expect(page.locator('.librarian-paper-selection')).toContainText('最多 50 篇')
+  await expect(dialog).toContainText('最多 50 篇')
+  await dialog.getByRole('button',{name:'应用范围',exact:true}).click()
   await question.fill('检查指定论文')
   await page.getByRole('button',{name:'提问',exact:true}).click()
   await expect(page.locator('.librarian-answer')).toContainText('Scope response 3')
   expect(requests[2].paper_ids).toHaveLength(50);expect(requests[2]).not.toHaveProperty('collection_id')
+  await scope.click()
   await choices.nth(0).uncheck()
   await expect(choices.nth(50)).toBeEnabled()
 })

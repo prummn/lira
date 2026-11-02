@@ -1,0 +1,27 @@
+.research-markdown { color: var(--text); font-size: 15px; line-height: 1.85; overflow-wrap: anywhere; white-space: normal; }
+.research-markdown > :first-child { margin-top: 0; }
+.research-markdown > :last-child { margin-bottom: 0; }
+.research-markdown p { margin: 0 0 1em; }
+.research-markdown h1, .research-markdown h2, .research-markdown h3, .research-markdown h4 { font-family: inherit; color: var(--text); font-weight: 600; line-height: 1.5; letter-spacing: -.02em; }
+.research-markdown h1 { font-size: 21px; margin: 1.7em 0 .7em; }
+.research-markdown h2 { font-size: 18px; margin: 1.7em 0 .65em; }
+.research-markdown h3, .research-markdown h4 { font-size: 16px; margin: 1.5em 0 .6em; }
+.research-markdown strong { font-weight: 600; }
+.research-markdown ul, .research-markdown ol { padding-left: 1.5em; margin: .65em 0 1.1em; }
+.research-markdown li { margin: .35em 0; padding-left: .15em; }
+.research-markdown li > p { margin-bottom: .4em; }
+.research-markdown blockquote { margin: 1.2em 0; padding: .15em 0 .15em 1em; border-left: 2px solid var(--border-strong); color: var(--text-2); }
+.research-markdown blockquote p:last-child { margin-bottom: 0; }
+.research-markdown code { padding: .15em .3em; border-radius: 4px; background: var(--surface-muted); font-size: .87em; }
+.research-markdown pre { padding: 14px 16px; background: var(--surface-subtle); border: 1px solid var(--border); border-radius: 8px; overflow-x: auto; font-size: 12px; line-height: 1.7; }
+.research-markdown pre code { padding: 0; background: none; }
+.research-table-scroll { max-width: 100%; overflow-x: auto; margin: 1.2em 0; scrollbar-width: thin; }
+.research-markdown table { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 1.7; }
+.research-markdown th, .research-markdown td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; text-align: left; min-width: 76px; }
+.research-markdown th { color: var(--text-2); font-weight: 550; border-bottom-color: var(--border-strong); }
+.research-markdown th:first-child, .research-markdown td:first-child { padding-left: 0; }
+.research-markdown th:last-child, .research-markdown td:last-child { padding-right: 0; }
+.research-markdown a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.research-markdown hr { border: 0; border-top: 1px solid var(--border); margin: 1.6em 0; }
+.research-markdown .katex-display { max-width: 100%; overflow-x: auto; overflow-y: hidden; padding-block: 4px; }
+.research-markdown .katex { font-size: 1.05em; }

@@ -8,6 +8,39 @@ test.beforeEach(async({page})=>{
   await page.route('**/api/settings/codex/models*',route=>route.fulfill({json:catalog}))
 })
 
+test('account concurrency saves independently, persists after reload and fits a narrow window', async ({page}) => {
+  let limit=1
+  const profile={id:'shared-codex',provider_kind:'codex',name:'Official account',base_url:'https://chatgpt.com',model:'official-sol',api_key_configured:false,reasoning_effort:'high',wire_api:'responses',timeout:600,max_concurrency:1,completion_parameter:'max_completion_tokens',json_mode:'json_object'}
+  const state=()=>({profiles:[profile],active_id:profile.id,fallback_ids:[],auto_fallback:false,codex_max_concurrency:limit})
+  await page.route('**/api/settings/profiles',route=>route.fulfill({json:state()}))
+  await page.route('**/api/settings/codex',route=>route.fulfill({json:{available:true,authenticated:true,pending:false,email:'reader@example.com',plan:'plus',limits:[],login_url:null}}))
+  await page.route('**/api/settings/codex/concurrency',route=>{
+    expect(route.request().method()).toBe('PUT')
+    limit=route.request().postDataJSON().max_concurrency
+    return route.fulfill({json:state()})
+  })
+  await page.goto('/')
+  await page.getByRole('button',{name:'设置',exact:true}).click()
+  const select=page.getByRole('combobox',{name:'官方账号并发',exact:true})
+  await expect(select).toHaveValue('1')
+  await select.selectOption('4')
+  await expect(select).toBeEnabled()
+  await expect(select).toHaveValue('4')
+  expect(limit).toBe(4)
+  await page.reload()
+  await page.getByRole('button',{name:'设置',exact:true}).click()
+  await expect(select).toHaveValue('4')
+  await page.setViewportSize({width:520,height:900})
+  await select.scrollIntoViewIfNeeded()
+  const box=await select.boundingBox()
+  expect(box).toBeTruthy()
+  expect(box!.x).toBeGreaterThanOrEqual(0)
+  expect(box!.x+box!.width).toBeLessThanOrEqual(520)
+  await page.locator('.codex-concurrency').screenshot({path:'test-artifacts/codex-concurrency-narrow.png'})
+  await page.getByRole('combobox',{name:'连接方式',exact:true}).selectOption('api')
+  await expect(select).toHaveCount(0)
+})
+
 test('sign in with ChatGPT, show quota and save a subscription without an API key', async ({ page }) => {
   let account = { available: true, authenticated: false, pending: false, email: null as string|null,
     plan: null as string|null, limits: [] as object[], login_url: null as string|null }

@@ -1,0 +1,83 @@
+{
+  "selection": "pass@4. pass@4 is the fraction of the N = 113 attempted tasks solved by at least one of that task’s (up to four) rollouts, pass@4 = 1 N N ∑ t =1 1 [ c t ≥ 1] . With four rollouts per task this is exactly the fixed-budget pass@4 of Chen et al. [2021]: when the number of samples equals the budget ( n = k = 4 ), the unbiased pass@ k estimator reduces to the indicator that at least one sample passed, so no separate estimator is needed. The only approximation is for the few tasks left with fewer than four scored rollouts after exclusions (§5.6), where the indicator can mildly understate pass@4, since a task with fewer than four rollouts has fewer chances to register a pass than the full four-rollout budget it approximates. Whereas pass@1 measures per-rollout reliability, pass@4 measures whether a configuration can reach a correct solution within a small sampling budget; their difference, pass@4 − pass@1 , is the headroom a model gains from a few extra attempts.",
+  "page": 12,
+  "chunks": [
+    {
+      "id": "metrics-0",
+      "page": 12,
+      "content": "pass@4.\npass@4 is the fraction of the N = 113 attempted tasks solved by at least one of that\ntask’s (up to four) rollouts,",
+      "bbox": [
+        72.0,
+        74.23170471191406,
+        540.3626708984375,
+        98.6898193359375
+      ]
+    },
+    {
+      "id": "metrics-1",
+      "page": 12,
+      "content": "N\nX",
+      "bbox": [
+        309.5539855957031,
+        100.44512939453125,
+        323.949951171875,
+        119.00296020507812
+      ]
+    },
+    {
+      "id": "metrics-2",
+      "page": 12,
+      "content": "1[ct ≥1] .",
+      "bbox": [
+        325.76300048828125,
+        110.63679504394531,
+        371.2789001464844,
+        123.24197387695312
+      ]
+    },
+    {
+      "id": "metrics-3",
+      "page": 12,
+      "content": "pass@4 =\n1\nN",
+      "bbox": [
+        240.7239990234375,
+        103.25672912597656,
+        305.3569030761719,
+        129.23028564453125
+      ]
+    },
+    {
+      "id": "metrics-4",
+      "page": 12,
+      "content": "t=1",
+      "bbox": [
+        309.80999755859375,
+        125.1751708984375,
+        323.6859436035156,
+        133.15512084960938
+      ]
+    },
+    {
+      "id": "metrics-5",
+      "page": 12,
+      "content": "With four rollouts per task this is exactly the fixed-budget pass@4 of Chen et al. [2021]: when",
+      "bbox": [
+        71.44400024414062,
+        139.3267364501953,
+        540.1694946289062,
+        150.23583984375
+      ]
+    },
+    {
+      "id": "metrics-6",
+      "page": 12,
+      "content": "the number of samples equals the budget (n = k = 4), the unbiased pass@k estimator reduces\nto the indicator that at least one sample passed, so no separate estimator is needed. The only\napproximation is for the few tasks left with fewer than four scored rollouts after exclusions (§5.6),\nwhere the indicator can mildly understate pass@4, since a task with fewer than four rollouts has\nfewer chances to register a pass than the full four-rollout budget it approximates. Whereas pass@1\nmeasures per-rollout reliability, pass@4 measures whether a configuration can reach a correct solution\nwithin a small sampling budget; their difference, pass@4 −pass@1, is the headroom a model gains\nfrom a few extra attempts.",
+      "bbox": [
+        71.60700225830078,
+        152.87574768066406,
+        541.6972045898438,
+        258.62884521484375
+      ]
+    }
+  ]
+}

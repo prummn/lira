@@ -1,0 +1,15 @@
+name: 使用建议
+description: 从实际研究流程提出改进
+body:
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 使用场景
+      description: 你在读什么、想完成什么，现有流程在哪一步不顺畅？
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 期望的操作和结果
+      description: 可以描述理想流程，无需提前设计实现方式。

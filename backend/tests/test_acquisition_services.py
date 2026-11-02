@@ -26,8 +26,8 @@ def test_arxiv_abs_version_normalizes_to_pdf_download() -> None:
     assert result.data == content
 
 
-@pytest.mark.parametrize('duration,allowed',[(70,True),(181,False)])
-def test_slow_realistic_pdf_transfer_has_a_bounded_three_minute_deadline(monkeypatch,duration,allowed):
+@pytest.mark.parametrize('duration,allowed',[(70,True),(300,True),(601,False)])
+def test_slow_realistic_pdf_transfer_has_a_bounded_ten_minute_deadline(monkeypatch,duration,allowed):
     from app.services.downloads import download_pdf
     content = pdf_bytes('Original PDF with a slow public transfer')
     elapsed = [0.0]
@@ -62,6 +62,21 @@ def test_public_redirect_pdf_is_allowed_and_each_target_is_checked() -> None:
     assert result.data == content
     assert result.download_url == 'https://cdn.example/real.pdf'
     assert targets == ['papers.example', 'cdn.example']
+
+
+def test_arxiv_tracking_query_does_not_change_the_pdf_target():
+    from app.services.downloads import download_pdf
+
+    content = pdf_bytes('Generative Agents download regression')
+    seen = []
+    def respond(request):
+        seen.append(str(request.url))
+        return httpx.Response(200, content=content)
+    result = download_pdf('https://arxiv.org/abs/2304.03442?utm_source=chatgpt.com',
+                          transport=httpx.MockTransport(respond), resolver=public_resolver)
+    assert seen == ['https://arxiv.org/pdf/2304.03442']
+    assert result.arxiv_id == '2304.03442'
+    assert result.data == content
 
 
 @pytest.mark.parametrize('url', ['file:///tmp/paper.pdf', 'ftp://papers.example/paper.pdf', 'https://name:password@papers.example/paper.pdf', 'http://127.0.0.1/paper.pdf', 'http://[::1]/paper.pdf', 'http://169.254.169.254/latest/meta-data'])
@@ -123,6 +138,7 @@ def test_default_transport_pins_validated_public_ip_and_preserves_host_tls(monke
     from app.services.downloads import download_pdf
 
     content = pdf_bytes('A pinned download')
+    monkeypatch.setattr('app.services.downloads.urllib.request.getproxies', lambda: {})
     def respond(self, request):
         assert request.url.host == '93.184.216.34'
         assert request.headers['host'] == 'public.example'
@@ -131,6 +147,95 @@ def test_default_transport_pins_validated_public_ip_and_preserves_host_tls(monke
     monkeypatch.setattr(httpx.HTTPTransport, 'handle_request', respond)
     result = download_pdf('https://public.example/paper.pdf', resolver=public_resolver)
     assert result.data == content
+
+
+@pytest.mark.parametrize('scheme,proxies,bypass,expected_proxy', [
+    ('https', {'https': 'http://127.0.0.1:7890'}, False, 'http://127.0.0.1:7890'),
+    ('http', {'http': 'http://127.0.0.1:7891'}, False, 'http://127.0.0.1:7891'),
+    ('https', {'all': 'http://127.0.0.1:7892'}, False, 'http://127.0.0.1:7892'),
+    ('https', {'https': 'http://127.0.0.1:7890'}, True, None),
+    ('https', {}, False, None),
+])
+def test_public_download_uses_system_proxy_without_losing_dns_pinning(monkeypatch, scheme, proxies, bypass, expected_proxy):
+    import urllib.request
+    from app.services.downloads import download_pdf
+
+    content = pdf_bytes('PDF through the configured network route')
+    routes = []
+    monkeypatch.setattr(urllib.request, 'getproxies', lambda: proxies)
+    monkeypatch.setattr(urllib.request, 'proxy_bypass', lambda host: bypass)
+
+    class RoutedTransport(httpx.BaseTransport):
+        def __init__(self, **kwargs):
+            self.proxy = kwargs.get('proxy')
+            self.verify = kwargs.get('verify')
+
+        def handle_request(self, request):
+            assert request.url.host == '93.184.216.34'
+            assert request.headers['host'] == 'public.example'
+            if self.proxy:
+                assert 'sni_hostname' not in request.extensions
+                assert self.verify.check_hostname
+            else:
+                assert request.extensions['sni_hostname'] == 'public.example'
+            routes.append(self.proxy)
+            return httpx.Response(200, content=content)
+
+    monkeypatch.setattr(httpx, 'HTTPTransport', RoutedTransport)
+    result = download_pdf(f'{scheme}://public.example/paper.pdf', resolver=public_resolver)
+    assert result.data == content
+    assert routes == [expected_proxy]
+
+
+@pytest.mark.parametrize('proxy_scheme', ['http', 'https'])
+def test_proxy_connect_uses_public_ip_but_tls_verifies_the_original_hostname(monkeypatch, proxy_scheme):
+    import ssl
+    import urllib.request
+    import httpcore
+    from app.services.downloads import download_pdf
+
+    content = pdf_bytes('PDF delivered through a verified TLS tunnel')
+    events = []
+    monkeypatch.setattr(urllib.request, 'getproxies', lambda: {'https': f'{proxy_scheme}://proxy.example:7890'})
+    monkeypatch.setattr(urllib.request, 'proxy_bypass', lambda host: False)
+
+    class ProxyStream(httpcore.NetworkStream):
+        def __init__(self):
+            self.responses = iter([
+                b'HTTP/1.1 200 Connection established\r\n\r\n',
+                b'HTTP/1.1 200 OK\r\nContent-Length: ' + str(len(content)).encode() + b'\r\n\r\n' + content,
+            ])
+
+        def read(self, max_bytes, timeout=None):
+            return next(self.responses)
+
+        def write(self, buffer, timeout=None):
+            if buffer.startswith(b'CONNECT '):
+                assert buffer.startswith(b'CONNECT 93.184.216.34:443 HTTP/1.1\r\n')
+                events.append('connect')
+            elif buffer.startswith(b'GET '):
+                assert b'Host: public.example\r\n' in buffer
+                events.append('get')
+
+        def start_tls(self, ssl_context, server_hostname=None, timeout=None):
+            # Exercise the SSL context used by httpcore, including TLS-in-TLS.
+            tls = ssl_context.wrap_bio(ssl.MemoryBIO(), ssl.MemoryBIO(), server_hostname=server_hostname)
+            expected = 'proxy.example' if proxy_scheme == 'https' and not events else 'public.example'
+            assert tls.server_hostname == expected
+            assert tls.context.check_hostname
+            assert tls.context.verify_mode == ssl.CERT_REQUIRED
+            return self
+
+        def close(self):
+            pass
+
+    def connect(self, host, port, **kwargs):
+        assert (host, port) == ('proxy.example', 7890)
+        return ProxyStream()
+
+    monkeypatch.setattr(httpcore.SyncBackend, 'connect_tcp', connect)
+    assert download_pdf('https://public.example/paper.pdf', resolver=public_resolver).data == content
+    assert events == ['connect', 'get']
 
 
 def test_arxiv_citation_metadata_uses_original_year_and_author_order() -> None:

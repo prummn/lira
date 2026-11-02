@@ -41,11 +41,12 @@ def test_unversioned_legacy_database_upgrades_without_losing_notes(
         ).one() == (0, 0)
         assert (
             connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-                == "0015_knowledge_maintenance"
+                == "0018_translation_scope"
         )
         assert connection.execute(text("SELECT one_liner,findings,card_json FROM paper_analysis WHERE paper_id='legacy'")).one() == ('Preserve old analysis','Original finding','{}')
         assert connection.execute(text("SELECT source_url,metadata_sources_json,metadata_warnings_json FROM papers WHERE id='legacy'")).one() == (None, '{}', '[]')
         assert connection.execute(text("SELECT arxiv_version FROM papers WHERE id='legacy'")).scalar() is None
+        assert {column['name'] for column in inspect(connection).get_columns('translation_jobs')} >= {'scope_total', 'scope_skipped', 'scope_reason'}
     assert "sha256" in {
         c["name"] for c in inspect(database.engine).get_columns("papers")
     }
@@ -54,6 +55,22 @@ def test_unversioned_legacy_database_upgrades_without_losing_notes(
         assert connection.execute(text("SELECT anchors_json FROM notes WHERE id='old-note'")).scalar() == '[]'
     database.engine.dispose()
     engine.dispose()
+
+
+def test_budget_migration_preserves_existing_controls(tmp_path: Path) -> None:
+    url = f"sqlite:///{(tmp_path / 'research-budget.db').as_posix()}"
+    config = Config(str(BACKEND_DIR / 'alembic.ini'))
+    config.set_main_option('script_location', str(BACKEND_DIR / 'migrations'))
+    config.set_main_option('sqlalchemy.url', url)
+    command.upgrade(config, '0015_knowledge_maintenance')
+    database = Database(url)
+    with database.engine.begin() as connection:
+        connection.execute(text('INSERT INTO research_control(id,settings_json) VALUES(1,:settings)'), {'settings': '{"enabled":true}'})
+    database.migrate()
+    with database.engine.connect() as connection:
+        assert connection.execute(text('SELECT settings_json,budget_json FROM research_control')).one() == ('{"enabled":true}', '{}')
+        assert connection.execute(text('PRAGMA foreign_key_check')).all() == []
+    database.engine.dispose()
 
 
 def test_intelligence_migration_distinguishes_old_remote_and_local_cards(tmp_path: Path) -> None:
@@ -75,6 +92,24 @@ def test_intelligence_migration_distinguishes_old_remote_and_local_cards(tmp_pat
         assert connection.execute(text("SELECT title,reading_status FROM papers WHERE id='remote'")).one() == ('Original title', 'reading')
         assert connection.execute(text("SELECT one_liner,mode FROM paper_analysis WHERE paper_id='remote'")).one() == ('Preserved card', 'remote')
         assert 'run_token' in {column['name'] for column in inspect(connection).get_columns('intelligence_tasks')}
+    database.engine.dispose()
+    engine.dispose()
+
+
+def test_translation_scope_migration_preserves_existing_jobs(tmp_path: Path) -> None:
+    url = f"sqlite:///{(tmp_path / 'translation-scope.db').as_posix()}"
+    config = Config(str(BACKEND_DIR / 'alembic.ini'))
+    config.set_main_option('script_location', str(BACKEND_DIR / 'migrations'))
+    config.set_main_option('sqlalchemy.url', url)
+    command.upgrade(config, '0017_translation_queue')
+    engine = create_engine(url)
+    with engine.begin() as connection:
+        connection.execute(text("INSERT INTO papers(id,title,reading_status,is_favorite,analysis_status,tags_json,created_at,updated_at) VALUES('p','Paper','reading',0,'ready','[]',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+        connection.execute(text("INSERT INTO translation_jobs(id,paper_id,mode,provider,config_version,prompt_version,model_name,status,calls,usage_json,created_at,updated_at) VALUES('job','p','full','official','config','prompt','model','queued',0,'{}',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+    database = Database(url)
+    database.migrate()
+    with database.engine.connect() as connection:
+        assert connection.execute(text("SELECT status,scope_total,scope_skipped,scope_reason FROM translation_jobs WHERE id='job'")).one() == ('queued', 0, 0, None)
     database.engine.dispose()
     engine.dispose()
 

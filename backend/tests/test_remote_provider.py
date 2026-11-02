@@ -20,6 +20,14 @@ def test_provider_error_metadata_keeps_existing_constructor_compatible():
     assert (transient.code, transient.retryable, transient.retry_after) == ('stream_interrupted', True, 3)
 
 
+def test_structured_json_parser_accepts_fences_preamble_and_trailing_prose():
+    from app.providers.openai_compatible import parse_json_object
+
+    assert parse_json_object('```json\n{"answer":"ok"}\n```') == {'answer': 'ok'}
+    assert parse_json_object('Here is the result:\n{"answer":"ok"}\nDone.') == {'answer': 'ok'}
+    assert parse_json_object('\ufeff {"answer":"ok"} trailing') == {'answer': 'ok'}
+
+
 @pytest.mark.parametrize('failure,code,status,retryable', [
     (httpx.ConnectTimeout, 'transport_timeout', 504, True),
     (httpx.ReadTimeout, 'transport_timeout', 504, True),
@@ -681,17 +689,75 @@ def test_remote_invalid_evidence_cannot_create_analysis_claim(citation: dict) ->
     assert result.citations == []
 
 
-def test_remote_answer_abstains_when_any_citation_is_invalid() -> None:
-    result = provider_for({'answer':'An invented answer', 'citations':[{'chunk_id':'real-chunk','source_text':'Imaginary text'}], 'insufficient_evidence':False}).ask('What are the results?', [sample_chunk()])
-    assert result.insufficient_evidence is True
-    assert result.citations == []
-    assert 'invented' not in result.answer
+def test_remote_answer_reports_validation_failure_when_any_citation_is_invalid() -> None:
+    from app.providers.base import ProviderError
+    with pytest.raises(ProviderError) as error:
+        provider_for({'answer':'An invented answer', 'citations':[{'chunk_id':'real-chunk','source_text':'Imaginary text'}], 'insufficient_evidence':False}).ask('What are the results?', [sample_chunk()])
+    assert error.value.code == 'invalid_response'
+    assert 'invented' not in str(error.value)
 
 
 def test_remote_valid_answer_is_marked_as_ai_summary() -> None:
     result = provider_for({'answer':'It retrieves 71 of 100 correct passages.', 'citations':[{'chunk_id':'real-chunk','source_text':'71 of 100 correct passages.'}], 'insufficient_evidence':False}).ask('What are the results?', [sample_chunk()])
     assert result.insufficient_evidence is False
     assert result.citations[0].source_type == 'llm_summary'
+
+
+def test_remote_answer_keeps_provenance_notes_and_context_request() -> None:
+    chunk = sample_chunk()
+    result = provider_for({
+        'answer': '模型先解析函数调用，再在 yield 时等待外部事件。',
+        'citations': [{'chunk_id': chunk.id, 'source_text': '71 of 100 correct passages.'}],
+        'insufficient_evidence': False,
+        'facts': ['函数调用由执行器验证后执行。'],
+        'inferences': ['普通文字可能通过消息函数发给用户。'],
+        'unknowns': ['该论文没有在当前证据中给出完整函数签名。'],
+        'needs_more_context': True,
+    }).ask('什么时候解析函数参数？', [chunk])
+    assert result.needs_more_context is True
+    assert result.facts == ['函数调用由执行器验证后执行。']
+    assert result.inferences == ['普通文字可能通过消息函数发给用户。']
+    assert result.unknowns == ['该论文没有在当前证据中给出完整函数签名。']
+
+
+def test_remote_visual_ask_sends_page_image_to_chat_completions() -> None:
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+    seen: dict = {}
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        seen['content'] = payload['messages'][-1]['content']
+        return httpx.Response(200, json={'choices': [{'message': {'content': json.dumps({
+            'answer': '图中展示了准确率随步骤增加而上升。',
+            'citations': [{'chunk_id': 'visual-chunk', 'source_text': 'Accuracy increases with steps.'}],
+            'insufficient_evidence': False,
+        })}}], 'model': 'vision-model'})
+
+    provider = OpenAICompatibleProvider(api_key='test-secret', base_url='https://model.example/v1', model='vision-model', transport=httpx.MockTransport(respond))
+    chunk = sample_chunk()
+    chunk.id = 'visual-chunk'
+    chunk.content = 'Accuracy increases with steps.'
+    result = provider.ask_with_image('图中展示了什么趋势？', [chunk], 'data:image/png;base64,ZmFrZQ==')
+    assert result.insufficient_evidence is False
+    assert any(item.get('type') == 'image_url' for item in seen['content'])
+    assert result.citations[0].source_text == chunk.content
+
+
+def test_remote_visual_ask_keeps_a_plain_answer_when_json_format_is_ignored() -> None:
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+    calls = 0
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        content = 'Apply measures whether the generated patch can be applied.' if calls == 2 else 'The chart shows Apply.'
+        return httpx.Response(200, json={'choices': [{'message': {'content': content}}], 'model': 'vision-model'})
+
+    provider = OpenAICompatibleProvider(api_key='test-secret', base_url='https://model.example/v1', model='vision-model', transport=httpx.MockTransport(respond))
+    result = provider.ask_with_image('表中的 Apply 指标是什么意思？', [sample_chunk()], 'data:image/png;base64,ZmFrZQ==')
+    assert result.insufficient_evidence is False
+    assert 'The chart shows Apply' in result.answer
+    assert calls == 1
 
 
 def test_translation_uses_adapter_and_preserves_input_formula_in_prompt() -> None:
@@ -829,3 +895,11 @@ def test_invalid_base_url_is_not_reported_as_configured(client: TestClient,monke
     assert settings.json()['configured'] is False
     assert settings.json()['configuration_error']
     assert 'test-secret' not in settings.text
+
+
+def test_truncated_outer_json_cannot_be_mistaken_for_nested_candidate():
+    from app.providers.openai_compatible import parse_json_object
+    with pytest.raises(ValueError):
+        parse_json_object('{"candidates":[{"name":"File viewer"},')
+    with pytest.raises(ValueError):
+        parse_json_object('[{"name":"File viewer"}]')

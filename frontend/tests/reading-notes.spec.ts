@@ -29,7 +29,7 @@ async function selectPassage(page:Page) {
   await expect(page.locator('.selection-actions')).toBeVisible()
 }
 
-test('edge anchored note markers stay clear of the highlighted text', async ({page}) => {
+test('semantic note markers stay clear of the highlighted text', async ({page}) => {
   const paper = await openPaper(page)
   const pageBox = await page.locator('.pdfv-page-shell[data-page-number="1"]').boundingBox()
   expect(pageBox).not.toBeNull()
@@ -39,7 +39,7 @@ test('edge anchored note markers stay clear of the highlighted text', async ({pa
   // put the button at left:3px, directly over this selected region.
   const bbox = [0, height * .38, width, height * .42]
   const response = await page.request.post(`/api/papers/${paper.id}/notes`, {data: {
-    content: '边缘高亮不会挡住正文', kind: 'highlight', page: 1,
+    content: '边缘批注不会挡住正文', kind: 'note', page: 1,
     source_text: 'edge anchored fixture', anchors: [{page: 1, bbox, page_width: width, page_height: height, rects: [bbox]}],
   }})
   expect(response.status()).toBe(201)
@@ -57,9 +57,26 @@ test('edge anchored note markers stay clear of the highlighted text', async ({pa
   const clearOfHighlight = markerRight <= highlightBox!.x + 1 || markerBox!.x >= highlightRight - 1 || markerBottom <= highlightBox!.y + 1 || markerBox!.y >= highlightBottom - 1
   expect(clearOfHighlight).toBe(true)
   await expect(marker).toHaveAttribute('data-marker-placement', 'edge-left')
+  await expect(marker).toHaveClass(/pdfv-note-marker-kind-note/)
 })
 
-test('saved multiline highlights render immediately, survive zoom and reload, and open the exact note', async ({page}) => {
+test('a pure highlight has no margin bubble to cover the reading area', async ({page}) => {
+  const paper = await openPaper(page)
+  const pageBox = await page.locator('.pdfv-page-shell[data-page-number="1"]').boundingBox()
+  expect(pageBox).not.toBeNull()
+  const bbox = [pageBox!.width * .22, pageBox!.height * .38, pageBox!.width * .72, pageBox!.height * .42]
+  const response = await page.request.post(`/api/papers/${paper.id}/notes`, {data: {
+    content: '重点段落', kind: 'highlight', page: 1, source_text: 'We study', bbox,
+    anchors: [{page: 1, bbox, page_width: pageBox!.width, page_height: pageBox!.height, rects: [bbox]}],
+  }})
+  expect(response.status()).toBe(201)
+  await page.reload()
+  await page.getByRole('button',{name:'正在阅读',exact:true}).click()
+  await expect(page.locator('.pdfv-note-highlight')).toHaveCount(1)
+  await expect(page.locator('.pdfv-note-marker')).toHaveCount(0)
+})
+
+test('saved multiline highlights render immediately and remain accessible from the notes panel', async ({page}) => {
   const paper = await openPaper(page)
   await selectPassage(page)
   await page.getByRole('button',{name:'保存高亮',exact:true}).click()
@@ -71,16 +88,14 @@ test('saved multiline highlights render immediately, survive zoom and reload, an
   const firstWidth = (await marks.first().boundingBox())!.width
   await page.getByRole('button',{name:'放大',exact:true}).click()
   await expect.poll(async()=> (await marks.first().boundingBox())?.width??0).toBeGreaterThan(firstWidth)
-  await page.getByRole('button',{name:'论文卡片',exact:true}).click()
-  await page.getByRole('button',{name:'打开关联笔记',exact:true}).first().click()
-  await expect(page.locator('.saved-note.is-focused')).toHaveAttribute('data-note-id',note.id)
   await page.reload()
   await page.getByRole('button',{name:'正在阅读',exact:true}).click()
   await expect(page.locator('.pdfv-note-highlight')).not.toHaveCount(0)
-  const mark = page.locator('.pdfv-note-highlight').first()
-  const rect = (await mark.boundingBox())!
-  await page.mouse.click(rect.x+rect.width/2, rect.y+rect.height/2)
-  await expect(page.locator('.saved-note.is-focused')).toHaveAttribute('data-note-id',note.id)
+  await page.getByRole('button',{name:'我的笔记',exact:true}).click()
+  const noteCard = page.locator(`.saved-note[data-note-id="${note.id}"]`)
+  await expect(noteCard).toBeVisible()
+  await noteCard.getByRole('button',{name:'页 1',exact:true}).click()
+  await expect(noteCard).toBeVisible()
 })
 
 test('quote action focuses a stable source draft, then supports editing and deleting with PDF sync', async ({page}) => {
@@ -363,7 +378,7 @@ test('notes can be filtered by kind and default to document order with a modifie
   await expect(cards.nth(0).locator('.note-kind')).toHaveClass(/note-kind-question/)
   await expect(cards.nth(1).locator('.note-kind')).toHaveClass(/note-kind-highlight/)
   await expect(page.locator('.pdfv-note-marker-kind-question')).toHaveCount(1)
-  await expect(page.locator('.pdfv-note-marker-kind-highlight')).toHaveCount(1)
+  await expect(page.locator('.pdfv-note-marker-kind-highlight')).toHaveCount(0)
   const filter = page.getByRole('combobox',{name:'筛选笔记'})
   await filter.selectOption('question')
   await expect(cards).toHaveCount(1)

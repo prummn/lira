@@ -1,6 +1,19 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type APIRequestContext } from '@playwright/test'
 import path from 'node:path'
 import { readFile } from 'node:fs/promises'
+
+const workspaceTitle='Workspace Evidence Fixture'
+async function workspacePaper(request:APIRequestContext) {
+  const library=await (await request.get('/api/papers?limit=200')).json()
+  const existing=library.items.find((paper:{title:string})=>paper.title===workspaceTitle)
+  if(existing)return existing
+  const imported=await request.post('/api/papers/import',{multipart:{file:{name:'workspace-fixture.pdf',mimeType:'application/pdf',
+    buffer:Buffer.concat([await readFile(path.resolve('test-artifacts/import-fixture.pdf')),Buffer.from('\n% workspace fixture\n')])}}})
+  expect(imported.status()).toBe(201)
+  const paper=await imported.json()
+  expect((await request.patch(`/api/papers/${paper.id}`,{data:{title:workspaceTitle}})).ok()).toBe(true)
+  return {...paper,title:workspaceTitle}
+}
 
 test('Library, theme and locale remain usable at notebook widths', async ({page})=>{
   const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message))
@@ -28,9 +41,13 @@ test('real PDF import, evidence location, notes and collection survive refresh',
   await page.goto('/')
   await expect(page.locator('.paper-row')).not.toHaveCount(0)
   await page.locator('input[type=file]').setInputFiles(path.resolve('test-artifacts/import-fixture.pdf'))
+  const imported=page.waitForResponse(response=>response.url().endsWith('/api/papers/import')&&response.request().method()==='POST')
   await page.getByRole('dialog',{name:'确认批量导入'}).getByRole('button',{name:'开始导入',exact:true}).click()
   await expect(page.locator('.import-ok')).toContainText('import-fixture.pdf')
-  const row=page.locator('.paper-row').filter({hasText:'Evidence Integration Test'})
+  const paper=await (await imported).json()
+  expect((await page.request.patch(`/api/papers/${paper.id}`,{data:{title:workspaceTitle}})).ok()).toBe(true)
+  await page.reload()
+  const row=page.locator('.paper-row').filter({hasText:workspaceTitle})
   await expect(row).toBeVisible()
   await row.locator('.status-select').selectOption('reading')
   await expect(row.locator('.status-select')).toHaveValue('reading')
@@ -56,29 +73,28 @@ test('real PDF import, evidence location, notes and collection survive refresh',
   await page.getByRole('textbox',{name:'名称',exact:true}).fill('Browser Evidence Collection')
   await page.getByRole('button',{name:'创建',exact:true}).click()
   await page.getByRole('button',{name:'全部论文',exact:true}).click()
-  await page.locator('.paper-row').filter({hasText:'Evidence Integration Test'}).locator('.collection-summary').click()
-  await page.getByRole('checkbox',{name:'Browser Evidence Collection',exact:true}).check()
-  await expect(page.getByRole('checkbox',{name:'Browser Evidence Collection',exact:true})).toBeChecked()
-  await page.getByRole('button',{name:'关闭',exact:true}).click()
+  await page.locator('.paper-row').filter({hasText:workspaceTitle}).locator('.collection-summary').click()
+  await page.getByRole('radio',{name:'Browser Evidence Collection',exact:true}).check()
+  await page.getByRole('button',{name:'确认加入',exact:true}).click()
+  await expect(page.getByRole('dialog',{name:'加入集合',exact:true})).not.toBeVisible()
   await page.reload()
   await page.locator('.collection-nav').getByRole('button',{name:'Browser Evidence Collection',exact:true}).click()
   await expect(page.locator('.paper-row')).toHaveCount(1)
   await expect(page.locator('.paper-row .status-select')).toHaveValue('reading')
-  await page.getByRole('button',{name:'领域知识',exact:true}).click()
+  await page.getByRole('button',{name:'知识摄取',exact:true}).click()
   await expect(page.locator('.timeline-item')).toHaveCount(1)
-  await page.getByRole('button',{name:'引用与方法关系',exact:true}).click()
-  await expect(page.getByText('尚无已记录的论文关系',{exact:false})).toBeVisible()
+  await page.getByRole('button',{name:'方法演进',exact:true}).click()
+  const map=page.getByRole('region',{name:'方法演进证据地图'})
+  await expect(map.getByRole('img',{name:'方法演进证据地图'})).toBeVisible()
+  await expect(map.locator('.knowledge-map-edge')).toHaveCount(0)
   expect(errors).toEqual([])
 })
 
 test('reader next page advances the rendered PDF page', async ({page})=>{
+  await workspacePaper(page.request)
   await page.goto('/')
   await expect(page.locator('.paper-row')).not.toHaveCount(0)
-  const row = page.locator('.paper-row').filter({hasText:'Evidence Integration Test'})
-  if (await row.count() === 0) {
-    await page.locator('input[type=file]').setInputFiles(path.resolve('test-artifacts/import-fixture.pdf'))
-    await page.getByRole('dialog',{name:'确认批量导入'}).getByRole('button',{name:'开始导入',exact:true}).click()
-  }
+  const row = page.locator('.paper-row').filter({hasText:workspaceTitle})
   await expect(row).toBeVisible()
   await row.locator('.paper-name > button').click()
   await expect(page.locator('.pdfv-page-shell[data-page-number="1"] .pdfv-canvas')).toBeVisible()
@@ -95,16 +111,12 @@ test('reader next page advances the rendered PDF page', async ({page})=>{
 })
 
 test('long notebook content stays inside the reader viewport', async ({page})=>{
+  const fixture=await workspacePaper(page.request)
   await page.goto('/')
   await expect(page.locator('.paper-row')).not.toHaveCount(0)
-  const row = page.locator('.paper-row').filter({hasText:'Evidence Integration Test'})
-  if (await row.count() === 0) {
-    await page.locator('input[type=file]').setInputFiles(path.resolve('test-artifacts/import-fixture.pdf'))
-    await page.getByRole('dialog',{name:'确认批量导入'}).getByRole('button',{name:'开始导入',exact:true}).click()
-  }
+  const row = page.locator('.paper-row').filter({hasText:workspaceTitle})
   await expect(row).toBeVisible()
-  const library = await (await page.request.get('/api/papers?limit=200')).json()
-  const paperId = library.items.find((item:{title:string})=>item.title==='Evidence Integration Test').id
+  const paperId = fixture.id
   const paper = await (await page.request.get(`/api/papers/${paperId}`)).json()
   paper.evidence = Array.from({length:80},(_,index)=>({
     ...(paper.evidence[index % Math.max(1,paper.evidence.length)] ?? {source_text:'Evidence fixture'}),
@@ -133,11 +145,11 @@ test('mock answers cite current source and refuse unsupported questions', async 
   await page.getByRole('button',{name:'问论文',exact:true}).click()
   await page.getByRole('textbox',{name:'问论文',exact:true}).fill('作者承认的 limitation 是什么？')
   await page.getByRole('button',{name:'提问',exact:true}).click()
-  await expect(page.locator('.answer-citation')).not.toHaveCount(0)
+  await expect(page.locator('.ask-answer').last().locator('.answer-reference')).not.toHaveCount(0)
   await page.getByRole('textbox',{name:'问论文',exact:true}).fill('请预测2035年比特币的价格')
   await page.getByRole('button',{name:'提问',exact:true}).click()
-  await expect(page.locator('.ask-answer')).toContainText('当前材料不足以确认')
-  await expect(page.locator('.answer-citation')).toHaveCount(0)
+  await expect(page.locator('.ask-answer').last()).toContainText('当前材料不足以确认')
+  await expect(page.locator('.ask-answer').last().locator('.answer-reference')).toHaveCount(0)
   await page.getByRole('button',{name:'中英对照',exact:true}).click()
   await expect(page.locator('.translation-panel .translation-model-hint')).toContainText('翻译需要配置生成模型')
 })
@@ -154,12 +166,12 @@ test('bad PDF import reports failure and leaves the library unchanged',async({pa
 
 test('Knowledge and researcher views use library data',async({page})=>{
   await page.goto('/')
-  await page.getByRole('button',{name:'领域知识',exact:true}).click()
+  await page.getByRole('button',{name:'知识摄取',exact:true}).click()
   await expect(page.locator('.timeline-item')).not.toHaveCount(0)
   await page.getByRole('button',{name:'论文比较',exact:true}).click()
   await expect(page.locator('.comparison-table')).toBeVisible()
-  await page.getByRole('button',{name:'概念索引',exact:true}).click()
-  await expect(page.locator('.concept-index article')).not.toHaveCount(0)
+  await page.getByRole('button',{name:'对象目录',exact:true}).click()
+  await expect(page.locator('.knowledge-catalog')).toBeVisible()
   await page.getByRole('button',{name:'引用与方法关系',exact:true}).click()
   await expect(page.locator('.citation-svg')).toBeVisible()
   await page.screenshot({path:'test-artifacts/knowledge-graph.png'})
@@ -169,14 +181,10 @@ test('Knowledge and researcher views use library data',async({page})=>{
 })
 
 test('full-text search opens the source and selected highlights persist',async({page,request})=>{
-  const existing=await (await request.get('/api/papers?limit=200')).json()
-  if(!existing.items.some((paper:{title:string})=>paper.title==='Evidence Integration Test')) {
-    const imported=await request.post('/api/papers/import',{multipart:{file:{name:'import-fixture.pdf',mimeType:'application/pdf',buffer:await readFile(path.resolve('test-artifacts/import-fixture.pdf'))}}})
-    expect(imported.ok()).toBe(true)
-  }
+  await workspacePaper(request)
   await page.goto('/')
   await page.locator('.library-controls input').fill('unreliable')
-  const hit=page.locator('.fulltext-hit').filter({hasText:'Evidence Integration Test'})
+  const hit=page.locator('.fulltext-hit').filter({hasText:workspaceTitle})
   await expect(hit).toHaveCount(1)
   await hit.click()
   await expect(page.locator('.pdfv-canvas').first()).toBeVisible()
@@ -189,6 +197,8 @@ test('full-text search opens the source and selected highlights persist',async({
   })
   await expect(page.locator('.selection-actions')).toBeVisible()
   await page.getByRole('button',{name:'保存高亮',exact:true}).click()
+  await expect(page.locator('.pdfv-note-highlight')).not.toHaveCount(0)
+  await page.getByRole('button',{name:'我的笔记',exact:true}).click()
   const highlight=page.locator('.saved-note').filter({hasText:'unreliable'})
   await expect(highlight).toHaveCount(1)
   await page.reload()
@@ -247,11 +257,108 @@ test('a selected passage can be explained with source citations',async({page})=>
   await expect(page.getByRole('button',{name:'解释所选',exact:true})).toBeVisible()
   await page.getByRole('button',{name:'解释所选',exact:true}).click()
   const dialog=page.getByRole('dialog')
-  await expect(dialog).toContainText('技术解释')
-  await dialog.getByRole('button',{name:'技术解释',exact:true}).click()
+  await dialog.getByRole('textbox',{name:'向论文提问',exact:true}).fill('请解释这段话的含义。')
+  await dialog.getByRole('button',{name:'提问',exact:true}).click()
+  await dialog.locator('.explain-sources > summary').click()
   await expect(dialog.locator('.answer-citation')).not.toHaveCount(0)
   await dialog.locator('.answer-citation').first().getByRole('button',{name:/定位原文/}).click()
   await expect(page.locator('.pdfv-evidence-overlay')).toBeVisible()
+})
+
+test('selection explanation accepts a natural language question and context scope',async({page})=>{
+  let requestBody:any
+  await page.route('**/api/papers/*/explain',async route=>{
+    requestBody=route.request().postDataJSON()
+    await route.fulfill({json:{answer:'EM means exact match in this evaluation.',provider:'FixtureProvider',mode:'remote',citations:[],insufficient_evidence:false,context_scope:'section'}})
+  })
+  await page.goto('/')
+  await page.locator('.paper-row .paper-name > button').first().click()
+  const text=page.locator('.pdfv-text-layer span[role="presentation"]').filter({hasText:/calibration|study|propose|method/i}).first()
+  await expect(text).toBeVisible()
+  await text.evaluate(element=>{
+    const range=document.createRange();range.selectNodeContents(element)
+    const selection=window.getSelection()!;selection.removeAllRanges();selection.addRange(range)
+    element.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}))
+  })
+  await page.getByRole('button',{name:'解释所选',exact:true}).click()
+  const dialog=page.getByRole('dialog')
+  await dialog.getByRole('textbox',{name:'向论文提问',exact:true}).fill('这里的 EM 指的是什么？')
+  await dialog.getByRole('button',{name:'提问选项',exact:true}).click()
+  await dialog.getByRole('combobox',{name:'证据范围',exact:true}).selectOption('full')
+  await dialog.getByRole('button',{name:'提问',exact:true}).click()
+  await expect(dialog).toContainText('EM means exact match')
+  expect(requestBody.question).toBe('这里的 EM 指的是什么？')
+  expect(requestBody.context_scope).toBe('full')
+})
+
+test('a pre-recognized figure opens a cropped visual question', async ({page,request}) => {
+  let requestBody: any
+  await page.route('**/api/papers/*/explain', async route => {
+    requestBody = route.request().postDataJSON()
+    await route.fulfill({json:{answer:'图中展示了趋势。',provider:'FixtureVision',mode:'remote',citations:[],insufficient_evidence:false,context_scope:'section',visual_used:true}})
+  })
+  const fixture=await workspacePaper(request)
+  await page.route(`**/api/papers/${fixture.id}/visual-regions`,route=>route.fulfill({json:{items:[
+    {id:'fixture-figure',page:1,kind:'figure',label:'Figure 1',caption:'Figure 1: Verifier-guided reasoning',bbox:[48,120,548,290],page_width:595,page_height:842},
+  ]}}))
+  await page.goto('/')
+  await page.locator('.paper-row').filter({hasText:fixture.title}).locator('.paper-name > button').click()
+  await expect(page.locator('.pdfv-canvas').first()).toBeVisible()
+  const figureRegion=page.locator('[data-visual-id="fixture-figure"]'), figureBox=await figureRegion.boundingBox()
+  expect(figureBox).not.toBeNull()
+  await page.mouse.move(figureBox!.x+figureBox!.width/2,figureBox!.y+figureBox!.height/2)
+  await page.locator('.pdfv-visual-region-action.figure').click()
+  const dialog=page.getByRole('dialog')
+  await expect(dialog).toContainText('Figure 1')
+  await page.screenshot({path:'test-artifacts/ask-visual-desktop.png'})
+  await dialog.getByRole('textbox',{name:'向论文提问',exact:true}).fill('这张图展示了什么趋势？')
+  await dialog.getByRole('button',{name:'提问',exact:true}).click()
+  await expect(dialog).toContainText('图中展示了趋势')
+  expect(requestBody.image_data_url).toMatch(/^data:image\/(png|jpeg|webp);base64,/)
+  expect(requestBody.page).toBeGreaterThan(0)
+  expect(requestBody.selected_text).toContain('Figure 1: Verifier-guided reasoning')
+  const dimensions=await page.evaluate(async url=>{const image=new Image();image.src=url;await image.decode();return [image.naturalWidth,image.naturalHeight]},requestBody.image_data_url)
+  expect(dimensions[0]).toBeLessThan(1000)
+})
+
+test('a pre-recognized table sends the crop and figure text remains selectable independently', async ({page,request}) => {
+  let requestBody: any
+  await page.route('**/api/papers/*/explain', async route => {
+    requestBody = route.request().postDataJSON()
+    await route.fulfill({json:{answer:'图表区域的回答。',provider:'FixtureVision',mode:'remote',citations:[],insufficient_evidence:false,context_scope:'paragraph',visual_used:true}})
+  })
+  const fixture=await workspacePaper(request)
+  await page.route(`**/api/papers/${fixture.id}/visual-regions`,route=>route.fulfill({json:{items:[
+    {id:'fixture-figure',page:1,kind:'figure',label:'Figure 1',caption:'Figure 1: Verifier-guided reasoning',bbox:[48,120,285,290],page_width:595,page_height:842},
+    {id:'fixture-table',page:1,kind:'table',label:'Table 1',caption:'Table 1: SWE-bench results',bbox:[310,330,548,480],page_width:595,page_height:842},
+  ]}}))
+  await page.goto('/')
+  await page.locator('.paper-row').filter({hasText:fixture.title}).locator('.paper-name > button').click()
+  await expect(page.locator('.pdfv-canvas').first()).toBeVisible()
+  const tableRegion=page.locator('[data-visual-id="fixture-table"]')
+  const tableBox=await tableRegion.boundingBox()
+  expect(tableBox).not.toBeNull()
+  await page.mouse.move(tableBox!.x+tableBox!.width/2,tableBox!.y+tableBox!.height/2)
+  const tableAction=page.locator('.pdfv-visual-region-action.table')
+  await expect(tableAction).toBeVisible()
+  await tableAction.click()
+  const dialog=page.getByRole('dialog')
+  await dialog.getByRole('textbox',{name:'向论文提问',exact:true}).fill('表中的 Apply 指标是什么意思？')
+  await dialog.getByRole('textbox',{name:'向论文提问',exact:true}).press('Enter')
+  await expect(dialog).toContainText('图表区域的回答')
+  expect(requestBody.image_data_url).toMatch(/^data:image\/(png|jpeg|webp);base64,/)
+  expect(requestBody.page).toBe(1)
+  expect(requestBody.selected_text).toContain('Table 1: SWE-bench results')
+  expect(await page.locator('.pdfv-visual-region-action.table svg').count()).toBe(0)
+
+  await dialog.getByRole('button',{name:'收起对话',exact:true}).click()
+  const figureRegion=page.locator('[data-visual-id="fixture-figure"]')
+  const figureBox=await figureRegion.boundingBox()
+  await page.mouse.move(figureBox!.x+figureBox!.width/2,figureBox!.y+figureBox!.height/2)
+  await expect(page.locator('.pdfv-visual-region-action.figure')).toBeVisible()
+  const text=page.locator('.pdfv-text-layer span[role="presentation"]').filter({hasText:'verifier'}).first()
+  await text.evaluate(element=>{const range=document.createRange();range.selectNodeContents(element);const selection=window.getSelection()!;selection.removeAllRanges();selection.addRange(range);element.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}))})
+  await expect(page.getByRole('button',{name:'解释所选',exact:true})).toBeVisible()
 })
 
 test('cached paragraph translations are readable without a configured model',async({page,request})=>{

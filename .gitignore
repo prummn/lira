@@ -1,23 +1,69 @@
+# Dependencies and build output
 node_modules/
 dist/
+build/
 .venv/
+venv/
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+
+# Personal research data and SQLite sidecars (at any location)
 *.db
 *.db-*
 *.sqlite
 *.sqlite-*
 *.sqlite3
 *.sqlite3-*
-.env
-.env.*
-!.env.example
-.pytest_cache/
-*.tsbuildinfo
+*.pdf
+*.caj
 backend/storage/
 data/
+test_papers/
+
+# Connection profiles, account sessions, and local environment overrides
+.env
+.env.*
+*.env
+*.env.*
+!.env.example
+!**/.env.example
+auth.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local runs, model replies, logs, and disposable debugging stores
+.local-runtime/
+.superpowers/
+/debug-*/
+/debug-*
+*.log
+*.log.*
+*.pid
+*.bak
+*.tmp
+
+# Test and tool output
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage/
+*.tsbuildinfo
 frontend/test-artifacts/
 frontend/test-results/
 frontend/playwright-report/
-.local-runtime/
-.superpowers/
+blob-report/
+
+# Editor and operating system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
