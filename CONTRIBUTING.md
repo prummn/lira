@@ -1,5 +1,7 @@
 # 参与开发
 
+[项目首页](README.md) &nbsp;|&nbsp; [文档目录](docs/README.md) &nbsp;|&nbsp; [安全与隐私](SECURITY.md)
+
 LIRA 当前为私有协作项目。项目代码、测试和发布脚本进入 Git；个人论文库、阅读记录、模型连接和账号状态留在各自电脑上。
 
 ## 准备环境
@@ -12,7 +14,22 @@ cd lira
 .\scripts\start.ps1
 ```
 
-启动脚本准备后端虚拟环境及前端依赖。模型连接通过应用内设置配置，不需要向维护者索取配置文件。只阅读、搜索和记笔记时可以不配置模型。完整操作见 [README](README.md)。
+启动脚本准备后端虚拟环境及前端依赖。模型连接通过应用内设置配置，不需要向维护者索取配置文件。只阅读、搜索和记笔记时可以不配置模型。日常操作见 [使用指南](docs/USER_GUIDE.md)，模型配置见 [模型连接](docs/MODELS.md)。
+
+## 代码从哪里看
+
+| 目录 | 职责 |
+| --- | --- |
+| `frontend/src/pages/` | 文献库、阅读器、知识摄取与专题页面 |
+| `frontend/src/components/` | PDF、翻译、对话、证据与知识网络交互 |
+| `backend/app/api/` | 本地 HTTP 接口 |
+| `backend/app/providers/` | 模型协议、连接配置与官方账户适配 |
+| `backend/app/services/` | PDF 解析、证据、知识整理及后台调度 |
+| `backend/migrations/` | 数据库结构升级 |
+| `backend/tests/`、`frontend/tests/` | 后端回归与隔离浏览器测试 |
+| `scripts/` | 本地启停、测试与构建维护 |
+
+先沿着用户操作找到页面和接口，再看服务层；模型连接问题从 providers 入手，任务等待问题同时检查后台调度与连接容量。
 
 ## 分支与提交
 
@@ -21,10 +38,10 @@ cd lira
 ```powershell
 git switch main
 git pull --ff-only
-git switch -c feat/short-description
+git switch -c codex/short-description
 ```
 
-修复、文档和维护可使用 `fix/`、`docs/`、`chore/` 前缀。提交说明交代具体变化；PR 说明问题、改动和验证结果。涉及阅读器交互时附截图，涉及后台调度时说明优先级、并发和失败恢复行为。不要顺手重排无关代码。
+自动化协作默认使用 `codex/` 分支前缀，手工协作也可按改动类型使用 `feat/`、`fix/`、`docs/` 或 `chore/`。提交说明交代具体变化；PR 说明问题、改动和验证结果。涉及阅读器交互时附截图，涉及后台调度时说明优先级、并发和失败恢复行为。不要顺手重排无关代码。
 
 ## 验证
 

@@ -5,6 +5,7 @@
 | [lira-logo.svg](lira-logo.svg) | 独立标志，沿用应用内的双框与中心点图形 |
 | [lira-hero.svg](lira-hero.svg) | 仓库首页头图 |
 | [research-map.svg](research-map.svg) | 论文、证据与跨论文知识之间的概念关系 |
+| [knowledge-atlas.svg](knowledge-atlas.svg) | 跨论文对象归并、关系类型与来源的概念示意 |
 | [reader.png](reader.png) | 实际阅读器的中英对照界面 |
 
 主色为炭灰 `#302f2c`、暖白 `#f5f1e9` 和陶土色 `#a85e43`。SVG 保留可编辑文字与路径，不依赖外部字体文件、脚本或图像。

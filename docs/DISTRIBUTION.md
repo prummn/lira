@@ -1,4 +1,8 @@
-# Windows 发布流程
+# 构建与发布
+
+[文档目录](README.md) &nbsp;|&nbsp; [参与开发](../CONTRIBUTING.md)
+
+本文面向维护者，记录当前 Windows x64 构建产物及其验收流程。日常使用从 [使用指南](USER_GUIDE.md) 开始。
 
 在项目根目录运行：
 
@@ -56,14 +60,14 @@ Pop-Location
 
 | 文件 | 用途 |
 | --- | --- |
-| LIRA-版本-Windows-x64.zip | 发给同学的完整试用包 |
+| LIRA-版本-Windows-x64.zip | 可独立运行的应用包 |
 | 同名 .zip.sha256 | 校验传输完整性 |
 | 同名 .report.json / .report.md | 本轮阶段、检查结果、源码摘要和日志位置 |
 | latest.json | 最近一次验收通过的版本、ZIP 名称和校验码 |
 
 只发送 ZIP 即可；需要核对传输时附上 SHA256。不要直接压缩工作目录，也不要发送个人数据目录。分发包不含个人论文、笔记、对话、译文、密钥或官方登录状态。
 
-同学完整解压后双击「启动 LIRA.cmd」，无需 Python、Node 或 npm。在应用内配置自己的模型连接或登录自己的 ChatGPT Codex 账号。当前仅提供 Windows 10/11 x64 包；PDF 支持读取，CAJ 暂不支持直接导入，扫描件暂不支持 OCR。
+使用者完整解压后双击「启动 LIRA.cmd」，无需 Python、Node 或 npm。在应用内配置自己的模型连接或登录自己的 ChatGPT Codex 账号。当前仅提供 Windows 10/11 x64 包；PDF 支持读取，CAJ 暂不支持直接导入，扫描件暂不支持 OCR。
 
 ## 失败与重试
 

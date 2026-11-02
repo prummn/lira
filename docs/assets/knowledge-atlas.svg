@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="620" viewBox="0 0 1440 620" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">One object, many sources</title>
+  <desc id="desc">A conceptual illustration of knowledge ingestion. Mentions from different papers resolve to a canonical object. Typed relations connect methods, datasets and benchmarks, while the original passages remain available.</desc>
+  <rect width="1440" height="620" rx="12" fill="#f5f1e9"/>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <text x="52" y="51" fill="#a85e43" font-size="14" letter-spacing="2.5">THE KNOWLEDGE LAYER</text>
+    <text x="51" y="108" fill="#302f2c" font-family="Georgia, 'Times New Roman', serif" font-size="40">One object, many sources.</text>
+    <text x="52" y="143" fill="#716a60" font-size="17">Names are reconciled. Relationships keep their meaning. Evidence stays attached.</text>
+    <path d="M52 173H1388" stroke="#d9d1c4"/>
+    <g fill="#716a60" font-size="13" letter-spacing="2"><text x="52" y="210">MENTIONS IN PAPERS</text><text x="563" y="210">CANONICAL OBJECT</text><text x="1038" y="210">TYPED RELATIONS</text></g>
+    <g stroke="#c0b6a7" stroke-width="1.5">
+      <path d="M345 271H402Q434 271 434 303V337Q434 369 468 369H540"/>
+      <path d="M345 376H540M345 481H402Q434 481 434 449V401Q434 369 468 369"/>
+      <path d="M789 369H852Q886 369 886 335V280Q886 250 918 250H1018"/>
+      <path d="M852 369H1018M852 369Q886 369 886 403V467Q886 497 918 497H1018"/>
+    </g>
+    <g fill="#302f2c" font-size="21"><text x="78" y="263">Paper A</text><text x="78" y="368">Paper B</text><text x="78" y="473">Paper C</text></g>
+    <g fill="#716a60" font-size="16"><text x="78" y="290">Original name</text><text x="78" y="395">Abbreviated name</text><text x="78" y="500">A spelling variant</text></g>
+    <g fill="#a85e43"><circle cx="56" cy="255" r="4"/><circle cx="56" cy="360" r="4"/><circle cx="56" cy="465" r="4"/></g>
+    <rect x="540" y="287" width="249" height="165" rx="6" fill="#302f2c"/>
+    <text x="565" y="322" fill="#d59a72" font-size="12" letter-spacing="2">METHOD</text>
+    <text x="565" y="366" fill="#f5eee5" font-family="Georgia, 'Times New Roman', serif" font-size="30">One method</text>
+    <text x="565" y="403" fill="#d5cec3" font-size="15">Aliases / related papers</text>
+    <text x="565" y="427" fill="#d5cec3" font-size="15">Sources / revision history</text>
+    <g fill="#716a60" font-size="13"><text x="901" y="237">evaluated on</text><text x="901" y="355">compared with</text><text x="901" y="484">uses</text></g>
+    <g fill="#302f2c" font-size="22"><text x="1045" y="259">Dataset / benchmark</text><text x="1045" y="378">Another method</text><text x="1045" y="506">Component</text></g>
+    <g fill="#f5f1e9" stroke="#a85e43" stroke-width="1.5"><circle cx="1025" cy="250" r="6"/><circle cx="1025" cy="369" r="6"/><circle cx="1025" cy="497" r="6"/></g>
+    <path d="M52 544H1388" stroke="#d9d1c4"/>
+    <text x="52" y="582" fill="#716a60" font-size="15">Every source can lead back to a paper, a page, and an original passage.</text>
+    <text x="1126" y="582" fill="#a85e43" font-size="12" letter-spacing="1.5">CONCEPTUAL VIEW</text>
+  </g>
+</svg>
