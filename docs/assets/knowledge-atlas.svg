@@ -9,8 +9,8 @@
     <path d="M52 173H1388" stroke="#d9d1c4"/>
     <g fill="#716a60" font-size="13" letter-spacing="2"><text x="52" y="210">MENTIONS IN PAPERS</text><text x="563" y="210">CANONICAL OBJECT</text><text x="1038" y="210">TYPED RELATIONS</text></g>
     <g stroke="#c0b6a7" stroke-width="1.5">
-      <path d="M345 271H402Q434 271 434 303V337Q434 369 468 369H540"/>
-      <path d="M345 376H540M345 481H402Q434 481 434 449V401Q434 369 468 369"/>
+      <path d="M345 271H402Q434 271 434 303V337Q434 369 468 369"/>
+      <path d="M345 369H540M345 481H402Q434 481 434 449V401Q434 369 468 369"/>
       <path d="M789 369H852Q886 369 886 335V280Q886 250 918 250H1018"/>
       <path d="M852 369H1018M852 369Q886 369 886 403V467Q886 497 918 497H1018"/>
     </g>
