@@ -35,6 +35,11 @@ export interface ResearchInvestigation extends Omit<ResearchTask,'kind'> {kind:F
 export interface ResearchAgendaState {planner:ResearchTask|null;tasks:ResearchInvestigation[]}
 export interface ResearchFindingsState {scope:ResearchScope;items:ResearchFinding[];task:ResearchTask|null;due_count:number;agenda?:ResearchAgendaState}
 export interface FindingRevision extends FindingContent {id:string;created_at:string}
+export type MaintenanceScope =
+  | {scope_type:'library';scope_id?:never;paper_ids?:never}
+  | {scope_type:'collection';scope_id:string;paper_ids?:never}
+  | {scope_type:'papers';scope_id?:never;paper_ids:string[]}
+export type MaintenanceRunInput = MaintenanceScope & {allow_external?:boolean;force?:boolean}
 export interface MaintenanceRun { id:string; scope_type:'library'|'collection'|'papers'; scope_id:string|null; status:'queued'|'running'|'complete'|'partial'|'failed'|'cancelled'; allow_external:boolean; model_name:string|null; prompt_version:string|null; source_fingerprint:string; started_at:string|null; finished_at:string|null; error_message:string|null; safe_count:number; review_count:number; conflict_count:number; applied_count:number; usage:Record<string,unknown> }
 export type MaintenanceIssueStatus = 'proposed'|'auto_applied'|'needs_review'|'accepted'|'rejected'|'stale'|'undone'
 export interface MaintenanceIssue { id:string; run_id:string; kind:'identity'|'relation'|'evidence'|'coverage'|'importance'|'structure'; severity:'critical'|'warning'|'info'; status:MaintenanceIssueStatus; confidence:number; confidence_basis:Record<string,unknown>; auto_eligible:boolean; subject_ids:string[]; evidence:KnowledgeEvidence[]; external_leads:Record<string,unknown>[]; summary:string; reasoning:string; proposed_action:Record<string,unknown>; source_fingerprint:string; applied_change_ids:string[]; created_at:string; updated_at:string }

@@ -1,5 +1,44 @@
 import { expect, test } from '@playwright/test'
 
+for (const scope of ['collection', 'library'] as const) {
+  test(`starting curation uses the real ${scope} scope contract`, async ({page, request}) => {
+    const paper = (await (await request.get('/api/papers')).json()).items[0]
+    const collection = scope === 'collection' ? await (await request.post('/api/collections', {
+      data: {name: 'Curation scope regression'},
+    })).json() : null
+    if (collection) {
+      const added = await request.post(`/api/collections/${collection.id}/papers`, {data: {paper_ids: [paper.id]}})
+      expect(added.ok()).toBe(true)
+    }
+    await page.goto('/')
+    await page.getByRole('button', {name: '知识摄取', exact: true}).click()
+    if (collection) await page.locator('.collection-picker').selectOption(collection.id)
+    await page.getByRole('button', {name: 'AI 知识整理', exact: true}).click()
+    const start = page.locator('.maintenance-hero-actions').getByRole('button', {name: '整理当前范围', exact: true})
+    await expect(start).toBeEnabled()
+    const submitted = page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/api/knowledge/maintenance/runs')
+    await start.click()
+    const response = await submitted
+    expect(response.status(), await response.text()).toBe(200)
+    const body = response.request().postDataJSON()
+    expect(body).toEqual({scope_type: scope, ...(collection ? {scope_id: collection.id} : {}), allow_external: true})
+    const run = await response.json()
+    try {
+      expect(run.scope_type).toBe(scope)
+      expect(run.scope_id).toBe(collection?.id ?? null)
+      if (collection) {
+        expect(run.usage.paper_count).toBe(1)
+        expect(run.issues.map((issue: {proposed_action: {paper_id: string}}) => issue.proposed_action.paper_id)).toEqual([paper.id])
+      }
+      await expect(page.locator('.maintenance-status-strip')).toBeVisible()
+      await expect(page.locator('.maintenance-error')).toHaveCount(0)
+    } finally {
+      await request.post(`/api/knowledge/maintenance/runs/${run.id}/cancel`)
+    }
+  })
+}
+
 test('scope progress includes import-triggered jobs even when the last batch is empty',async({page,request})=>{
   const paper=(await(await request.get('/api/papers')).json()).items[0]
   let checked=false

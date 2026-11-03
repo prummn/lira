@@ -4,6 +4,7 @@ import type { ChatIdentity, ChatKind, SavedConversation, ConversationRead } from
 import type { KnowledgeEntityInput, KnowledgeEvidence, KnowledgeMergePreview, KnowledgeRelationInput } from '../types'
 import type { CollectionResearchState, ResearchSettings, ResearchStatus, ResearchTask, ResearchScope, ResearchFinding, ResearchFindingsState, FindingAction, FindingRevision } from '../types'
 import type { TranslationJob, TranslationJobAction } from '../types'
+import type { MaintenanceRunInput } from '../types'
 
 export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); this.name = 'ApiError' }
@@ -51,7 +52,7 @@ export const api = {
   maintenanceRuns: (limit=20, scope?:{type?:string;id?:string}) => request<{items:MaintenanceRun[]}>(`/knowledge/maintenance/runs?limit=${limit}${scope?.type?`&scope_type=${encodeURIComponent(scope.type)}`:''}${scope?.id?`&scope_id=${encodeURIComponent(scope.id)}`:''}`),
   maintenanceRun: (id:string) => request<MaintenanceRunDetail>(`/knowledge/maintenance/runs/${encodeURIComponent(id)}`),
   maintenanceBacklog: (scope:{type:string;id?:string;paperIds?:string[]}) => request<import('../types').MaintenanceBacklog>(`/knowledge/maintenance/backlog?scope_type=${encodeURIComponent(scope.type)}${scope.id?`&scope_id=${encodeURIComponent(scope.id)}`:''}${scope.paperIds?.length?`&paper_ids=${encodeURIComponent(scope.paperIds.join(','))}`:''}`),
-  createMaintenanceRun: (body:{scope_type:'library'|'collection'|'papers';scope_id?:string;paper_ids?:string[];allow_external?:boolean;force?:boolean}) => request<MaintenanceRunDetail>('/knowledge/maintenance/runs',{method:'POST',...json(body)}),
+  createMaintenanceRun: (body:MaintenanceRunInput) => request<MaintenanceRunDetail>('/knowledge/maintenance/runs',{method:'POST',...json(body)}),
   applySafeMaintenance: (id:string) => request<{run:MaintenanceRunDetail;results:Array<{id:string;status:string;detail?:string}>}>(`/knowledge/maintenance/runs/${encodeURIComponent(id)}/apply-safe`,{method:'POST'}),
   maintenanceAction: (id:string,action:'retry'|'cancel') => request<MaintenanceRun>(`/knowledge/maintenance/runs/${encodeURIComponent(id)}/${action}`,{method:'POST'}),
   applyMaintenanceIssue: (id:string) => request<{issue:MaintenanceIssue;run:MaintenanceRun}>(`/knowledge/maintenance/issues/${encodeURIComponent(id)}/apply`,{method:'POST'}),

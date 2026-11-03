@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, ArrowUpRight, Check, ChevronRight, CircleDashed, LoaderCircle, Pause, Play, RotateCcw, Sparkles, Undo2, X } from 'lucide-react'
 import { api, errorMessage } from '../lib/api'
 import { useUi } from '../lib/i18n'
-import type { MaintenanceBacklog, MaintenanceIssue, MaintenanceRunDetail } from '../types'
+import type { MaintenanceBacklog, MaintenanceIssue, MaintenanceRunDetail, MaintenanceScope } from '../types'
 import type { PdfLocator } from './PdfViewer'
 import './knowledge-maintenance.css'
 
@@ -100,7 +100,12 @@ export function KnowledgeMaintenance({ scopeType, scopeId, paperIds, openPaper }
   const start = async () => {
     setBusy('start'); setError('')
     try {
-      const detail = await api.createMaintenanceRun({scope_type: scopeType, ...(scopeId ? {scope_id: scopeId} : {}), ...(paperIds?.length ? {paper_ids: paperIds} : {}), allow_external: true})
+      const scope: MaintenanceScope = scopeType === 'collection'
+        ? {scope_type: 'collection', scope_id: scopeId ?? ''}
+        : scopeType === 'papers'
+          ? {scope_type: 'papers', paper_ids: paperIds ?? []}
+          : {scope_type: 'library'}
+      const detail = await api.createMaintenanceRun({...scope, allow_external: true})
       setRun(detail); setSelectedId(detail.issues[0]?.id ?? '')
     } catch (cause) { setError(errorMessage(cause)) } finally { setBusy('') }
   }
