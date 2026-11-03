@@ -16,6 +16,42 @@ class ProviderError(RuntimeError):
         self.retry_after = retry_after
         self.diagnostics = diagnostics or {}
 
+    def public_payload(self) -> dict:
+        codes = {
+            'provider_error', 'authentication', 'invalid_request', 'invalid_response',
+            'invalid_image', 'rate_limit', 'upstream_error', 'upstream_timeout',
+            'output_budget', 'output_incomplete', 'stream_interrupted', 'local_capacity',
+            'transport_timeout', 'transport_protocol', 'transport_connection',
+            'transport_dns', 'transport_refused', 'transport_reset', 'transport_tls',
+            'transport_unreachable', 'tls_certificate', 'tls_configuration', 'transport_error',
+            'codex_unavailable', 'codex_account_error', 'codex_catalog_error',
+            'background_preempted', 'subscription_required', 'science_support',
+        }
+        upstream = {'rate_limit', 'rate_limit_error', 'rate_limit_exceeded', 'server_error',
+                    'api_error', 'overloaded_error', 'invalid_api_key', 'authentication_error',
+                    'permission_denied', 'invalid_request_error', 'missing', 'unknown'}
+        enums = {
+            'transport_type': {'ConnectError', 'ReadError', 'WriteError', 'CloseError',
+                              'ConnectTimeout', 'ReadTimeout', 'WriteTimeout', 'PoolTimeout',
+                              'RemoteProtocolError', 'unknown'},
+            'upstream_code': upstream, 'upstream_type': upstream,
+            'event_type': {'error', 'response.failed', 'response.incomplete'},
+            'validation': {'answer_citations'},
+        }
+        diagnostics = {}
+        for key, value in self.diagnostics.items():
+            if key in enums and type(value) is str and value in enums[key]:
+                diagnostics[key] = value
+            elif key == 'http_status' and type(value) is int and 100 <= value <= 599:
+                diagnostics[key] = value
+            elif key == 'tls_verify_code' and type(value) is int and 0 <= value <= 1000:
+                diagnostics[key] = value
+            elif key == 'request_sent' and type(value) is bool:
+                diagnostics[key] = value
+        return {'detail': str(self),
+                'code': self.code if type(self.code) is str and self.code in codes else 'provider_error',
+                'retryable': self.retryable is True, 'diagnostics': diagnostics}
+
 
 @dataclass(frozen=True)
 class VerifiedCitation:

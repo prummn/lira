@@ -61,7 +61,7 @@ test('curation appears in the global queue, updates checkpoints and opens its sc
   const job=page.getByRole('article',{name:'Agents'})
   await expect(job).toContainText('AI 知识整理')
   await expect(job).toContainText('0 / 3')
-  await expect(job).toContainText('优先保障阅读')
+  await expect(job).toContainText('阅读时保留交互并发')
   completed=1;status='running'
   await expect(job).toContainText('1 / 3',{timeout:10000})
   await expect(job).toContainText('ReAct')

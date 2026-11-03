@@ -351,6 +351,8 @@ def _refs(paragraph):
 
 
 def _resolve(db, job, item):
+    if job is None or item is None:
+        raise Deferred('cancelled')
     paper = find_paper(db,job.paper_id)
     if paper is None:
         raise ProviderError('论文已移除',409,code='source_changed')
@@ -412,6 +414,8 @@ class Deferred(Exception):
 
 
 def _provider(worker,job):
+    if job is None:
+        raise Deferred('cancelled')
     if job.mode == 'full' and not json.loads(job.usage_json or '{}').get('requested'):
         provider = worker.profiles.subscription_provider(job.profile_id)
     else:
@@ -477,6 +481,8 @@ def _gate(worker,job_id,item_id,manual, *, reserved=False):
 def _record(worker,job_id,item_id,phase):
     with worker._mutation,worker.database.sessions() as db:
         job,item = db.get(TranslationJob,job_id),db.get(TranslationItem,item_id)
+        if job is None or item is None:
+            raise Deferred('cancelled')
         if job.status not in ('queued','running') or item.status not in ('queued','running'):
             raise Deferred('user_paused' if job.status == 'paused' else 'cancelled')
         manual = job.mode == 'selected' or item.priority > 0

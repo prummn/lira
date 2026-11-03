@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import json
+import logging
 import re
 import uuid
 from datetime import datetime, timezone
@@ -19,12 +20,12 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
-from typing import Literal
+from typing import Annotated, Literal
 
 from ..db import get_db
 from ..models import Author, Collection, CollectionPaper, Edge, IntelligenceTask, Note, Paper, PaperAuthor, PaperChunk, Translation
@@ -146,6 +147,66 @@ def list_papers(
         limit=limit,
         offset=offset,
     )
+
+
+class PaperBatchDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    paper_ids: list[Annotated[str, Field(min_length=1, max_length=64, strict=True)]] = Field(min_length=1, max_length=100)
+
+
+class PaperDeleteResponse(BaseModel):
+    deleted_ids: list[str]
+
+
+def _delete_papers(session: Session, storage: Path, paper_ids: list[str]) -> PaperDeleteResponse:
+    ids = list(dict.fromkeys(paper_ids))
+    try:
+        papers = session.execute(select(Paper.id, Paper.pdf_path).where(Paper.id.in_(ids))).all()
+        if len(papers) != len(ids):
+            raise HTTPException(404, '未找到请求中的论文，未删除任何论文')
+        # 使用数据库外键级联，不加载 ORM 关系，也不删除集合、作者和共享知识实体。
+        deleted = session.scalars(delete(Paper).where(Paper.id.in_(ids)).returning(Paper.id)).all()
+        if len(deleted) != len(ids):
+            raise HTTPException(409, '论文在删除期间发生变化，未删除任何论文')
+        remaining_paths = session.scalars(select(Paper.pdf_path).where(Paper.pdf_path.is_not(None))).all()
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+
+    # DB 提交后才尽力清理；文件占用/权限失败只记录日志，不将已成功的删除报告为失败。
+    # 仅认可导入器和 demo 使用的 storage/<paper_id>.pdf，不信任库内任意路径。
+    for paper_id, pdf_path in papers:
+        if not pdf_path:
+            continue
+        try:
+            root = storage.resolve()
+            expected = root / f'{paper_id}.pdf'
+            candidate = Path(pdf_path)
+            if (expected.parent != root or candidate.is_symlink()
+                    or candidate.absolute() != expected or candidate.resolve() != expected
+                    or not candidate.is_file()):
+                continue
+            if any(Path(path).resolve() == expected for path in remaining_paths):
+                continue
+            candidate.unlink(missing_ok=True)
+        except (OSError, ValueError, RuntimeError):
+            logging.getLogger(__name__).warning('论文 %s 的受管 PDF 清理失败，数据库删除已完成', paper_id)
+    return PaperDeleteResponse(deleted_ids=ids)
+
+
+@router.post('/papers/batch-delete', response_model=PaperDeleteResponse)
+def batch_delete_papers(payload: PaperBatchDeleteRequest, request: Request,
+                        session: Session = Depends(get_db)) -> PaperDeleteResponse:
+    with request.app.state.research_worker._mutation:
+        return _delete_papers(session, request.app.state.storage_dir, payload.paper_ids)
+
+
+@router.delete('/papers/{paper_id}', response_model=PaperDeleteResponse)
+def delete_paper(paper_id: str, request: Request,
+                 session: Session = Depends(get_db)) -> PaperDeleteResponse:
+    with request.app.state.research_worker._mutation:
+        return _delete_papers(session, request.app.state.storage_dir, [paper_id])
 
 
 @router.post("/papers/import", response_model=PaperDetail, status_code=201)

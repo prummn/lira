@@ -108,7 +108,7 @@ def create_app(
 
     @application.exception_handler(ProviderError)
     async def provider_error(_: Request, error: ProviderError) -> JSONResponse:
-        return JSONResponse(status_code=error.status_code, content={"detail": str(error)})
+        return JSONResponse(status_code=error.status_code, content=error.public_payload())
 
     @application.exception_handler(RequestValidationError)
     async def validation_error(

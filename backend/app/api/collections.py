@@ -3,6 +3,7 @@
 from __future__ import annotations
 import json
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import (
@@ -16,13 +17,13 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 from starlette.concurrency import run_in_threadpool
 
 from ..db import get_db
-from ..models import Author, Collection, CollectionPaper, Edge, Note, Paper, PaperAuthor
+from ..models import Author, Collection, CollectionPaper, Edge, KnowledgeMaintenanceRun, Note, Paper, PaperAuthor
 from ..providers import get_model_provider
 from ..schemas import (
     AskRequest,
@@ -94,6 +95,34 @@ def create_collection(
         session.rollback()
         raise HTTPException(409, "同名集合已存在") from error
     return collection_read(collection)
+
+
+@router.delete('/collections/{collection_id}', status_code=204)
+def delete_collection(
+    collection_id: str, request: Request, session: Session = Depends(get_db)
+) -> Response:
+    # 与研究检查点共用锁；只通过外键级联删除集合子记录，不触碰论文和文件。
+    worker = request.app.state.research_worker
+    with worker._mutation:
+        require_collection(session, collection_id)
+        runs = session.scalars(select(KnowledgeMaintenanceRun).where(
+            KnowledgeMaintenanceRun.scope_type == 'collection',
+            KnowledgeMaintenanceRun.scope_id == collection_id,
+            KnowledgeMaintenanceRun.status.in_(['queued', 'running', 'partial']))).all()
+        for run in runs:
+            run.status = 'cancelled'
+            run.finished_at = datetime.now(timezone.utc)
+            run.error_message = '所属集合已删除，已停止该范围的知识整理'
+        deleted = session.scalars(
+            delete(Collection).where(Collection.id == collection_id).returning(Collection.id)
+        ).all()
+        if len(deleted) != 1:
+            raise HTTPException(409, '集合在删除期间发生变化')
+        session.commit()
+        for run in runs:
+            worker._run_epochs[run.id] = worker._run_epochs.get(run.id, 0) + 1
+    worker.wake()
+    return Response(status_code=204)
 
 
 @router.post('/collections/{collection_id}/papers', response_model=CollectionRead)

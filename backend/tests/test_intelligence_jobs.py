@@ -185,6 +185,31 @@ def test_cancellation_during_response_keeps_call_usage_and_old_card(client, monk
     assert len(calls) == 1
 
 
+def test_deletion_during_analysis_discards_late_result(client, monkeypatch):
+    from app.models import Paper, PaperAnalysis, IntelligenceTask
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+    client.app.state.intelligence_worker.stop()
+    paper = import_paper(client)
+    calls = []
+    def respond(request):
+        payload = json.loads(json.loads(request.content)['messages'][-1]['content'])
+        calls.append(payload)
+        assert client.delete(f"/api/papers/{paper['id']}").status_code == 200
+        part = payload['chunks'][0]
+        answer = {'facts': [{'content': 'Supported.', 'citations': [{'part_id': part['part_id'],
+            'chunk_id': part['chunk_id'], 'source_text': part['content']}]}]}
+        return httpx.Response(200, json={'choices': [{'message': {'content': json.dumps(answer)}}]})
+    provider = OpenAICompatibleProvider(api_key='secret', base_url='https://model.example', transport=httpx.MockTransport(respond))
+    monkeypatch.setattr('app.api.intelligence.get_model_provider', lambda: provider)
+    task = client.post('/api/intelligence/tasks', json={'paper_ids': [paper['id']]}).json()['tasks'][0]
+    assert client.app.state.intelligence_worker.process_next(provider)
+    assert len(calls) == 1
+    with client.app.state.database.sessions() as db:
+        assert db.get(Paper, paper['id']) is None
+        assert db.get(PaperAnalysis, paper['id']) is None
+        assert db.get(IntelligenceTask, task['id']) is None
+
+
 def test_stale_worker_cannot_change_recovered_task_progress(client, monkeypatch):
     from app.models import IntelligenceTask
     client.app.state.intelligence_worker.stop()

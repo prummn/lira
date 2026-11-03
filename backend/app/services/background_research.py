@@ -421,6 +421,8 @@ class BackgroundResearchWorker:
             else:
                 if run.status not in {'failed', 'cancelled', 'partial'}:
                     raise HTTPException(409, '当前维护批次不能重试')
+                if run.scope_type == 'collection' and db.get(Collection, run.scope_id) is None:
+                    raise HTTPException(404, '原专题集合已删除，无法重试该范围')
                 run.status = 'queued'
                 run.started_at = None
                 run.finished_at = None
@@ -513,6 +515,7 @@ class BackgroundResearchWorker:
             if run_id:
                 run = db.get(KnowledgeMaintenanceRun, run_id)
                 allowed = allowed and control.maintenance_enabled and bool(run and run.status == 'running')
+                allowed = allowed and bool(run and (run.scope_type != 'collection' or db.get(Collection, run.scope_id)))
             if paper_id:
                 paper = db.get(Paper, paper_id)
                 allowed = allowed and bool(paper and not paper.is_demo)
@@ -765,11 +768,15 @@ class BackgroundResearchWorker:
                 return False
             if not self._eligible(settings, running=task.calls > 0 or task.stage not in ('synthesis', 'discover', 'plan')):
                 return False
-            with self.database.sessions() as db:
+            with self._mutation, self.database.sessions() as db:
+                task = db.get(ResearchTask, task.id)
+                if task is None:
+                    return False
                 scope = db.get(ResearchScope, task.collection_id)
+                if scope is None:
+                    return False
                 if not self._current_material(db, task, scope):
-                    stored = db.get(ResearchTask, task.id)
-                    stored.status = 'superseded'
+                    task.status = 'superseded'
                     db.commit()
                     self._next_scan = 0
                     return False

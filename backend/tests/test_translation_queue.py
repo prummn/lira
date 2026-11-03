@@ -91,6 +91,45 @@ def test_enqueue_returns_before_network_and_each_completed_paragraph_is_readable
     assert latest(queue)['status'] == 'completed'
 
 
+def test_deletion_during_translation_discards_result_without_worker_error(queue):
+    from app.models import TranslationJob, TranslationItem
+    from app.services.translation_queue import process_next
+    client, worker, provider, _, _ = queue
+    enqueue(queue)
+    def delete_during_call():
+        assert client.delete('/api/papers/queue-paper').status_code == 200
+    provider.during = delete_during_call
+    assert process_next(worker) == (True, True)
+    assert worker._reason != 'service_error'
+    with worker.database.sessions() as db:
+        for model in (Paper, Translation, TranslationJob, TranslationItem):
+            assert db.scalars(select(model)).all() == []
+    assert not worker._translation_claims
+    assert process_next(worker) == (False, False)
+
+
+@pytest.mark.parametrize('phase', ['resolve', 'provider', 'record'])
+def test_deleted_translation_job_is_deferred(queue, phase):
+    from app.models import TranslationJob, TranslationItem
+    from app.services.translation_queue import Deferred, _provider, _record, _resolve
+    client, worker, _, _, _ = queue
+    enqueue(queue)
+    with worker.database.sessions() as db:
+        job = db.scalars(select(TranslationJob)).one()
+        item = db.scalars(select(TranslationItem)).first()
+        job_id, item_id = job.id, item.id
+    assert client.delete('/api/papers/queue-paper').status_code == 200
+    with pytest.raises(Deferred) as caught:
+        if phase == 'record':
+            _record(worker, job_id, item_id, 'translating')
+        elif phase == 'provider':
+            _provider(worker, None)
+        else:
+            with worker.database.sessions() as db:
+                _resolve(db, db.get(TranslationJob, job_id), db.get(TranslationItem, item_id))
+    assert caught.value.reason == 'cancelled'
+
+
 def test_global_monitor_keeps_completed_progress_without_sending_translation_content(queue):
     client, worker, _, _, _ = queue
     job = enqueue(queue).json()
