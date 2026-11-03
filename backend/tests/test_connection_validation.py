@@ -199,6 +199,9 @@ def test_public_error_metadata_rejects_unknown_codes_and_wrong_types():
 
 def test_official_concurrency_is_persisted_account_wide_and_borrows_idle_capacity(client):
     store = client.app.state.model_profiles
+    # Idle borrowing starts after the configured delay. This test exercises
+    # immediate idle capacity; reading/recent activity reservation is separate.
+    assert client.put('/api/research/settings', json={'idle_seconds': 0}).status_code == 200
     store.codex = AccountStub()
     first = store.save(ModelProfileUpdate(**codex_profile()))
     second = store.save(ModelProfileUpdate(**codex_profile()))

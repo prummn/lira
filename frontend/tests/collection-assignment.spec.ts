@@ -271,6 +271,8 @@ test.describe('LibraryPage mock 删除', () => {
     await expect(dialog.getByText(original[0].title, { exact: false })).toHaveCount(1)
     await expect(dialog).not.toContainText('永久删除')
     await expect(dialog).not.toContainText('此操作无法撤销')
+    await expect(dialog).toContainText('本地 PDF、笔记、译文和对话记录')
+    await page.screenshot({path:'test-artifacts/pr-paper-delete.png'})
     expect(calls).toEqual([])
     await dialog.getByRole('button', { name: '取消', exact: true }).click()
     await expect(dialog).not.toBeVisible()

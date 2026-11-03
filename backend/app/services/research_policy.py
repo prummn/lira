@@ -8,7 +8,7 @@ def observe_budget(ledger, windows, *, now=None, day=None, reserve=30):
     """Account-wide observed growth limits background work; never bill a request.
 
     Ledgers use official bucket identity, not a selectable model profile. Daily
-    allowances are fixed at first observation and can only shrink until tomorrow.
+    allowances can only shrink until tomorrow or a confirmed new official period.
     """
     now = time.time() if now is None else now
     local = datetime.fromtimestamp(now).astimezone()
@@ -24,10 +24,13 @@ def observe_budget(ledger, windows, *, now=None, day=None, reserve=30):
             continue
         key = f"{window.get('limit_id', 'codex')}:{window.get('name', '')}:{minutes:g}"
         record = ledger.get(key)
-        # A changed reset estimate alone is not a new allowance. Only expiry
-        # followed by a new official period can retire the old high-water mark.
+        # A changed estimate or usage rollback alone must not refill a budget.
+        # The official service can also reset a period early: a near-zero meter
+        # AND a reset extended by over half a window identify that new period.
+        early_reset = bool(record and used <= 5 and record['peak'] - used >= 10 and
+                           reset - record['resets_at'] > max(600, minutes * 30))
         new_period = record is None or (now >= record['resets_at'] and
-                                        reset-record['resets_at'] > min(600, minutes*30))
+                                        reset-record['resets_at'] > min(600, minutes*30)) or early_reset
         days = max(1, math.ceil((reset-now)/86400))
         if new_period or record['day'] != day:
             peak = used if new_period else max(used, record['peak'])

@@ -28,6 +28,30 @@ function Get-SourceFingerprint([string]$Root) {
 }
 
 . (Join-Path $PSScriptRoot 'stop.ps1') -FunctionsOnly
+
+function Stop-UnrecordedWorkspaceProcess($Launched, [string]$Role, [int]$Port) {
+    if (-not $Launched) { return }
+    $started = $Launched.StartTime.ToUniversalTime().Ticks.ToString()
+    $verified = Get-WorkspaceProcess $Launched.Id $started $Role $Port
+    if (-not $verified) { return }
+    $children = if ($Role -eq 'backend') { @(Get-WorkspaceBackendChildren $verified $Port) } else { @() }
+    foreach ($child in $children) {
+        $parentNow = Get-WorkspaceProcess $Launched.Id $started $Role $Port
+        $childNow = Get-WorkspaceProcess $child.ProcessId $child.Started 'backend' $Port
+        if (-not $parentNow -or -not $childNow -or $childNow.ParentProcessId -ne $Launched.Id -or
+            $childNow.CommandLine -cne $child.CommandLine -or $childNow.CreationDate -ne $child.CreationDate -or
+            $parentNow.CommandLine -cne $verified.CommandLine -or $childNow.CreationDate -lt $parentNow.CreationDate) {
+            throw '启动清理时父子进程身份发生变化，拒绝停止。'
+        }
+        Stop-Process -Id $child.ProcessId
+        Wait-Process -Id $child.ProcessId -Timeout 10 -ErrorAction SilentlyContinue
+    }
+    if (Get-WorkspaceProcess $Launched.Id $started $Role $Port) {
+        Stop-Process -Id $Launched.Id
+        Wait-Process -Id $Launched.Id -Timeout 10 -ErrorAction SilentlyContinue
+    }
+}
+
 $sourceFingerprint = Get-SourceFingerprint $projectRoot
 $statePath = Join-Path $runtimeDir 'processes.json'
 if (Test-Path -LiteralPath $statePath) {
@@ -140,7 +164,8 @@ try {
     $env:RIW_BACKEND_URL = "http://127.0.0.1:$backendPort"
     $backend = Start-Process -FilePath $PythonPath -ArgumentList @('-m','uvicorn','backend.app.main:app','--host','127.0.0.1','--port',"$backendPort") -WorkingDirectory $projectRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $runtimeDir 'backend.log') -RedirectStandardError (Join-Path $runtimeDir 'backend.err.log') -PassThru
     $frontend = Start-Process -FilePath $nodePath -ArgumentList @('node_modules/vite/bin/vite.js','--config','vite.config.ts','--host','127.0.0.1','--port',"$frontendPort",'--strictPort') -WorkingDirectory (Join-Path $projectRoot 'frontend') -WindowStyle Hidden -RedirectStandardOutput (Join-Path $runtimeDir 'frontend.log') -RedirectStandardError (Join-Path $runtimeDir 'frontend.err.log') -PassThru
-    @{ sourceFingerprint=$sourceFingerprint; backendPid=$backend.Id; frontendPid=$frontend.Id; backendPort=$backendPort; frontendPort=$frontendPort; url="http://127.0.0.1:$frontendPort"; backendStarted=$backend.StartTime.ToUniversalTime().Ticks.ToString(); frontendStarted=$frontend.StartTime.ToUniversalTime().Ticks.ToString(); root=$projectRoot } | ConvertTo-Json | Set-Content -Encoding UTF8 (Join-Path $runtimeDir 'processes.json')
+    @{ sourceFingerprint=$sourceFingerprint; backendPid=$backend.Id; frontendPid=$frontend.Id; backendPort=$backendPort; frontendPort=$frontendPort; url="http://127.0.0.1:$frontendPort"; backendStarted=$backend.StartTime.ToUniversalTime().Ticks.ToString(); frontendStarted=$frontend.StartTime.ToUniversalTime().Ticks.ToString(); root=$projectRoot } | ConvertTo-Json | Set-Content -Encoding UTF8 -LiteralPath ($statePath + '.pending')
+    Move-Item -LiteralPath ($statePath + '.pending') -Destination $statePath -Force
     $ready = $false
     for ($attempt=0; $attempt -lt 60; $attempt++) {
         $backend.Refresh(); $frontend.Refresh()
@@ -160,8 +185,13 @@ try {
     if (Test-Path -LiteralPath $statePath) {
         try { & (Join-Path $PSScriptRoot 'stop.ps1') }
         catch { Write-Warning "启动清理未完成，保留进程记录：$_" }
-    } else {
-        Write-Warning '启动未完成且尚未写入进程记录；不终止身份未确认的进程，请检查日志。'
+    }
+    # A failed state write can leave an unreadable record; always verify this
+    # invocation's launch objects as well. Already stopped processes are skipped.
+    foreach ($entry in @(@{Process=$backend;Role='backend';Port=$backendPort},
+                         @{Process=$frontend;Role='frontend';Port=$frontendPort})) {
+        try { Stop-UnrecordedWorkspaceProcess $entry.Process $entry.Role $entry.Port }
+        catch { Write-Warning "启动清理未完成，请检查日志：$_" }
     }
     throw $startupError
 } finally { Pop-Location }

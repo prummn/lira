@@ -1,4 +1,4 @@
-"""Cooperative cancellation of optional work; foreground owns the account."""
+"""Request priority, reader presence and explicit background cancellation."""
 from contextlib import contextmanager
 from contextvars import ContextVar
 import threading
@@ -58,6 +58,7 @@ class ResearchPriority:
         self._last_activity = time.monotonic()
         self._readers: dict[str, float] = {}
         self._foreground = 0
+        self.idle_delay = 0
 
     def foreground(self):
         with self._lock:

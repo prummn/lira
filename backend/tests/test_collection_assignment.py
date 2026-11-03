@@ -123,6 +123,36 @@ def test_delete_missing_collection_returns_404(client: TestClient):
     assert response.status_code == 404
 
 
+def test_delete_collection_cancels_its_curation_without_touching_other_scopes(client):
+    from app.models import KnowledgeMaintenanceRun
+
+    worker = client.app.state.research_worker
+    worker.stop()
+    target = client.post('/api/collections', json={'name': 'Delete curation scope'}).json()
+    other = client.post('/api/collections', json={'name': 'Retain curation scope'}).json()
+    with client.app.state.database.sessions() as db:
+        for key, scope_id in [('queued', target['id']), ('running', target['id']),
+                              ('partial', target['id']), ('other', other['id'])]:
+            db.add(KnowledgeMaintenanceRun(id=key, scope_type='collection', scope_id=scope_id,
+                status=key if key != 'other' else 'queued', source_fingerprint=key))
+        db.add(KnowledgeMaintenanceRun(id='library', scope_type='library', status='queued',
+                                     source_fingerprint='library'))
+        db.commit()
+    before = worker._optional_epoch(run_id='running')
+
+    assert client.delete(f"/api/collections/{target['id']}").status_code == 204
+
+    with client.app.state.database.sessions() as db:
+        for key in ['queued', 'running', 'partial']:
+            run = db.get(KnowledgeMaintenanceRun, key)
+            assert run.status == 'cancelled'
+            assert run.finished_at is not None
+        assert db.get(KnowledgeMaintenanceRun, 'other').status == 'queued'
+        assert db.get(KnowledgeMaintenanceRun, 'library').status == 'queued'
+    assert worker._optional_epoch(run_id='running') != before
+    assert client.post('/api/knowledge/maintenance/runs/running/retry').status_code == 404
+
+
 def test_missing_paper_does_not_partially_assign_a_batch(client: TestClient):
     paper = make_paper(client, 'Existing paper')
     target = client.post('/api/collections', json={'name': 'Memory'}).json()

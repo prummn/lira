@@ -86,9 +86,9 @@ def _row_snapshot(row) -> dict:
 
 def _paper_ids(session: Session, scope_type: str = "library", scope_id: str | None = None, ids: Iterable[str] = ()) -> list[str]:
     wanted = {str(item) for item in ids if str(item).strip()}
+    statement = select(Paper.id).where(Paper.is_demo == False)
     if scope_type == "papers":
-        return sorted(wanted)
-    statement = select(Paper.id)
+        statement = statement.where(Paper.id.in_(wanted))
     if scope_type == "collection":
         statement = statement.join(CollectionPaper, CollectionPaper.paper_id == Paper.id).where(CollectionPaper.collection_id == scope_id)
     return sorted(session.scalars(statement).all())
@@ -644,7 +644,8 @@ def backlog(session: Session, *, scope_type='library', scope_id=None, paper_ids=
                 success = True
             if issue.status == 'proposed' and run.status in {'queued','running','partial'}:
                 usage = _json(run.usage_json, {})
-                candidate = ('running' if run.status == 'running' and usage.get('active_issue_id') == issue.id else 'retry_wait'
+                candidate = ('running' if run.status == 'running' and issue.id in
+                    {*usage.get('active_issue_ids', []), usage.get('active_issue_id')} else 'retry_wait'
                     if usage.get('retry_at', {}).get(issue.id, 0) > _now().timestamp() else 'queued')
                 if state is None or rank[candidate] < rank[state]:
                     state, job_id = candidate, run.id
@@ -776,7 +777,43 @@ def ready_audit_issues(session: Session, run: KnowledgeMaintenanceRun) -> list[K
     return [item for item in pending_audit_issues(session, run) if retry.get(item.id, 0) <= _now().timestamp()]
 
 
-def execute_run(session: Session, run: KnowledgeMaintenanceRun, provider=None, *, max_calls: int | None = None) -> KnowledgeMaintenanceRun:
+def skip_demo_audits(session: Session, run: KnowledgeMaintenanceRun) -> None:
+    """Retire hidden examples left in older batches without deleting records."""
+    usage = _json(run.usage_json, {})
+    processed = set(usage.get('processed_issue_ids', []))
+    for issue in pending_audit_issues(session, run):
+        action = _json(issue.proposed_action_json, {})
+        paper = session.get(Paper, action.get('paper_id')) if action.get('type') == 'curate_paper' else None
+        if paper is not None and paper.is_demo:
+            issue.status, issue.reasoning = 'stale', '示例论文不参与自动知识整理，原记录已保留'
+            processed.add(issue.id)
+    usage['processed_issue_ids'] = sorted(processed)
+    run.usage_json = _dump(usage)
+    session.flush()
+
+
+def execute_run(session: Session, run: KnowledgeMaintenanceRun, provider=None, *, max_calls: int | None = None,
+                issue_id=None, checkpoint_lock=None, reserve_call=None) -> KnowledgeMaintenanceRun:
+    """Serialize checkpoints, releasing the lock only during model generation.
+
+    An issue lease belongs to the worker, not this session. Different papers in
+    one batch can run together; refreshed usage merges their independent results.
+    """
+    from contextlib import nullcontext
+    with checkpoint_lock if checkpoint_lock is not None else nullcontext():
+        if checkpoint_lock is not None:
+            session.rollback()
+            session.expire_all()
+            if run.status not in {'queued', 'partial', 'running'}:
+                return run
+        result = _execute_run(session, run, provider, max_calls=max_calls, issue_id=issue_id,
+                              checkpoint_lock=checkpoint_lock, reserve_call=reserve_call)
+        if checkpoint_lock is not None:
+            session.commit()
+        return result
+
+
+def _execute_run(session, run, provider, *, max_calls, issue_id, checkpoint_lock, reserve_call):
     """Run the model stage for a prepared batch; local findings always survive."""
     from ..providers.base import ProviderError
 
@@ -803,6 +840,8 @@ def execute_run(session: Session, run: KnowledgeMaintenanceRun, provider=None, *
     run.started_at = run.started_at or _now()
     run.error_message = None
     session.flush()
+    if checkpoint_lock is not None:
+        session.commit()
     all_issues = pending_audit_issues(session, run)
     usage = _json(run.usage_json, {"call_times": [], "events": [], "processed_issue_ids": []})
     processed = {str(item) for item in usage.get("processed_issue_ids", []) if str(item)}
@@ -811,6 +850,8 @@ def execute_run(session: Session, run: KnowledgeMaintenanceRun, provider=None, *
     retry_at = usage.get('retry_at', {})
     issues.sort(key=lambda item: (attempts.get(item.id, 0), retry_at.get(item.id, 0), item.id))
     issues = [item for item in issues if retry_at.get(item.id, 0) <= _now().timestamp()]
+    if issue_id is not None:
+        issues = [item for item in issues if item.id == issue_id]
     if provider is None or getattr(provider, "mode", "extractive") != "remote" or not getattr(provider, "configured", False):
         run.status = "partial"
         run.error_message = "当前没有可用的远程模型，已保留程序化体检结果"
@@ -830,7 +871,7 @@ def execute_run(session: Session, run: KnowledgeMaintenanceRun, provider=None, *
         }
         action = finding['proposed_action']
         paper = session.get(Paper, action.get('paper_id')) if action.get('type') == 'curate_paper' else None
-        if action.get('type') == 'curate_paper' and (paper is None or not paper.chunks):
+        if action.get('type') == 'curate_paper' and (paper is None or paper.is_demo or not paper.chunks):
             issue.status = 'stale'
             processed.add(issue.id)
             continue
@@ -856,25 +897,56 @@ def execute_run(session: Session, run: KnowledgeMaintenanceRun, provider=None, *
                 session.flush()
                 continue
             from .publication_metadata import enrich_publication
-            metadata = enrich_publication(session, paper, allow_external=run.allow_external)
+            if checkpoint_lock is not None:
+                # A paper preparing bibliographic context owns this batch too.
+                # Another finishing paper must not mark its owner as paused.
+                usage['active_issue_ids'] = sorted(set(usage.get('active_issue_ids', [])) | {issue.id})
+                usage['active_issue_id'] = usage['active_issue_ids'][0]
+                run.usage_json = _dump(usage)
+                session.commit()
+            metadata = enrich_publication(session, paper, allow_external=run.allow_external,
+                                          checkpoint_lock=checkpoint_lock)
+            # Bibliographic lookups can release the checkpoint lock, just like
+            # model generation. Other papers may have advanced this batch.
+            usage = _json(run.usage_json, {})
+            processed = set(usage.get('processed_issue_ids', []))
+            attempts, retry_at = usage.get('attempts', {}), usage.get('retry_at', {})
             bundle = build_bundle(session, paper)
         else:
             bundle = build_model_bundle(session, finding)
         # Count attempts before generation: a rejected response or cancellation
         # can still consume quota. The caller commits partial runs on failure.
+        if reserve_call is not None:
+            reserve_call()
         calls += 1
-        usage['active_issue_id'] = issue.id
+        usage['active_issue_ids'] = sorted(set(usage.get('active_issue_ids', [])) | {issue.id})
+        usage['active_issue_id'] = usage['active_issue_ids'][0]
         usage["call_times"] = [*usage.get("call_times", []), _now().timestamp()]
         run.usage_json = _dump(usage)
         # The provider may run for minutes. Persist its attempt, then release
         # SQLite's write lock so reading, notes and foreground Q&A keep working.
         session.commit()
         try:
-            result = provider.audit_knowledge_bundle(bundle)
+            if checkpoint_lock is not None:
+                checkpoint_lock.release()
+            try:
+                result = provider.audit_knowledge_bundle(bundle)
+            finally:
+                if checkpoint_lock is not None:
+                    checkpoint_lock.acquire()
+                # Another paper can finish while this request is in flight.
+                # Merge from the persisted checkpoint, never the old snapshot.
+                session.expire_all()
+                usage = _json(run.usage_json, {})
+                processed = set(usage.get('processed_issue_ids', []))
+                attempts, retry_at = usage.get('attempts', {}), usage.get('retry_at', {})
+                usage['active_issue_ids'] = [key for key in usage.get('active_issue_ids', []) if key != issue.id]
+                usage['active_issue_id'] = next(iter(usage['active_issue_ids']), None)
             from ..providers.priority import check_background
             check_background()
-            session.expire_all()
             if run.status != 'running':
+                run.usage_json = _dump(usage)
+                session.commit()
                 return run
             if paper is not None:
                 from .knowledge_steward import apply_batch
@@ -891,6 +963,7 @@ def execute_run(session: Session, run: KnowledgeMaintenanceRun, provider=None, *
             else:
                 store_model_proposals(session, run, finding, result)
             processed.add(issue.id)
+            usage.setdefault('issue_errors', {}).pop(issue.id, None)
             run.model_name = result.get("model_version") or getattr(provider, 'response_model', None) or getattr(provider, 'model', None) or run.model_name
             run.prompt_version = result.get("prompt_version") or bundle.get('version') or run.prompt_version
             usage["events"] = [*usage.get("events", []), {"stage": "maintenance", "at": _now().timestamp(), "code": "saved"}][-20:]
@@ -898,17 +971,16 @@ def execute_run(session: Session, run: KnowledgeMaintenanceRun, provider=None, *
             usage["output_tokens"] = usage.get("output_tokens", 0) + int(getattr(provider, "last_usage", {}).get("output_tokens") or 0)
             usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
             usage["processed_issue_ids"] = sorted(processed)
-            usage.pop('active_issue_id', None)
             run.usage_json = _dump(usage)
-            session.flush()
+            session.commit()
         except ProviderError as error:
-            usage.pop('active_issue_id', None)
             usage['input_tokens'] = usage.get('input_tokens', 0) + int(getattr(provider, 'last_usage', {}).get('input_tokens') or 0)
             usage['output_tokens'] = usage.get('output_tokens', 0) + int(getattr(provider, 'last_usage', {}).get('output_tokens') or 0)
             usage['total_tokens'] = usage['input_tokens'] + usage['output_tokens']
             attempts[issue.id] = attempts.get(issue.id, 0) + int(error.code != 'background_preempted')
             retry_at[issue.id] = _now().timestamp() + (5 if error.code == 'background_preempted' else 60)
             usage['attempts'], usage['retry_at'] = attempts, retry_at
+            usage.setdefault('issue_errors', {})[issue.id] = str(error)
             if attempts[issue.id] >= 2:
                 processed.add(issue.id)
                 issue.status = 'needs_review'
@@ -920,8 +992,11 @@ def execute_run(session: Session, run: KnowledgeMaintenanceRun, provider=None, *
             break
     remaining = any(issue.status == "proposed" and issue.id not in processed for issue in all_issues)
     failed = any(item.status == 'needs_review' for item in all_issues)
-    run.status = 'failed' if failed and not remaining else ("partial" if errors or remaining else "complete")
-    run.error_message = errors[0] if errors else ("部分论文等待重试退避，已有整理已保存" if remaining and not issues else "本轮达到后台维护调用上限，可稍后继续" if remaining else None)
+    if run.status != 'cancelled':
+        run.status = ('running' if usage.get('active_issue_ids') else 'failed' if failed and not remaining
+                      else 'partial' if errors or remaining else 'complete')
+    outstanding_error = next(iter(usage.get('issue_errors', {}).values()), None)
+    run.error_message = errors[0] if errors else outstanding_error or ("部分论文等待重试退避，已有整理已保存" if remaining and not issues else "本轮达到后台维护调用上限，可稍后继续" if remaining else None)
     run.finished_at = _now()
     _refresh_run_counts(session, run)
     session.flush()

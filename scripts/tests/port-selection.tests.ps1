@@ -156,4 +156,53 @@ Assert-True ($first -match '^[0-9a-f]{64}$' -and $first -eq (Get-SourceFingerpri
     function Invoke-WebRequest { return [pscustomobject]@{ StatusCode=200 } }
     Invoke-Expression $recordBranch.Extent.Text
 }
-Write-Host '脚本解析、指纹变化、旧版本拒绝复用及父子进程身份模拟验证通过；未启动或停止服务。'
+# 执行真实启动语句和异常分支，所有进程命令均由桩替换。
+& {
+    $startupTry = $asts['start.ps1'].EndBlock.Statements | Where-Object {
+        $_ -is [System.Management.Automation.Language.TryStatementAst]
+    } | Select-Object -Last 1
+    $launches = @($startupTry.Body.Statements | Where-Object {
+        $_.Extent.Text -match '^\$(backend|frontend) = Start-Process'
+    })
+    $catchText = ($startupTry.CatchClauses[0].Body.Statements | ForEach-Object { $_.Extent.Text }) -join "`n"
+    $PythonPath = 'mock-python'; $nodePath = 'mock-node'
+    $projectRoot = $root; $runtimeDir = 'mock-runtime'; $statePath = 'mock-state'
+    $backendPort = 8000; $frontendPort = 5173
+    $started = [datetime]::UtcNow.AddMinutes(-1)
+    $script:stopped = @()
+    function Test-Path { param($LiteralPath) return $script:recordExists }
+    function Join-Path { param($Path, $ChildPath)
+        if($ChildPath -eq 'stop.ps1'){return 'Invoke-MockStop'}
+        return "$Path/$ChildPath"
+    }
+    function Invoke-MockStop { throw 'mock malformed record' }
+    function Start-Process { param($FilePath, $ArgumentList, $WorkingDirectory, $WindowStyle,
+        $RedirectStandardOutput, $RedirectStandardError, [switch]$PassThru)
+        if ($FilePath -eq 'mock-node' -and $script:failFrontend) { throw 'mock frontend failure' }
+        [pscustomobject]@{Id=$(if($FilePath -eq 'mock-python'){101}else{103});StartTime=$started}
+    }
+    function Get-WorkspaceProcess { param($ProcessId, $Started, $Role, $Port)
+        if ($script:recycled) { return $null }
+        [pscustomobject]@{ProcessId=$ProcessId;ParentProcessId=1;CommandLine=$Role;CreationDate=$started}
+    }
+    function Get-WorkspaceBackendChildren { return @() }
+    function Stop-Process { param($Id) $script:stopped += [int]$Id }
+    function Wait-Process { param($Id, $Timeout, $ErrorAction) }
+    foreach ($case in @('frontend-failure','record-failure','partial-record','recycled-pid')) {
+        $script:failFrontend = $case -in @('frontend-failure','recycled-pid')
+        $script:recycled = $case -eq 'recycled-pid'
+        $script:recordExists = $case -eq 'partial-record'
+        $script:stopped = @(); $backend = $null; $frontend = $null
+        $caught = ''
+        try {
+            try {
+                Invoke-Expression (($launches | ForEach-Object { $_.Extent.Text }) -join "`n")
+                throw 'mock record failure'
+            } catch { Invoke-Expression $catchText }
+        } catch { $caught = $_.Exception.Message }
+        Assert-True ($caught -like 'mock * failure') '必须保留启动的原始错误。'
+        $expected = if($case -in @('record-failure','partial-record')){'101,103'}elseif($case -eq 'frontend-failure'){'101'}else{''}
+        Assert-True (($script:stopped -join ',') -eq $expected) "未写入状态时清理本次已确认的进程失败：$case"
+    }
+}
+Write-Host '脚本解析、指纹、进程身份及启动失败清理模拟验证通过；未启动或停止服务。'

@@ -8,6 +8,8 @@ def test_quota_patch_preserves_other_settings_and_persists(client):
     worker.stop()
     worker.settings(ResearchSettings(idle_seconds=321, calls_per_hour=17, maintenance_enabled=True))
     worker._retry_at = time.time() + 600
+    worker._research_pool.wake_event.clear()
+    worker._translation_pool.wake_event.clear()
     response = client.patch('/api/research/quota-policy', json={'long_reserve': 0})
     assert response.status_code == 200
     saved = response.json()
@@ -16,7 +18,8 @@ def test_quota_patch_preserves_other_settings_and_persists(client):
     assert saved['maintenance_enabled'] and not saved['enabled']
     assert saved['start_remaining'] == 50 and saved['stop_remaining'] == 35
     assert worker.settings().long_reserve == 0 and worker._retry_at == 0
-    assert worker._wake.is_set()
+    assert worker._research_pool.wake_event.is_set()
+    assert worker._translation_pool.wake_event.is_set()
 
 
 def test_zero_reserve_allows_remaining_quota_but_never_exhausted_quota(client):

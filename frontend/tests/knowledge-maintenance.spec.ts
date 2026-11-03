@@ -1,4 +1,61 @@
 import { expect, test } from '@playwright/test'
+import { readFile } from 'node:fs/promises'
+import path from 'node:path'
+
+for (const scope of ['collection', 'library'] as const) {
+  test(`starting curation uses the real ${scope} scope contract`, async ({page, request}) => {
+    // Automatic curation excludes seeded examples. Exercise a genuinely
+    // imported paper in the disposable browser workspace instead.
+    const imported = await request.post('/api/papers/import', {multipart: {file: {
+      name: `curation-${scope}.pdf`, mimeType: 'application/pdf',
+      buffer: Buffer.concat([await readFile(path.resolve('test-artifacts/import-fixture.pdf')),
+        Buffer.from(`\n% curation scope ${scope}\n`)]),
+    }}})
+    expect(imported.status()).toBe(201)
+    const paper = await imported.json()
+    expect(paper.is_demo).toBe(false)
+    const collection = scope === 'collection' ? await (await request.post('/api/collections', {
+      data: {name: 'Curation scope regression'},
+    })).json() : null
+    if (collection) {
+      const added = await request.post(`/api/collections/${collection.id}/papers`, {data: {paper_ids: [paper.id]}})
+      expect(added.ok()).toBe(true)
+    }
+    await page.goto('/')
+    await page.getByRole('button', {name: '知识摄取', exact: true}).click()
+    if (collection) await page.locator('.collection-picker').selectOption(collection.id)
+    await page.getByRole('button', {name: 'AI 知识整理', exact: true}).click()
+    const start = page.locator('.maintenance-hero-actions').getByRole('button', {name: '整理当前范围', exact: true})
+    await expect(start).toBeEnabled()
+    const submitted = page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/api/knowledge/maintenance/runs')
+    await start.click()
+    const response = await submitted
+    expect(response.status(), await response.text()).toBe(200)
+    const body = response.request().postDataJSON()
+    expect(body).toEqual({scope_type: scope, ...(collection ? {scope_id: collection.id} : {}), allow_external: true})
+    const run = await response.json()
+    try {
+      expect(run.scope_type).toBe(scope)
+      expect(run.scope_id).toBe(collection?.id ?? null)
+      if (collection) {
+        expect(run.usage.paper_count).toBe(1)
+        expect(run.issues.map((issue: {proposed_action: {paper_id: string}}) => issue.proposed_action.paper_id)).toEqual([paper.id])
+      }
+      await expect(page.locator('.maintenance-status-strip')).toBeVisible()
+      await expect(page.locator('.maintenance-error')).toHaveCount(0)
+      await page.getByRole('button',{name:'后台任务',exact:true}).click()
+      const task=page.locator(`[data-task-id="${run.id}"]`)
+      await expect(task).toContainText('AI 知识整理')
+      await expect(task).toContainText(`0 / ${run.issues.length}`)
+      await task.getByRole('button',{name:'查看整理进度',exact:true}).click()
+      await expect(page.locator('.collection-picker')).toHaveValue(collection?.id??'')
+      await expect(page.locator('.maintenance-status-strip')).toContainText('排队中')
+    } finally {
+      await request.post(`/api/knowledge/maintenance/runs/${run.id}/cancel`)
+    }
+  })
+}
 
 test('scope progress includes import-triggered jobs even when the last batch is empty',async({page,request})=>{
   const paper=(await(await request.get('/api/papers')).json()).items[0]

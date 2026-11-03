@@ -126,6 +126,7 @@ kbd { font-size: 10px; padding: 2px 4px; background: var(--surface-subtle); bord
 .delete-paper-list { max-height: 240px; overflow-y: auto; padding-left: 24px; line-height: 1.7; }
 .delete-paper-list li + li { margin-top: 8px; }
 .delete-warning { line-height: 1.7; }
+.delete-scope-hint { color: var(--text-2); font-size: 13px; line-height: 1.7; margin-top: 10px; }
 @media(max-width:760px) { .library-page .paper-table { overflow-x:auto; } .library-page .paper-table-head, .library-page .paper-row { min-width:780px; } }
 .bookmarked { color: #ba9150; }
 .drop-hint { display: flex; gap: 7px; justify-content: center; margin-top: 18px; color: var(--text-3); font-size: 10px; }

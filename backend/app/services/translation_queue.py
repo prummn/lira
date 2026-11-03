@@ -435,8 +435,8 @@ def _gate(worker,job_id,item_id,manual, *, reserved=False):
             raise Deferred('user_paused' if job and job.status == 'paused' else 'cancelled')
         manual = manual or job.mode == 'selected' or item.priority > 0
         requested = bool(json.loads(job.usage_json or '{}').get('requested'))
-        if not requested and worker.profiles.priority.foreground_busy():
-            raise Deferred('foreground_queue')
+        # A foreground request has priority at shared provider admission. It
+        # does not block pretranslation from using the other account positions.
         # A selection can arrive while a quota/account RPC is preparing this
         # call, before its cancellation context exists. Recheck durable order.
         ahead = db.execute(select(TranslationJob.usage_json, TranslationItem.id, TranslationItem.work_item_id)

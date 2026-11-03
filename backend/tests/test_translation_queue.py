@@ -327,6 +327,16 @@ def test_requested_full_translation_runs_while_reader_is_present(queue):
     assert latest(queue)['completed'] == 1
 
 
+def test_automatic_pretranslation_can_use_spare_capacity_during_foreground_work(queue):
+    _, worker, provider, _, _ = queue
+    worker.settings(ResearchSettings(enabled=True, profile_id='official', idle_seconds=0))
+    enqueue(queue, mode='full', automatic=True)
+    with worker.profiles.priority.foreground_work():
+        assert worker.process_translation()
+        assert len(provider.calls) == 1
+    assert latest(queue)['completed'] == 1
+
+
 def test_requested_full_translation_finishes_current_paragraph_during_reading(queue):
     _, worker, provider, _, _ = queue
     worker.settings(ResearchSettings(enabled=True,profile_id="official",idle_seconds=180))
@@ -523,7 +533,7 @@ def test_restart_recovers_running_item_without_retranslating_completed(queue,mon
         row.items[1].status,row.items[1].phase = 'running','translating'
         db.commit()
     restarted = BackgroundResearchWorker(worker.database,worker.profiles)
-    monkeypatch.setattr(restarted,'_loop',lambda:None)
+    monkeypatch.setattr(restarted._research_pool,'start',lambda:None)
     monkeypatch.setattr(restarted._translation_pool,'start',lambda:None)
     restarted.start()
     restarted.stop()
