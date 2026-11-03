@@ -98,7 +98,7 @@ def test_investigation_material_reads_full_local_sections_beyond_initial_snapsho
     assert all(s['paper_id'] == 'p1' for s in material['sources'])
 
 
-def test_reading_and_hourly_budget_stop_agenda_calls(research):
+def test_reading_allows_agenda_but_hourly_budget_still_stops_calls(research):
     _, worker = research
     prepare(worker)
     planner = Planner()
@@ -107,14 +107,14 @@ def test_reading_and_hourly_budget_stop_agenda_calls(research):
     worker._next_scan = 0
     worker.process_next()
     worker.process_next()
-    assert not planner.calls
-    worker.profiles.priority.presence('reader', False)
+    assert planner.calls
+    count = len(planner.calls)
     with worker.database.sessions() as db:
         task = db.scalar(select(ResearchTask).where(ResearchTask.kind == 'findings'))
         task.usage_json = json.dumps({'call_times': [time.time()] * 18})
         db.commit()
     worker.process_next()
-    assert not planner.calls
+    assert len(planner.calls) == count
     assert worker.status()['reason'] == 'hourly_budget'
 
 

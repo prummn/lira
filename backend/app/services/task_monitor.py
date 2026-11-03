@@ -71,7 +71,9 @@ def monitor_maintenance_tasks(db: Session, *, reason='queued', enabled=True, mai
         work = audits(row)
         waiting = pending(row)
         processed = set(usage.get('processed_issue_ids', []))
-        current = next((i for i in waiting if i['id'] == usage.get('active_issue_id')), None) if row.status == 'running' else None
+        active_ids = {*usage.get('active_issue_ids', []), usage.get('active_issue_id')}
+        current_items = [i for i in waiting if i['id'] in active_ids] if row.status == 'running' else []
+        current = next(iter(current_items), None)
         paper_id = json.loads(current['proposed_action_json']).get('paper_id') if current else None
         scoped_ids = {json.loads(i['proposed_action_json']).get('paper_id') for i in work} - {None}
         scope_title = collection_names.get(row.scope_id)
@@ -87,6 +89,8 @@ def monitor_maintenance_tasks(db: Session, *, reason='queued', enabled=True, mai
                 i['id'] in processed and i['status'] != 'needs_review') for i in work),
             pending=len(waiting), failed=sum(i['status']=='needs_review' for i in work),
             active_paper_id=paper_id, active_paper_title=paper_names.get(paper_id),
+            active_papers=[dict(id=pid, title=paper_names.get(pid)) for i in current_items
+                if (pid := json.loads(i['proposed_action_json']).get('paper_id'))],
             reason=waiting_reason if row.status in ('queued','running') or waiting else None,
             error=row.error_message, model_name=row.model_name,
             created_at=row.created_at.replace(tzinfo=timezone.utc).isoformat(),

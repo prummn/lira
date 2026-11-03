@@ -1,5 +1,30 @@
 import { test, expect } from '@playwright/test'
 
+test('parallel paper checks remain visible in one curation batch on desktop and mobile',async({page,request})=>{
+  const papers=(await (await request.get('/api/papers')).json()).items.slice(0,2)
+  expect(papers).toHaveLength(2)
+  await page.route('**/api/research/status',async route=>{
+    const response=await route.fetch(),state=await response.json()
+    await route.fulfill({json:{...state,translation_jobs:[],analysis_tasks:[],maintenance_tasks:[{
+      id:'parallel-curation',scope_type:'library',scope_id:null,scope_title:null,status:'running',
+      paper_count:2,total:2,completed:0,pending:2,failed:0,reason:'working',error:null,model_name:'official',
+      active_paper_id:papers[0].id,active_paper_title:papers[0].title,
+      active_papers:papers.map((p:any)=>({id:p.id,title:p.title})),
+    }]}})
+  })
+  await page.goto('/')
+  await page.getByRole('button',{name:'后台任务',exact:true}).click()
+  const row=page.locator('[data-task-id="parallel-curation"]')
+  await expect(row).toContainText('正在处理 2 篇论文')
+  for(const paper of papers)await expect(row.getByRole('button',{name:paper.title,exact:true})).toBeVisible()
+  await page.setViewportSize({width:430,height:850})
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
+  await row.screenshot({path:'test-artifacts/parallel-curation-mobile.png'})
+  await row.getByRole('button',{name:papers[1].title,exact:true}).click()
+  await expect(page.getByRole('region',{name:'PDF 阅读器'})).toBeVisible()
+  await expect(page.locator('main')).toContainText(papers[1].title)
+})
+
 test('analysis stays visible through progress, navigation, reload and partial completion',async({page,request})=>{
   const paper=(await (await request.get('/api/papers')).json()).items[0]
   const task={id:'analysis-monitor',paper_id:paper.id,paper_title:paper.title,status:'queued',phase:'queued',completed_steps:0,total_steps:0,error:null}

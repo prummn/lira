@@ -13,9 +13,9 @@ import uuid
 from fastapi import HTTPException
 from sqlalchemy import case, select
 
-from ..models import Collection, IntelligenceTask, KnowledgeMaintenanceIssue, KnowledgeMaintenanceRun, ResearchControl, ResearchRevision, ResearchScope, ResearchTask, TranslationJob
+from ..models import Collection, KnowledgeMaintenanceIssue, KnowledgeMaintenanceRun, Paper, ResearchControl, ResearchRevision, ResearchScope, ResearchTask, TranslationJob
 from ..providers.base import ProviderError
-from ..providers.priority import background_call, check_background
+from ..providers.priority import scheduled_work, check_background
 from ..research_schemas import ResearchSettings
 from .research_materials import dumps, snapshot, snapshot_fingerprint, verify_article, verify_synthesis
 from .research_policy import quota_decision, observe_budget
@@ -62,8 +62,7 @@ def revision_read(revision, full=True):
 class BackgroundResearchWorker:
     def __init__(self, database, profiles):
         self.database, self.profiles = database, profiles
-        self._stop, self._wake = threading.Event(), threading.Event()
-        self._thread = None
+        self._stop = threading.Event()
         self._run_lock = threading.Lock()
         self._mutation = threading.RLock()
         self._reason, self._retry_at = 'disabled', 0
@@ -80,9 +79,16 @@ class BackgroundResearchWorker:
         self._research_served = False
         self._translation_claims = {}
         self._translation_urgent = set()
+        self._research_claims = {}
+        self._maintenance_claims = {}
+        self._control_epoch = 0
+        self._maintenance_epoch, self._investigation_epoch = 0, 0
+        self._scope_epochs, self._run_epochs = {}, {}
         from .worker_pool import WorkerPool
         self._translation_pool = WorkerPool('lira-translation', self.process_translation,
             self.profiles.worker_parallelism)
+        self._research_pool = WorkerPool('lira-research', self._research_tick,
+            self.profiles.codex_concurrency, maximum=8)
 
     def quota_policy(self, payload):
         # Merge under the same lock as full settings saves so quota edits never
@@ -100,6 +106,13 @@ class BackgroundResearchWorker:
         with self._mutation, self.database.sessions() as db:
             row = db.get(ResearchControl, 1)
             if payload is not None:
+                before = ResearchSettings.model_validate_json(row.settings_json) if row else ResearchSettings()
+                if before.profile_id != payload.profile_id or before.enabled and not payload.enabled:
+                    self._control_epoch += 1
+                if before.maintenance_enabled and not payload.maintenance_enabled:
+                    self._maintenance_epoch += 1
+                if before.investigations_enabled and not payload.investigations_enabled:
+                    self._investigation_epoch += 1
                 if row is None:
                     row = ResearchControl(id=1, settings_json=payload.model_dump_json())
                     db.add(row)
@@ -109,8 +122,10 @@ class BackgroundResearchWorker:
                 self.profiles.priority.cancel()
                 self._retry_at = 0
                 self._next_reading_scan = 0
-                self._wake.set()
-            return ResearchSettings.model_validate_json(row.settings_json) if row else ResearchSettings()
+                self.wake()
+            settings = ResearchSettings.model_validate_json(row.settings_json) if row else ResearchSettings()
+            self.profiles.priority.idle_delay = settings.idle_seconds
+            return settings
 
     def scope(self, collection_id, payload=None):
         with self._mutation, self.database.sessions() as db:
@@ -118,6 +133,9 @@ class BackgroundResearchWorker:
                 raise HTTPException(404, '专题不存在')
             row = db.get(ResearchScope, collection_id)
             if payload is not None:
+                if row is not None and (row.enabled, row.focus, json.loads(row.work_types_json)) != (
+                        payload.enabled, payload.focus.strip(), payload.work_types):
+                    self._scope_epochs[collection_id] = self._scope_epochs.get(collection_id, 0) + 1
                 if row is None:
                     row = ResearchScope(collection_id=collection_id, enabled=payload.enabled, focus=payload.focus.strip(),
                                         work_types_json=dumps(payload.work_types))
@@ -129,7 +147,7 @@ class BackgroundResearchWorker:
                 self.profiles.priority.cancel()
                 self._next_scan = 0
                 self._next_reading_scan = 0
-                self._wake.set()
+                self.wake()
             return {'enabled': row.enabled if row else False, 'focus': row.focus if row else '',
                     'work_types': json.loads(row.work_types_json) if row else ['essay']}
 
@@ -168,7 +186,7 @@ class BackgroundResearchWorker:
             if task is None:
                 raise HTTPException(409, '先完成本轮基础线索整理，再规划后续问题')
             db.commit()
-        self._wake.set()
+        self.wake()
         return task_read(task)
 
     def reading_questions(self, collection_id):
@@ -178,7 +196,7 @@ class BackgroundResearchWorker:
         with self._mutation, self.database.sessions() as db:
             tasks = reading.enqueue_reading(db, db.get(ResearchScope, collection_id))
             db.commit()
-        self._wake.set()
+        self.wake()
         return {'tasks': [task_read(task) for task in tasks]}
 
     def _current_material(self, db, task, scope):
@@ -274,7 +292,7 @@ class BackgroundResearchWorker:
             if (self._quota and not self._quota_error_code and
                     self._retry_reason in {'quota_timeout', 'quota_unavailable', 'quota_unknown', 'account_unavailable'}):
                 self._retry_at = 0
-                self._wake.set()
+                self.wake()
         return {'quota': self._quota, 'checked_at': self._quota_at,
                 'quota_error_code': self._quota_error_code,
                 'quota_attempted_at': self._quota_attempted_at or None,
@@ -326,7 +344,7 @@ class BackgroundResearchWorker:
                     db.add(task)
                 db.commit()
                 self.profiles.priority.cancel()
-                self._wake.set()
+                self.wake()
                 return task_read(task)
 
     def action(self, task_id, action):
@@ -340,7 +358,7 @@ class BackgroundResearchWorker:
             elif action == 'retry' and task.status in ('failed', 'cancelled'):
                 task.status, task.attempts, task.error = 'queued', 0, None
                 self._retry_at = 0
-                self._wake.set()
+                self.wake()
             else:
                 raise HTTPException(409, '当前任务状态不支持这项操作')
             db.commit()
@@ -349,9 +367,7 @@ class BackgroundResearchWorker:
     def start(self):
         if not self._translation_pool.can_start():
             return
-        if self._thread and self._thread.is_alive():
-            if self._stop.is_set():
-                raise RuntimeError('Background research is still draining its previous request')
+        if not self._research_pool.can_start():
             return
         with self.database.sessions() as db:
             from .translation_queue import recover
@@ -362,23 +378,25 @@ class BackgroundResearchWorker:
             for run in db.scalars(select(KnowledgeMaintenanceRun).where(KnowledgeMaintenanceRun.status == 'running')):
                 run.status = 'queued'
                 run.error_message = '服务重启后保留本地体检结果，等待额度允许时继续'
+                usage = json.loads(run.usage_json or '{}')
+                usage.pop('active_issue_id', None)
+                usage.pop('active_issue_ids', None)
+                run.usage_json = dumps(usage)
             db.commit()
         self._stop.clear()
-        self._thread = threading.Thread(target=self._loop, name='lira-background-research', daemon=True)
-        self._thread.start()
+        self._research_pool.start()
         self._translation_pool.start()
 
     def stop(self):
         self._stop.set()
         self.profiles.priority.cancel()
-        self._wake.set()
+        self.wake()
         self._translation_pool.stop()
-        if self._thread:
-            self._thread.join(timeout=10)
+        self._research_pool.stop(timeout=10)
 
     def wake(self):
-        self._wake.set()
         self._translation_pool.wake()
+        self._research_pool.wake()
 
     def process_translation(self):
         from .translation_queue import process_next
@@ -396,6 +414,7 @@ class BackgroundResearchWorker:
                 if run.status not in {'queued', 'running', 'partial'}:
                     raise HTTPException(409, '当前维护批次不能暂停')
                 run.status = 'cancelled'
+                self._run_epochs[run_id] = self._run_epochs.get(run_id, 0) + 1
                 run.finished_at = datetime.now(timezone.utc)
                 run.error_message = '已由研究者暂停，原有体检结果仍保留'
                 self.profiles.priority.cancel()
@@ -418,22 +437,20 @@ class BackgroundResearchWorker:
                 run.usage_json = dumps(usage)
                 self._retry_at = 0
             db.commit()
-        self._wake.set()
+        self.wake()
         return maintenance.serialize_run(run)
 
-    def _loop(self):
-        while not self._stop.is_set():
-            try:
-                self.process_next(translations=False)
-            except Exception:
-                # Exception text can contain model output; never put it in logs.
-                logging.getLogger(__name__).error('Background research tick failed; persisted work retained')
-                self._reason = 'service_error'
-                self._retry_at = time.time() + 60
-            self._wake.wait(3)
-            self._wake.clear()
+    def _research_tick(self):
+        try:
+            return self.process_next(translations=False)
+        except Exception:
+            # Exception text can contain model output; never put it in logs.
+            logging.getLogger(__name__).error('Background research tick failed; persisted work retained')
+            self._reason = 'service_error'
+            self._retry_at = time.time() + 60
+            return False
 
-    def _eligible(self, settings, running=False, include_maintenance=False, allow_reading=False):
+    def _eligible(self, settings, running=False, include_maintenance=False, allow_reading=False, reserved=False):
         if not settings.enabled:
             self._reason = 'disabled'
             return False
@@ -441,18 +458,9 @@ class BackgroundResearchWorker:
         if not any(p['id'] == settings.profile_id and p.get('provider_kind') == 'codex' for p in profiles):
             self._reason = 'profile_required'
             return False
-        if self.profiles.priority.foreground_busy():
-            self._reason = 'foreground_queue'
-            return False
-        if not allow_reading and not self.profiles.priority.idle(settings.idle_seconds):
-            self._reason = 'reading'
-            return False
-        with self.database.sessions() as db:
-            explicit = db.scalar(select(IntelligenceTask.id).where(IntelligenceTask.status.in_(['queued', 'running'])).limit(1))
-            if explicit and not allow_reading:
-                self._reason = 'foreground_queue'
-                return False
-        if not self._remaining_calls(settings):
+        # Foreground priority and a reader's reserved position are enforced by
+        # the shared capacity gate. Reading is not an eligibility failure.
+        if not reserved and not self._remaining_calls(settings):
             self._reason = 'hourly_budget'
             return False
         if time.time() < self._retry_at:
@@ -485,6 +493,42 @@ class BackgroundResearchWorker:
         else:
             self._retry_reason = 'cooldown'
         return decision['allowed']
+
+    def _optional_epoch(self, collection_id=None, run_id=None, deep=False):
+        with self._mutation:
+            return (self._control_epoch, self._scope_epochs.get(collection_id, 0), self._run_epochs.get(run_id, 0),
+                    self._maintenance_epoch if run_id else self._investigation_epoch if deep else 0)
+
+    def _optional_check(self, settings, *, task_id=None, run_id=None, collection_id=None, epoch=None, paper_id=None, deep=False):
+        control = self.settings()
+        stopped = self._stop.is_set() and threading.current_thread() in self._research_pool.threads
+        allowed = control.enabled and control.profile_id == settings.profile_id and not stopped
+        allowed = allowed and (epoch is None or epoch == self._optional_epoch(collection_id, run_id, deep))
+        with self.database.sessions() as db:
+            if task_id:
+                task = db.get(ResearchTask, task_id)
+                scope = db.get(ResearchScope, task.collection_id) if task else None
+                allowed = allowed and bool(task and task.status == 'running' and scope and scope.enabled)
+                allowed = allowed and bool(task and (task.kind not in agenda.DEEP_KINDS or control.investigations_enabled))
+            if run_id:
+                run = db.get(KnowledgeMaintenanceRun, run_id)
+                allowed = allowed and control.maintenance_enabled and bool(run and run.status == 'running')
+            if paper_id:
+                paper = db.get(Paper, paper_id)
+                allowed = allowed and bool(paper and not paper.is_demo)
+        if not allowed:
+            raise ProviderError('后台任务已暂停，已有检查点保留', 409, code='background_preempted')
+
+    def _optional_admission(self, settings, **owner):
+        self._optional_check(settings, **owner)
+        if not self._eligible(settings, running=True, reserved=True):
+            raise ProviderError('后台任务等待额度或预算策略允许', 409, code='background_preempted')
+
+    def _reserve_optional_call(self, settings):
+        # Call under _mutation, shared with translation's budget reservation.
+        if not self._remaining_calls(settings):
+            self._reason = 'hourly_budget'
+            raise ProviderError('本小时后台调用预算已用完', 409, code='background_preempted')
 
     def _remaining_calls(self, settings):
         with self.database.sessions() as db:
@@ -530,92 +574,121 @@ class BackgroundResearchWorker:
 
     def _process_maintenance(self, settings):
         self._maybe_enqueue_maintenance(settings)
-        with self.database.sessions() as db:
+        closed_empty = False
+        with self._mutation, self.database.sessions() as db:
             research_ready = db.scalar(select(ResearchTask.id).join(ResearchScope,
                 ResearchScope.collection_id == ResearchTask.collection_id).where(
-                ResearchTask.status.in_(['queued', 'running', 'paused']), ResearchScope.enabled == True)
+                ResearchTask.status.in_(['queued', 'paused']), ResearchScope.enabled == True,
+                ResearchTask.collection_id.not_in(list(self._research_claims.values())))
                 .where(True if settings.investigations_enabled else ~ResearchTask.kind.in_(agenda.DEEP_KINDS)).limit(1))
             if research_ready and not self._research_served:
                 self._reason = 'research_queue'
                 return False
             runs = db.scalars(select(KnowledgeMaintenanceRun).where(
-                KnowledgeMaintenanceRun.status.in_(['queued', 'partial'])
+                KnowledgeMaintenanceRun.status.in_(['queued', 'running', 'partial'])
             ).order_by(KnowledgeMaintenanceRun.created_at, KnowledgeMaintenanceRun.id)).all()
             runs.sort(key=lambda item: not bool(json.loads(item.usage_json).get('call_times')))
-            run = None
+            run, chosen = None, None
+            busy_papers = {paper_id for _, paper_id in self._maintenance_claims.values()}
             for item in runs:
-                if item.status == 'queued':
-                    run = item
-                    break
+                previous_usage = item.usage_json
+                maintenance._upgrade_run(db, item)
+                maintenance.skip_demo_audits(db, item)
+                if item.usage_json != previous_usage or item.status == 'failed':
+                    db.commit()
+                if item.status == 'queued' and not maintenance.pending_audit_issues(db, item):
+                    # A newly scoped batch can contain zero audits because all
+                    # current paper snapshots were already checked elsewhere.
+                    # Finish locally instead of leaving an immortal queue row.
+                    item.status, item.finished_at, item.error_message = 'complete', datetime.now(timezone.utc), None
+                    db.commit()
+                    closed_empty = True
+                    continue
                 pending = maintenance.ready_audit_issues(db, item)
-                if pending:
+                chosen = next((issue for issue in pending if issue.id not in self._maintenance_claims
+                    and json.loads(issue.proposed_action_json).get('paper_id') not in busy_papers), None)
+                if chosen is not None:
                     run = item
                     break
         if run is None:
-            return False
+            return closed_empty
         started = bool(json.loads(run.usage_json).get('call_times'))
         if not self._eligible(settings, running=started, include_maintenance=True):
             return False
-        did_work = False
+        self._maintenance_claims[chosen.id] = (run.id, json.loads(chosen.proposed_action_json).get('paper_id'))
+        owner = dict(run_id=run.id, epoch=self._optional_epoch(run_id=run.id),
+                     paper_id=json.loads(chosen.proposed_action_json).get('paper_id'))
+        # Claims and queue selection are short. Never hold the dispatcher across
+        # a model request; another worker can check another paper in this batch.
+        self._run_lock.release()
         try:
             provider = self.profiles.subscription_provider(settings.profile_id)
-            for step in range(min(1 if research_ready else settings.maintenance_calls_per_run, self._remaining_calls(settings))):
-                # Commit each checkpoint before another quota read. This also
-                # lets foreground work and settings changes stop a long batch.
-                if step and not self._eligible(settings, running=True, include_maintenance=True):
-                    return did_work
-                self._reason = 'maintenance_working'
-                with background_call(self.profiles.priority):
-                    control = self.settings()
-                    if (not self.profiles.priority.idle(settings.idle_seconds) or not control.enabled
-                            or not control.maintenance_enabled or control.profile_id != settings.profile_id):
-                        self._reason = 'maintenance_reading'
-                        return did_work
-                    with self.database.sessions() as db:
-                        current = db.get(KnowledgeMaintenanceRun, run.id)
-                        if current is None or current.status not in {'queued', 'partial'}:
-                            return did_work
-                        maintenance.execute_run(db, current, provider, max_calls=1)
-                        db.commit()
-                        did_work = True
-                        self._research_served = False
-                        if current.status == 'partial':
-                            self._reason = 'maintenance_error' if current.error_message and '调用上限' not in current.error_message else 'maintenance_partial'
-                            if self._reason == 'maintenance_error':
-                                self._retry_at = time.time() + 60
-                                break
-                        else:
-                            self._reason = 'up_to_date'
-                            break
-            return did_work
+            self._reason = 'maintenance_working'
+            with scheduled_work(4, lambda: self._optional_check(settings, **owner),
+                    admission=lambda: self._optional_admission(settings, **owner)):
+                with self.database.sessions() as db:
+                    current = db.get(KnowledgeMaintenanceRun, run.id)
+                    if current is None or current.status not in {'queued', 'partial', 'running'}:
+                        return False
+                    maintenance.execute_run(db, current, provider, max_calls=1, issue_id=chosen.id,
+                        checkpoint_lock=self._mutation,
+                        reserve_call=lambda: (self._optional_check(settings, **owner), self._reserve_optional_call(settings)))
+                    self._research_served = False
+                    self._reason = 'maintenance_working' if current.status == 'running' else (
+                        'maintenance_partial' if current.status == 'partial' else 'up_to_date')
+                    return True
         except ProviderError as error:
-            with self.database.sessions() as db:
+            with self._mutation, self.database.sessions() as db:
                 current = db.get(KnowledgeMaintenanceRun, run.id)
-                if current:
-                    current.status = 'partial'
+                if current and current.status != 'cancelled':
+                    current.status = 'running' if json.loads(current.usage_json or '{}').get('active_issue_ids') else 'partial'
                     current.error_message = str(error)
                     current.finished_at = datetime.now(timezone.utc)
                     db.commit()
-            self._reason = 'maintenance_error'
-            self._retry_at = time.time() + 60
+            if error.code != 'background_preempted':
+                self._reason = 'maintenance_error'
+                self._retry_at = time.time() + 60
             return False
+        finally:
+            self._run_lock.acquire()
+            # Metadata preparation or budget admission can fail before the
+            # model stage's normal cleanup. Remove only this owner's marker.
+            try:
+                with self._mutation, self.database.sessions() as db:
+                    current = db.get(KnowledgeMaintenanceRun, run.id)
+                    usage = json.loads(current.usage_json or '{}') if current else {}
+                    if chosen.id in usage.get('active_issue_ids', []):
+                        usage['active_issue_ids'] = [key for key in usage['active_issue_ids'] if key != chosen.id]
+                        usage['active_issue_id'] = next(iter(usage['active_issue_ids']), None)
+                        current.usage_json = dumps(usage)
+                        if current.status == 'running' and not usage['active_issue_ids']:
+                            current.status = 'partial'
+                        db.commit()
+            finally:
+                self._maintenance_claims.pop(chosen.id, None)
 
     def process_next(self, *, translations=True):
-        if not self._run_lock.acquire(blocking=False):
+        if not self._run_lock.acquire(timeout=1):
             return False
         try:
-            # No generation can be running while this lock is free. Recover
-            # jobs left by a failed checkpoint commit, not just process exits.
+            # Only recover orphaned checkpoints. Other pool workers may own
+            # running jobs while this short dispatcher lock is free.
             with self._mutation, self.database.sessions() as db:
-                stranded = db.scalars(select(ResearchTask).where(ResearchTask.status == 'running')).all()
+                stranded = db.scalars(select(ResearchTask).where(ResearchTask.status == 'running',
+                    ResearchTask.id.not_in(list(self._research_claims)))).all()
                 for job in stranded:
                     job.attempts += 1
                     job.status = 'paused' if job.attempts < 2 else 'failed'
                     job.error = '上一步保存未完成，已有文章与检查点已保留'
-                unfinished = db.scalars(select(KnowledgeMaintenanceRun).where(KnowledgeMaintenanceRun.status == 'running')).all()
+                unfinished = db.scalars(select(KnowledgeMaintenanceRun).where(KnowledgeMaintenanceRun.status == 'running',
+                    KnowledgeMaintenanceRun.id.not_in([run_id for run_id, _ in self._maintenance_claims.values()]))).all()
                 for run in unfinished:
                     run.status = 'partial'
                     run.error_message = '上次整理中断，已完成的论文检查点保留，可继续'
+                    usage = json.loads(run.usage_json or '{}')
+                    usage.pop('active_issue_id', None)
+                    usage.pop('active_issue_ids', None)
+                    run.usage_json = dumps(usage)
                 if stranded or unfinished:
                     db.commit()
             settings = self.settings()
@@ -639,7 +712,7 @@ class BackgroundResearchWorker:
             if not settings.enabled:
                 self._reason = 'disabled'
                 return False
-            # Reserve a serial checkpoint for knowledge work between research
+            # Reserve a turn for knowledge work between research
             # stages; an endless essay/planning queue must not starve curation.
             if settings.maintenance_enabled and self._research_served:
                 if self._process_maintenance(settings):
@@ -653,7 +726,8 @@ class BackgroundResearchWorker:
             with self.database.sessions() as db:
                 task = db.scalar(select(ResearchTask).join(ResearchScope,
                     ResearchScope.collection_id == ResearchTask.collection_id).where(
-                    ResearchTask.status.in_(['queued', 'paused']), ResearchScope.enabled == True)
+                    ResearchTask.status.in_(['queued', 'paused']), ResearchScope.enabled == True,
+                    ResearchTask.collection_id.not_in(list(self._research_claims.values())))
                     .where(True if settings.investigations_enabled else ~ResearchTask.kind.in_(agenda.DEEP_KINDS))
                     .order_by(case((ResearchTask.stage.in_(['assess', 'draft', 'review']), 0), else_=1),
                               case((ResearchTask.calls > 0, 0), else_=1),
@@ -687,7 +761,7 @@ class BackgroundResearchWorker:
                 if time.time() - self._quota_at >= 60 and self.profiles.priority.idle(settings.idle_seconds):
                     if not self._eligible(settings):
                         return False
-                self._reason = 'up_to_date'
+                self._reason = 'working' if self._research_claims or self._maintenance_claims else 'up_to_date'
                 return False
             if not self._eligible(settings, running=task.calls > 0 or task.stage not in ('synthesis', 'discover', 'plan')):
                 return False
@@ -699,9 +773,15 @@ class BackgroundResearchWorker:
                     db.commit()
                     self._next_scan = 0
                     return False
-            self._step(task.id, settings)
+            self._research_claims[task.id] = task.collection_id
+            self._run_lock.release()
+            try:
+                advanced = self._step(task.id, settings)
+            finally:
+                self._run_lock.acquire()
+                self._research_claims.pop(task.id, None)
             self._research_served = True
-            return True
+            return advanced is not False
         finally:
             self._run_lock.release()
 
@@ -710,7 +790,13 @@ class BackgroundResearchWorker:
             task = db.get(ResearchTask, task_id)
             if task is None or task.status not in ACTIVE:
                 return
+            if not self._remaining_calls(settings):
+                self._reason = 'hourly_budget'
+                return False
             previous_error = task.error
+            owner = dict(task_id=task_id, collection_id=task.collection_id,
+                         deep=task.kind in agenda.DEEP_KINDS,
+                         epoch=self._optional_epoch(collection_id=task.collection_id, deep=task.kind in agenda.DEEP_KINDS))
             task.status, task.error = 'running', None
             task.calls += 1
             usage = json.loads(task.usage_json)
@@ -769,14 +855,11 @@ class BackgroundResearchWorker:
             if checkpoint.get('validation_stage') == stage:
                 context['rejected_draft'] = checkpoint.get('validation_draft')
                 system += '\n上次草稿未通过本地校验。rejected_draft保留了待修稿，请按previous_validation_error定点修正；引文须重新从本轮sources逐字摘取，不能沿用不匹配的改写。'
-            with background_call(self.profiles.priority):
-                # Close the race between eligibility and registering cancellation.
-                if not self.profiles.priority.idle(settings.idle_seconds) or not self.settings().enabled:
-                    raise ProviderError('让出通道', 409, code='background_preempted')
+            with scheduled_work(4, lambda: self._optional_check(settings, **owner),
+                    admission=lambda: self._optional_admission(settings, **owner)):
+                self._optional_check(settings, **owner)
                 if task.kind in agenda.DEEP_KINDS and not self.settings().investigations_enabled:
                     raise ProviderError('已暂停深入研究', 409, code='background_preempted')
-                if self._thread is threading.current_thread() and self._stop.is_set():
-                    raise ProviderError('服务已停止', 409, code='background_preempted')
                 with self.database.sessions() as db:
                     latest = db.get(ResearchTask, task_id)
                     scope = db.get(ResearchScope, task.collection_id)
@@ -832,7 +915,9 @@ class BackgroundResearchWorker:
                     return
                 scope = db.get(ResearchScope, task.collection_id)
                 control = self.settings()
-                if not scope or not scope.enabled or not control.enabled or control.profile_id != settings.profile_id or (task.kind in agenda.DEEP_KINDS and not control.investigations_enabled):
+                if (not scope or not scope.enabled or not control.enabled or control.profile_id != settings.profile_id
+                        or owner['epoch'] != self._optional_epoch(collection_id=task.collection_id, deep=owner['deep'])
+                        or task.kind in agenda.DEEP_KINDS and not control.investigations_enabled):
                     task.status = 'paused'
                     db.commit()
                     return
@@ -884,7 +969,8 @@ class BackgroundResearchWorker:
                     return
                 if isinstance(error, ProviderError) and error.code == 'background_preempted':
                     task.status, task.error = 'paused', None
-                    self._reason = 'reading'
+                    if self._reason in {'working', 'allowed'}:
+                        self._reason = 'queued'
                 else:
                     task.attempts += 1
                     task.status = 'failed' if task.attempts >= 2 else 'queued'

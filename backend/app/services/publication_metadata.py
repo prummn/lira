@@ -195,7 +195,7 @@ def _crossref(payload, paper: Paper, url: str, expected_doi: str | None = None) 
 
 
 def enrich_publication(session: Session, paper: Paper, *, client: httpx.Client | None = None,
-                       allow_external: bool = True, force: bool = False) -> dict:
+                       allow_external: bool = True, force: bool = False, checkpoint_lock=None) -> dict:
     """Fill trustworthy missing publication metadata; caller owns the transaction.
 
     At most three fixed-host requests and a twelve-second network budget. The
@@ -249,10 +249,11 @@ def enrich_publication(session: Session, paper: Paper, *, client: httpx.Client |
     network = client or httpx.Client(transport=httpx.HTTPTransport(retries=0, trust_env=False),
                                     trust_env=False, follow_redirects=False)
 
-    def request(url: str, params: dict | None = None):
+    def fetch(url: str, params: dict | None = None):
         remaining = _DEADLINE - (time.monotonic() - started)
         if report['request_count'] >= _MAX_REQUESTS or remaining <= 0:
             return None, url
+
         report['request_count'] += 1
         try:
             timeout = httpx.Timeout(min(4.0, remaining), connect=min(2.0, remaining))
@@ -272,6 +273,22 @@ def enrich_publication(session: Session, paper: Paper, *, client: httpx.Client |
         except (httpx.HTTPError, ValueError, OSError):
             report['warnings'].append('公开元数据服务暂不可用，已保留原有字段')
             return None, url
+
+    def request(url: str, params: dict | None = None):
+        nonlocal sources
+        if checkpoint_lock is None:
+            return fetch(url, params)
+        # Do not hold SQLite's writer or the worker's checkpoint mutex during
+        # a public metadata request. Rebase manual-source protection afterwards.
+        paper.metadata_sources_json = json.dumps(sources, ensure_ascii=False)
+        session.commit()
+        checkpoint_lock.release()
+        try:
+            return fetch(url, params)
+        finally:
+            checkpoint_lock.acquire()
+            session.expire_all()
+            sources = _object(paper.metadata_sources_json)
 
     def missing():
         return any(getattr(paper, key) is None and sources.get(key) != 'manual' for key in ('year', 'venue', 'doi'))

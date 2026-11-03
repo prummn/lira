@@ -27,6 +27,7 @@ class ProfileStore:
         self._condition = threading.Condition()
         self._in_use: dict[str, int] = {}
         self._background_use: dict[str, int] = {}
+        self._deferred_use: dict[str, int] = {}
         self._waiting: dict[str, list] = {}
         self._adaptive: dict[str, dict] = {}
         from .priority import ResearchPriority
@@ -299,19 +300,31 @@ class ProfileStore:
             with self._condition:
                 waiting = self._waiting.setdefault(profile_id, [])
                 waiting.append((ticket, rank))
-                try:
-                    while True:
-                        check_background()
+            try:
+                while True:
+                    # Scheduled cancellation may read checkpoints or acquire a
+                    # worker lock. Never hold the shared admission mutex here:
+                    # foreground admission and in-flight release must stay free.
+                    check_background()
+                    with self._condition:
                         configured = self.codex_concurrency() if profile_id == 'codex-subscription' else limit
                         effective_limit = self._effective_limit(profile_id, configured)
                         first = min(waiting, key=lambda item: item[1]() if callable(item[1]) else item[1])[0] is ticket
-                        full = self._in_use.get(profile_id, 0) >= effective_limit
-                        # Idle capacity is borrowable. Rank-0 requests win the
-                        # next slot without cancelling already paid generation.
+                        current_rank = rank() if callable(rank) else rank
+                        reserve = int(background and current_rank >= 2 and effective_limit > 1
+                                      and not self.priority.idle(self.priority.idle_delay))
+                        full = (self._in_use.get(profile_id, 0) >= effective_limit or
+                                reserve and self._deferred_use.get(profile_id, 0) >= effective_limit - 1)
+                        # Reading keeps one interactive position. With one
+                        # position, or no reader, background can borrow it all.
+                        # Already admitted requests finish and retain results.
                         if first and not full:
                             self._in_use[profile_id] = self._in_use.get(profile_id, 0) + 1
                             if background:
                                 self._background_use[profile_id] = self._background_use.get(profile_id, 0) + 1
+                            deferred = background and current_rank >= 2
+                            if deferred:
+                                self._deferred_use[profile_id] = self._deferred_use.get(profile_id, 0) + 1
                             break
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
@@ -319,7 +332,8 @@ class ProfileStore:
                                 code='local_capacity', retryable=True, retry_after=1,
                                 diagnostics={'request_sent': False})
                         self._condition.wait(timeout=min(.2, remaining))
-                finally:
+            finally:
+                with self._condition:
                     waiting.remove((ticket, rank))
                     if not waiting:
                         self._waiting.pop(profile_id, None)
@@ -340,4 +354,6 @@ class ProfileStore:
                     self._in_use[profile_id] -= 1
                     if background:
                         self._background_use[profile_id] -= 1
+                    if deferred:
+                        self._deferred_use[profile_id] -= 1
                     self._condition.notify_all()

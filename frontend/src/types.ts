@@ -51,6 +51,7 @@ export interface MaintenanceTaskSummary {
   id:string;scope_type:MaintenanceRun['scope_type'];scope_id:string|null;scope_title:string|null;status:MaintenanceRun['status']
   paper_count:number;total:number;completed:number;pending:number;failed:number;reason:string|null
   active_paper_id:string|null;active_paper_title:string|null;error:string|null;model_name:string|null
+  active_papers?:Array<{id:string;title:string|null}>
 }
 export interface MaintenanceBacklog {pending_papers:number;review_papers:number;checked_papers:number;pending_objects:number;pending_relations:number;items:Array<{paper_id:string;title:string;status:'running'|'queued'|'retry_wait'|'failed'|'untracked'|'needs_review';run_id:string|null;pending_objects:number;pending_relations:number;error:string|null}>}
 export interface ResearchBudget {allowed:boolean;reason:string;allowance?:number;observed_use?:number;remaining?:number;resumes_at?:number;resets_at?:number;day?:string}

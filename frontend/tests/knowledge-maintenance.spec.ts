@@ -1,8 +1,19 @@
 import { expect, test } from '@playwright/test'
+import { readFile } from 'node:fs/promises'
+import path from 'node:path'
 
 for (const scope of ['collection', 'library'] as const) {
   test(`starting curation uses the real ${scope} scope contract`, async ({page, request}) => {
-    const paper = (await (await request.get('/api/papers')).json()).items[0]
+    // Automatic curation excludes seeded examples. Exercise a genuinely
+    // imported paper in the disposable browser workspace instead.
+    const imported = await request.post('/api/papers/import', {multipart: {file: {
+      name: `curation-${scope}.pdf`, mimeType: 'application/pdf',
+      buffer: Buffer.concat([await readFile(path.resolve('test-artifacts/import-fixture.pdf')),
+        Buffer.from(`\n% curation scope ${scope}\n`)]),
+    }}})
+    expect(imported.status()).toBe(201)
+    const paper = await imported.json()
+    expect(paper.is_demo).toBe(false)
     const collection = scope === 'collection' ? await (await request.post('/api/collections', {
       data: {name: 'Curation scope regression'},
     })).json() : null

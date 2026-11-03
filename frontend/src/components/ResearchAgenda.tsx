@@ -3,7 +3,7 @@ import type { ReadingOrigin, ResearchAgendaState } from '../types'
 import './research-agenda.css'
 
 const active=(status:string)=>['queued','running','paused'].includes(status)
-const label=(status:string,stage:string)=>status==='running'?(stage==='plan'?'规划问题':stage==='assess'?'核对原文':'正在研读'):({queued:'待研读',paused:'等待空闲',completed:'已完成',failed:'待重试',cancelled:'已取消',superseded:'材料已更新'} as Record<string,string>)[status]??status
+const label=(status:string,stage:string)=>status==='running'?(stage==='plan'?'规划问题':stage==='assess'?'核对原文':'正在研读'):({queued:'待研读',paused:'等待继续',completed:'已完成',failed:'待重试',cancelled:'已取消',superseded:'材料已更新'} as Record<string,string>)[status]??status
 
 export function ResearchAgenda({agenda,busy,start,action,openResult,openOrigin,canPlan=true}:{agenda:ResearchAgendaState;busy:boolean;start:()=>void;action:(id:string,action:'retry'|'cancel')=>void;openResult:(id:string)=>void;openOrigin?:(origin:ReadingOrigin)=>void;canPlan?:boolean}) {
   const tasks=agenda.tasks, planner=agenda.planner

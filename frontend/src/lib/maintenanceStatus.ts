@@ -10,6 +10,7 @@ const reasons:Record<string,LocaleKey>={reading:'curationWaitingReading',mainten
   quota_unknown:'quotaQueryHint',quota_timeout:'quotaQueryTimeout',quota_unavailable:'quotaQueryFailed',quota_stale:'quotaQueryHint',
   retry_wait:'curationRetryWait',cooldown:'curationRetryWait',maintenance_error:'curationRetryWait'}
 export function maintenanceStatus(task:MaintenanceTaskSummary,t:(key:LocaleKey)=>string){
+  if(task.status==='running'&&(task.active_papers?.length??0)>1)return t('curationParallel').replace('{count}',String(task.active_papers!.length))
   if(task.status==='running'&&task.active_paper_title)return `${t('maintenanceRunning')} · ${task.active_paper_title}`
   const state=t(task.status==='partial'&&task.pending>0?'maintenanceQueued':states[task.status])
   const reason=activeMaintenance(task)&&task.reason?reasons[task.reason]:undefined

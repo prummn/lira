@@ -251,7 +251,7 @@ class MaintenanceWriter:
         return {'summary': 'Checked the supplied paper', 'candidates': [], 'relations': [], 'reviews': []}
 
 
-def test_maintenance_waits_for_reading_and_uses_shared_quota_gate(research):
+def test_maintenance_continues_during_reading_and_uses_shared_quota_gate(research):
     client, worker = research
     from app.models import KnowledgeMaintenanceRun
     from app.services.knowledge_maintenance import prepare_run
@@ -267,13 +267,11 @@ def test_maintenance_waits_for_reading_and_uses_shared_quota_gate(research):
     writer = MaintenanceWriter()
     worker.profiles.subscription_provider = lambda _: writer
     worker.profiles.priority.presence('reading-tab', True)
-    assert worker.process_next() is False
-    assert worker.status()['reason'] == 'reading'
-    worker.profiles.priority.presence('reading-tab', False)
     assert worker.process_next() is True, worker.status()
     assert worker.status()['maintenance']['status'] == 'partial'
     assert worker.process_next() is True, worker.status()
     assert worker.status()['maintenance']['status'] == 'complete'
+    worker.profiles.priority.presence('reading-tab', False)
     with worker.database.sessions() as db:
         run = db.scalar(select(KnowledgeMaintenanceRun).order_by(KnowledgeMaintenanceRun.created_at.desc()))
         assert json.loads(run.usage_json)['total_tokens'] == 104
