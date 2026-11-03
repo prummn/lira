@@ -10,6 +10,7 @@ import { ResearchFindings } from './ResearchFindings'
 import { ResearchBudget } from './ResearchBudget'
 import { useUi } from '../lib/i18n'
 import './collection-research.css'
+import {activeMaintenance} from '../lib/maintenanceStatus'
 
 const reasons:Record<string,string> = {
   disabled:'后台研究已暂停', profile_required:'选择官方连接后即可开始', reading:'正在让出通道，优先保障阅读',
@@ -64,8 +65,9 @@ export function ResearchStatusButton({open,status,error}:{open:()=>void;status:R
   const translating=jobs.find(job=>job.status==='running')
   const analyses=(status?.analysis_tasks??[]).filter(task=>['queued','running'].includes(task.status))
   const analyzing=analyses.find(task=>task.status==='running')
-  const count=jobs.length+analyses.length
-  const working=!!analyzing||!!translating||!!status?.tasks.some(task=>task.status==='running')||status?.reason==='maintenance_working'
+  const curation=(status?.maintenance_tasks??[]).filter(activeMaintenance)
+  const count=jobs.length+analyses.length+curation.length
+  const working=!!analyzing||!!translating||curation.some(task=>task.status==='running')||!!status?.tasks.some(task=>task.status==='running')||status?.reason==='maintenance_working'
   const label=error?t('backgroundDisconnected'):analyzing?(analyzing.total_steps>0?`${t('backgroundAnalyzing')} ${analyzing.completed_steps} / ${analyzing.total_steps}`:t('aiRunning')):translating?`${translating.completed} / ${translating.total}`:count?`${count} ${t('backgroundTaskUnit')}`:working?t('backgroundWorking'):status?.settings.enabled?t('backgroundStandby'):t('queuePaused')
   return <button className="research-sidebar" aria-label={t('background')} onClick={open} title={`${t('background')} · ${label}`}><span className={'research-status-dot '+(working?'is-working':'')}/><span>{t('background')}</span><small>{label}</small></button>
 }

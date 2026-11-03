@@ -36,6 +36,7 @@ async function loadPapers() {
   return {items:[...new Map(items.map(p=>[p.id,p])).values()],total:first.total}
 }
 export const api = {
+  knowledgePapers: (collectionId?:string) => request<{items:import('../types').KnowledgePaperSummary[]}>(`/knowledge/papers${collectionId?'?collection_id='+encodeURIComponent(collectionId):''}`),
   researchStatus: () => request<ResearchStatus>('/research/status'),
   researchQuota: () => request<{quota:ResearchStatus['quota'];checked_at:number;available:boolean;quota_error_code?:string|null;quota_using_recent?:boolean;budget?:ResearchStatus['budget']}>('/research/quota'),
   followReading: (id:string) => request<{tasks:ResearchTask[]}>(`/research/collections/${encodeURIComponent(id)}/reading`, {method:'POST'}),

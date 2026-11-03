@@ -9,6 +9,7 @@ const candidate = (id:string,paper_id:string,name:string,type:KnowledgeCandidate
 
 async function field(page:Page, papers:PaperDetail[], candidates:KnowledgeCandidate[]=[]) {
   await page.route(/\/api\/papers(?:\?.*)?$/,route=>route.fulfill({json:{items:papers}}))
+  await page.route('**/api/knowledge/papers*',route=>route.fulfill({json:{items:papers}}))
   for(const paper of papers) await page.route(`**/api/papers/${paper.id}`,route=>route.fulfill({json:paper}))
   await page.route('**/api/knowledge/overview*',route=>route.fulfill({json:{candidates,relations:[]}}))
   await page.route('**/api/knowledge/entities*',route=>route.fulfill({json:{items:[]}}))

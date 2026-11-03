@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, ArrowUpRight, Check, ChevronRight, CircleDashed, LoaderCircle, Pause, Play, RotateCcw, Sparkles, Undo2, X } from 'lucide-react'
 import { api, errorMessage } from '../lib/api'
 import { useUi } from '../lib/i18n'
-import type { MaintenanceBacklog, MaintenanceIssue, MaintenanceRunDetail, MaintenanceScope } from '../types'
+import type { MaintenanceBacklog, MaintenanceIssue, MaintenanceRunDetail, MaintenanceScope, MaintenanceTaskSummary } from '../types'
+import {maintenanceStatus} from '../lib/maintenanceStatus'
 import type { PdfLocator } from './PdfViewer'
 import './knowledge-maintenance.css'
 
@@ -21,10 +22,12 @@ const statusKeys: Record<MaintenanceRunDetail['status'], 'maintenanceQueued'|'ma
   queued: 'maintenanceQueued', running: 'maintenanceRunning', partial: 'maintenancePartial', complete: 'maintenanceComplete', cancelled: 'maintenanceCancelled', failed: 'maintenanceFailed',
 }
 
-export function KnowledgeMaintenance({ scopeType, scopeId, paperIds, openPaper }: {
+export function KnowledgeMaintenance({ scopeType, scopeId, paperIds, openPaper, initialRunId, tasks }: {
   scopeType: ScopeType
   scopeId?: string
   paperIds?: string[]
+  initialRunId?: string
+  tasks?: MaintenanceTaskSummary[]
   openPaper: (id: string, locator?: PdfLocator) => void
 }) {
   const { t } = useUi()
@@ -35,38 +38,39 @@ export function KnowledgeMaintenance({ scopeType, scopeId, paperIds, openPaper }
   const [busy, setBusy] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const generation=useRef(0)
+  const chosenRun=useRef(initialRunId)
 
   const load = async () => {
+    const current=++generation.current
     setLoading(true)
     try {
-      const [list, current] = await Promise.all([
-        api.maintenanceRuns(20, {type: scopeType, id: scopeId}),
-        api.maintenanceBacklog({type:scopeType,id:scopeId,paperIds}),
-      ])
-      const latest = list.items[0]
-      const detail = latest ? await api.maintenanceRun(latest.id) : null
+      const id=chosenRun.current??(await api.maintenanceRuns(1, {type: scopeType, id: scopeId})).items[0]?.id
+      const detail = id ? await api.maintenanceRun(id) : null
+      if(current!==generation.current)return
       setRun(detail)
-      setBacklog(current)
       setSelectedId(current => detail?.issues.some(issue => issue.id === current) ? current : detail?.issues[0]?.id ?? '')
       setError('')
     } catch (cause) {
-      setError(errorMessage(cause))
+      if(current===generation.current)setError(errorMessage(cause))
     } finally {
-      setLoading(false)
+      if(current===generation.current)setLoading(false)
     }
   }
 
-  useEffect(() => { setBacklog(null); void load() }, [scopeType, scopeId, paperIds?.join(',')])
+  useEffect(() => { setBacklog(null); void load();return()=>{generation.current++} }, [scopeType, scopeId, paperIds?.join(',')])
   useEffect(()=>{
     let active=true
+    let timer:ReturnType<typeof setTimeout>
     const refresh=async()=>{
       try {
         const current=await api.maintenanceBacklog({type:scopeType,id:scopeId,paperIds})
         if(active)setBacklog(current)
-      } catch { if(active)setBacklog(null) }
+      } catch { /* Retain last known counts through a transient failure. */ }
+      if(active)timer=setTimeout(()=>void refresh(),5000)
     }
-    const timer=setInterval(()=>void refresh(),5000)
-    return()=>{active=false;clearInterval(timer)}
+    void refresh()
+    return()=>{active=false;clearTimeout(timer)}
   },[scopeType,scopeId,paperIds?.join(',')])
   useEffect(() => {
     if (!run || !['queued','running','partial'].includes(run.status)) return
@@ -96,6 +100,7 @@ export function KnowledgeMaintenance({ scopeType, scopeId, paperIds, openPaper }
   const critical = run?.issues.filter(issue => issue.severity === 'critical' && issue.status==='needs_review').length ?? 0
   const applied=run?(typeof run.usage.auto_actions==='number'?number(run.usage.auto_actions):run.applied_count):0
 
+  const task=tasks?.find(item=>item.id===run?.id)
   const refresh = async () => { await load() }
   const start = async () => {
     setBusy('start'); setError('')
@@ -106,6 +111,7 @@ export function KnowledgeMaintenance({ scopeType, scopeId, paperIds, openPaper }
           ? {scope_type: 'papers', paper_ids: paperIds ?? []}
           : {scope_type: 'library'}
       const detail = await api.createMaintenanceRun({...scope, allow_external: true})
+      chosenRun.current=detail.id
       setRun(detail); setSelectedId(detail.issues[0]?.id ?? '')
     } catch (cause) { setError(errorMessage(cause)) } finally { setBusy('') }
   }
@@ -155,9 +161,9 @@ export function KnowledgeMaintenance({ scopeType, scopeId, paperIds, openPaper }
     {run && <>
       <div className="maintenance-status-strip">
         <span className={`maintenance-status-dot status-${run.status}`} />
-        <strong>{t(statusKeys[run.status])}</strong>
+        <strong>{task?maintenanceStatus(task,t):t(statusKeys[run.status])}</strong>{task&&<span>{task.completed} / {task.total} {t('curationPaperUnit')}</span>}
         <span className="maintenance-status-copy">{run.error_message&&['failed','partial'].includes(run.status)?run.error_message:t('maintenanceModelHint')}</span>
-        <time>{run.finished_at ? new Date(run.finished_at).toLocaleString() : t('maintenanceRunning')}</time>
+        {run.finished_at&&['complete','failed','cancelled'].includes(run.status)&&<time>{new Date(run.finished_at).toLocaleString()}</time>}
       </div>
       <div className="maintenance-metrics">
         <button className={filter === 'applied' ? 'active' : ''} onClick={() => setFilter(filter === 'applied' ? 'all' : 'applied')}><Check size={15}/><span><strong>{applied}</strong>{t('maintenanceApplied')}</span></button>

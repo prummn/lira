@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowUpRight, Clock3, Download, GitBranch, Inbox, Link2, Sparkles, SlidersHorizontal, Table2 } from 'lucide-react'
+import { ArrowUpRight, Clock3, Download, GitBranch, Inbox, Link2, LoaderCircle, Sparkles, SlidersHorizontal, Table2 } from 'lucide-react'
 import { api, errorMessage } from '../lib/api'
 import { useUi, type LocaleKey } from '../lib/i18n'
 import type { Workspace } from '../lib/useWorkspace'
-import type { Graph, KnowledgeAudit, KnowledgeCandidate, KnowledgeEntityIndexItem, KnowledgeRelation, PaperDetail } from '../types'
+import type { Graph, KnowledgePaperSummary, MaintenanceTaskSummary, KnowledgeCandidate, KnowledgeEntityIndexItem, KnowledgeRelation, PaperDetail } from '../types'
 import { Empty, ErrorBanner, exportJson, Loading, PaperLink } from '../components/Shared'
 import { KnowledgeCatalog } from '../components/KnowledgeCatalog'
 import { KnowledgeEntityDossier } from '../components/KnowledgeEntityDossier'
@@ -14,50 +14,58 @@ import type { PdfLocator } from '../components/PdfViewer'
 
 type FieldTab = 'timeline'|'graph'|'evolution'|'compare'|'concepts'|'catalog'|'inbox'|'maintenance'
 const tabs = [{id:'timeline',icon:Clock3},{id:'graph',icon:GitBranch},{id:'evolution',icon:GitBranch},{id:'compare',icon:SlidersHorizontal},{id:'catalog',icon:Table2},{id:'inbox',icon:Inbox},{id:'maintenance',icon:Sparkles}] as const
-export function KnowledgePage({workspace,collectionId,setCollectionId,openPaper}:{workspace:Workspace;collectionId:string;setCollectionId:(id:string)=>void;openPaper:(id:string,locator?:PdfLocator)=>void}) {
+export function KnowledgePage({workspace,collectionId,setCollectionId,openPaper,initialMaintenanceRunId,maintenanceTasks}:{initialMaintenanceRunId?:string;maintenanceTasks?:MaintenanceTaskSummary[];workspace:Workspace;collectionId:string;setCollectionId:(id:string)=>void;openPaper:(id:string,locator?:PdfLocator)=>void}) {
   const {t} = useUi()
   // The knowledge field defaults to the whole library so cross-paper relations
   // remain visible. A collection is an optional lens, not an implicit scope.
+  const initialScope=useRef(collectionId)
   const effectiveId = collectionId
   const papers = effectiveId ? workspace.papers.filter(p=>p.collection_ids.includes(effectiveId)) : workspace.papers
   const idKey = papers.map(p=>p.id).join(',')
-  const [tab,setTab] = useState<FieldTab>('timeline')
-  const [details,setDetails] = useState<PaperDetail[]>([])
+  const [tab,setTab] = useState<FieldTab>(initialMaintenanceRunId?'maintenance':'timeline')
+  const [details,setDetails] = useState<KnowledgePaperSummary[]>([])
   const [graph,setGraph] = useState<Graph>({nodes:[],edges:[]})
-  const [loading,setLoading] = useState(true)
+  const [ready,setReady] = useState({papers:false,graph:false,entities:false,overview:false})
   const [error,setError] = useState('')
+  const [exporting,setExporting]=useState(false)
   const [selection,setSelection] = useState<string[]>([])
   const [entities,setEntities] = useState<KnowledgeEntityIndexItem[]>([])
   const [knowledgeRelations,setKnowledgeRelations] = useState<KnowledgeRelation[]>([])
   const [overviewCandidates,setOverviewCandidates] = useState<KnowledgeCandidate[]>([])
-  const [audits,setAudits] = useState<KnowledgeAudit[]>([])
   const [selectedEntity,setSelectedEntity] = useState<KnowledgeEntityIndexItem | null>(null)
   const [pendingRelation,setPendingRelation] = useState<KnowledgeRelation | null>(null)
   const [revision,setRevision] = useState(0)
   const refreshGeneration=useRef(0)
   const scopeKey=effectiveId+'|'+idKey
+  const reads=useRef(new Map<string,Promise<unknown>>())
+  const readScope=useRef('')
   const activeScope=useRef(scopeKey);activeScope.current=scopeKey
   useEffect(()=>()=>{refreshGeneration.current++},[])
   useEffect(()=>{
-    let active=true;setLoading(true);setError('');setDetails([]);setGraph({nodes:[],edges:[]});setSelection(idKey.split(',').filter(Boolean).slice(0,3))
-    setSelectedEntity(null);setPendingRelation(null);setOverviewCandidates([]);setAudits([])
-    const paperIds=idKey.split(',').filter(Boolean)
-    // The map can render as soon as its source records arrive. Auditing is a
-    // read-only enrichment and must never hold the field view behind dozens of
-    // extra requests.
-    Promise.all([api.graph(effectiveId),api.knowledgeEntities(undefined,effectiveId?paperIds:undefined),api.knowledgeOverview(paperIds)]).then(([g,e,o])=>{if(active){setGraph(g);setEntities(e.items);setKnowledgeRelations(o.relations);setOverviewCandidates(o.candidates)}}).catch(e=>{if(active)setError(errorMessage(e))}).finally(()=>{if(active)setLoading(false)})
-    const loadScoped=async<T,>(read:(id:string)=>Promise<T>)=>{
-      const pending=[...paperIds]
-      const loaded=new Map<string,T>()
-      await Promise.all(Array.from({length:Math.min(3,pending.length)},async()=>{
-        while(active&&pending.length){const id=pending.shift()!;const value=await read(id);if(active)loaded.set(id,value)}
-      }))
-      return paperIds.flatMap(id=>loaded.has(id)?[loaded.get(id)!]:[])
-    }
-    void loadScoped(api.paper).then(d=>{if(active)setDetails(d)}).catch(e=>{if(active)setError(errorMessage(e))})
-    void loadScoped(api.paperKnowledgeAudit).then(a=>{if(active)setAudits(a)}).catch(()=>{if(active)setAudits([])})
-    return()=>{active=false}
+    const key=scopeKey+'|'+revision
+    if(readScope.current===key)return
+    readScope.current=key
+    reads.current.clear();setReady({papers:false,graph:false,entities:false,overview:false});setError('')
+    setDetails([]);setGraph({nodes:[],edges:[]});setEntities([]);setKnowledgeRelations([])
+    setSelection(idKey.split(',').filter(Boolean).slice(0,3))
+    setSelectedEntity(null);setPendingRelation(null);setOverviewCandidates([])
   },[effectiveId,idKey,revision])
+  useEffect(()=>{
+    let active=true
+    const load=<T,>(key:keyof typeof ready,read:()=>Promise<T>,apply:(value:T)=>void)=>{
+      let pending=reads.current.get(key) as Promise<T>|undefined
+      if(!pending){pending=read();reads.current.set(key,pending)}
+      void pending.then(value=>{if(active){apply(value);setReady(current=>({...current,[key]:true}))}})
+        .catch(cause=>{if(active){reads.current.delete(key);setError(errorMessage(cause))}})
+    }
+    // Never request reader details or rescan source text just to open a field.
+    if(['timeline','compare','concepts'].includes(tab))load('papers',()=>api.knowledgePapers(effectiveId),result=>setDetails(result.items))
+    if(['timeline','graph','evolution'].includes(tab))load('graph',()=>api.graph(effectiveId),setGraph)
+    if(tab==='catalog')load('entities',()=>api.knowledgeEntities(undefined,effectiveId?papers.map(p=>p.id):undefined),result=>setEntities(result.items))
+    if(['evolution','inbox'].includes(tab))load('overview',()=>api.knowledgeOverview(papers.map(p=>p.id)),result=>{setKnowledgeRelations(result.relations);setOverviewCandidates(result.candidates)})
+    return()=>{active=false}
+  },[effectiveId,idKey,revision,tab])
+  const loading=tab==='maintenance'?false:tab==='graph'?!ready.graph:tab==='evolution'?!ready.graph||!ready.overview:tab==='catalog'?!ready.entities:tab==='inbox'?!ready.overview:!ready.papers
   const selectEntity=(id:string,name:string)=>{setPendingRelation(null);setSelectedEntity({id,name,entity_type:'concept',normalized_name:name.toLowerCase(),aliases:[],description:null,status:'active'})}
   const refreshKnowledge=async()=>{
     const generation=++refreshGeneration.current
@@ -65,6 +73,7 @@ export function KnowledgePage({workspace,collectionId,setCollectionId,openPaper}
     try {
       const [g,e,o]=await Promise.all([api.graph(effectiveId),api.knowledgeEntities(undefined,effectiveId?idKey.split(',').filter(Boolean):undefined),api.knowledgeOverview(idKey.split(',').filter(Boolean))])
       if(generation!==refreshGeneration.current||scope!==activeScope.current)return
+      reads.current.set('graph',Promise.resolve(g));reads.current.set('entities',Promise.resolve(e));reads.current.set('overview',Promise.resolve(o))
       setGraph(g);setEntities(e.items);setKnowledgeRelations(o.relations);setOverviewCandidates(o.candidates)
     } catch(e){if(generation===refreshGeneration.current&&scope===activeScope.current)setError(errorMessage(e))}
   }
@@ -73,20 +82,35 @@ export function KnowledgePage({workspace,collectionId,setCollectionId,openPaper}
   const concepts = useMemo(()=>[...new Set(details.flatMap(p=>p.analysis?.concepts??[]))].sort(),[details])
   const selected=details.filter(p=>selection.includes(p.id))
   const detailsReady=details.length>0
-  const mapCandidates=overviewCandidates.length>0?overviewCandidates:details.flatMap(paper=>paper.knowledge_candidates??[])
+  const mapCandidates=overviewCandidates
   const verifiedEdges=graph.edges.filter(e=>e.relation_source==='explicit'||e.relation_source==='metadata')
+  const exportField=async()=>{
+    if(exporting)return
+    setExporting(true)
+    try{
+      // The full export still includes notes, sources and saved knowledge;
+      // fetch those reader records only for an explicit download.
+      const pending=papers.map(p=>p.id),records=new Map<string,PaperDetail>()
+      const graphRead=api.graph(effectiveId)
+      const paperRead=Promise.all(Array.from({length:Math.min(3,pending.length)},async()=>{
+        while(pending.length){const id=pending.shift()!;records.set(id,await api.paper(id))}
+      }))
+      const [g]=await Promise.all([graphRead,paperRead])
+      exportJson('collection-'+effectiveId+'.json',{collection,papers:papers.map(p=>records.get(p.id)),graph:g})
+    }catch(cause){setError(errorMessage(cause))}finally{setExporting(false)}
+  }
   return <div className="knowledge-page"><section className="page-heading"><div><div className="eyebrow">FIELD KNOWLEDGE</div><h1>{collection?.name??t('knowledge')}</h1><p>{t('fieldSubtitle')}</p></div><select className="collection-picker" aria-label={t('selectCollection')} value={effectiveId} onChange={e=>setCollectionId(e.target.value)}><option value="">{t('allPapers')}</option>{workspace.collections.map(c=><option value={c.id} key={c.id}>{c.name}</option>)}</select></section>
-    <div className="field-toolbar"><div className="field-tabs">{tabs.map(item=><button className={tab===item.id?'active':''} key={item.id} onClick={()=>setTab(item.id)}><item.icon size={15}/>{t(item.id)}</button>)}</div><button className="btn secondary" disabled={loading||!details.length} onClick={()=>exportJson('collection-'+effectiveId+'.json',{collection,papers:details,graph})}><Download size={14}/>{t('export')}</button></div>
+    <div className="field-toolbar"><div className="field-tabs">{tabs.map(item=><button className={tab===item.id?'active':''} key={item.id} onClick={()=>setTab(item.id)}><item.icon size={15}/>{t(item.id)}</button>)}</div><button className="btn secondary" disabled={exporting||!papers.length} onClick={()=>void exportField()}>{exporting?<LoaderCircle size={14} className="spin"/>:<Download size={14}/>} {t(exporting?'loading':'export')}</button></div>
     {error&&<ErrorBanner error={error} retry={()=>setRevision(x=>x+1)}/>}
     {loading?<Loading text={t('comparisonLoading')}/>:!papers.length?<Empty title={t('fieldEmpty')} text={t('fieldEmptyHint')}/>:<>
-      {tab==='timeline'&&(detailsReady?<section className="timeline-view"><p className="capability-notice">{verifiedEdges.length?t('relationExplicit')+' · '+verifiedEdges.length:t('noEvolution')}</p>{[...new Set(grouped.map(p=>p.year))].map(year=><div className="timeline-year" key={year??'unknown'}><div className="year-label">{year??t('knowledgeYearPending')}</div><div className="timeline-papers">{grouped.filter(p=>p.year===year).map(p=><article className="timeline-item" key={p.id}><span className="timeline-node"/><div className="timeline-card"><div className="timeline-meta"><span>{p.venue?.trim()||(p.arxiv_id||p.source_url?.includes('arxiv.org')?t('knowledgePreprint'):t('knowledgeVenuePending'))}</span>{p.is_demo&&<span className="demo-badge">{t('demo')}</span>}</div><PaperLink title={p.title} onClick={()=>openPaper(p.id)}/><small>{p.analysis?t('techChange')+' · '+(p.analysis.mode==='extractive'?t('extractive'):p.analysis.provider??t('knowledgeAnalysisReady')):t(p.analysis_status==='failed'?'comparisonAnalysisFailed':'comparisonAnalysisPending')}</small><p>{p.analysis?.method||p.abstract||t('unreported')}</p><div className="timeline-relations">{graph.edges.filter(e=>e.source===p.id).map(edge=><span key={edge.id} className="relation-chip">{edge.relation_source==='demo'?t('relationDemo'):edge.relation_source==='llm_inferred'?t('relationInferred'):t('relationExplicit')} · {edge.relation} → {papers.find(x=>x.id===edge.target)?.title.slice(0,45)}</span>)}</div><footer>{p.authors.slice(0,3).join(' · ')}<button className="text-btn" onClick={()=>openPaper(p.id)}><Link2 size={12}/>{t('viewSource')}</button></footer></div></article>)}</div></div>)}</section>:<Loading text={t('comparisonLoading')}/>)}
+      {tab==='timeline'&&(detailsReady?<section className="timeline-view">{ready.graph&&<p className="capability-notice">{verifiedEdges.length?t('relationExplicit')+' · '+verifiedEdges.length:t('noEvolution')}</p>}{[...new Set(grouped.map(p=>p.year))].map(year=><div className="timeline-year" key={year??'unknown'}><div className="year-label">{year??t('knowledgeYearPending')}</div><div className="timeline-papers">{grouped.filter(p=>p.year===year).map(p=><article className="timeline-item" key={p.id}><span className="timeline-node"/><div className="timeline-card"><div className="timeline-meta"><span>{p.venue?.trim()||(p.arxiv_id||p.source_url?.includes('arxiv.org')?t('knowledgePreprint'):t('knowledgeVenuePending'))}</span>{p.is_demo&&<span className="demo-badge">{t('demo')}</span>}</div><PaperLink title={p.title} onClick={()=>openPaper(p.id)}/><small>{p.analysis?t('techChange')+' · '+(p.analysis.mode==='extractive'?t('extractive'):p.analysis.provider??t('knowledgeAnalysisReady')):t(p.analysis_status==='failed'?'comparisonAnalysisFailed':'comparisonAnalysisPending')}</small><p>{p.analysis?.method||p.abstract||t('unreported')}</p><div className="timeline-relations">{graph.edges.filter(e=>e.source===p.id).map(edge=><span key={edge.id} className="relation-chip">{edge.relation_source==='demo'?t('relationDemo'):edge.relation_source==='llm_inferred'?t('relationInferred'):t('relationExplicit')} · {edge.relation} → {papers.find(x=>x.id===edge.target)?.title.slice(0,45)}</span>)}</div><footer>{p.authors.slice(0,3).join(' · ')}<button className="text-btn" onClick={()=>openPaper(p.id)}><Link2 size={12}/>{t('viewSource')}</button></footer></div></article>)}</div></div>)}</section>:<Loading text={t('comparisonLoading')}/>)}
       {tab==='graph'&&<section className="graph-view"><div className="graph-caption"><h2>{t('graph')}</h2><span>{graph.nodes.length} {t('paperCount')} · {graph.edges.length} edges</span></div>{!graph.edges.length&&<p className="capability-notice">{t('noEdges')} · {t('noEdgesHint')}</p>}<CitationGraph graph={graph} openPaper={openPaper}/><details className="graph-relation-details"><summary>{t('graphRelationDetails')}<span>{graph.edges.length}</span></summary><div className="graph-relations">{graph.edges.map(edge=><div key={edge.id}><span className={'source-badge source-'+edge.relation_source}>{t(edge.relation_source==='demo'?'relationDemo':edge.relation_source==='llm_inferred'?'relationInferred':'relationExplicit')}</span><strong>{edge.relation}</strong><small>{papers.find(p=>p.id===edge.source)?.title} → {papers.find(p=>p.id===edge.target)?.title}</small></div>)}</div></details></section>}
-      {tab==='evolution'&&<KnowledgeEvolutionMap papers={papers} candidates={mapCandidates} relations={knowledgeRelations} audits={audits} graph={graph} onOpenEvidence={(paperId,page,_chunkId,quote)=>openPaper(paperId,page?{page,source_text:quote}:undefined)} onSelectEntity={(entityId,name)=>{setPendingRelation(null);setSelectedEntity({id:entityId,entity_type:'concept',name,normalized_name:name.toLocaleLowerCase(),aliases:[],description:null,status:'active'})}} onSelectPending={relation=>{setSelectedEntity(null);setPendingRelation(relation)}}/>}
+      {tab==='evolution'&&<KnowledgeEvolutionMap papers={papers} candidates={mapCandidates} relations={knowledgeRelations} graph={graph} onOpenEvidence={(paperId,page,_chunkId,quote)=>openPaper(paperId,page?{page,source_text:quote}:undefined)} onSelectEntity={(entityId,name)=>{setPendingRelation(null);setSelectedEntity({id:entityId,entity_type:'concept',name,normalized_name:name.toLocaleLowerCase(),aliases:[],description:null,status:'active'})}} onSelectPending={relation=>{setSelectedEntity(null);setPendingRelation(relation)}}/>}
       {tab==='compare'&&<section className="comparison-view"><p className="capability-notice">{t('compareHint')}</p><div className="comparison-selector">{details.map(p=><label key={p.id}><input type="checkbox" checked={selection.includes(p.id)} disabled={!selection.includes(p.id)&&selection.length>=4} onChange={e=>setSelection(e.target.checked?[...selection,p.id]:selection.filter(id=>id!==p.id))}/>{p.title}</label>)}</div>{selected.length>=2&&<div className="comparison-scroll"><table className="comparison-table" style={{minWidth:140+selected.length*340}}><thead><tr><th>{t('dimension')}</th>{selected.map(p=><th key={p.id}><button onClick={()=>openPaper(p.id)}>{p.title}<ArrowUpRight size={12}/></button></th>)}</tr></thead><tbody>{(['problem','method','findings','limitations'] as const).map(key=><tr key={key}><th>{t(key==='findings'?'results':key)}</th>{selected.map(p=><td key={p.id}><p className={p.analysis?.[key]?'':'comparison-missing'}>{p.analysis?.[key]||t(p.analysis?(p.analysis.mode==='extractive'?'comparisonExtractiveMissing':'comparisonFieldMissing'):p.analysis_status==='failed'||p.intelligence_status==='failed'?'comparisonAnalysisFailed':['running','queued'].includes(p.analysis_status)||['running','queued'].includes(p.intelligence_status??'')?'comparisonAnalysisRunning':'comparisonAnalysisPending')}</p><button className="text-btn" onClick={()=>openPaper(p.id)}><Link2 size={13}/>{t(p.analysis?.[key]?'viewSource':'knowledgeOpenPaper')}</button></td>)}</tr>)}</tbody></table></div>}</section>}
       {tab==='concepts'&&<section className="concept-view"><p className="capability-notice">{t('conceptHint')}</p><div className="concept-index">{concepts.map(concept=><article key={concept}><h3>{concept}</h3>{details.filter(p=>p.analysis?.concepts.includes(concept)).map(p=><PaperLink key={p.id} title={p.title} onClick={()=>openPaper(p.id)}/>)}</article>)}</div>{!concepts.length&&<Empty title={t('unreported')}/>}</section>}
       {tab==='catalog'&&<KnowledgeCatalog entities={entities} onSelect={entity=>{setPendingRelation(null);setSelectedEntity(entity)}}/>}
       {tab==='inbox'&&<KnowledgeReview candidates={mapCandidates} relations={knowledgeRelations} papers={papers} openPaper={openPaper} onChanged={()=>void refreshKnowledge()} onSelectEntity={selectEntity}/>}
-      {tab==='maintenance'&&<KnowledgeMaintenance scopeType={effectiveId?'collection':'library'} scopeId={effectiveId||undefined} paperIds={effectiveId?papers.map(p=>p.id):undefined} openPaper={openPaper}/>} 
+      {tab==='maintenance'&&<KnowledgeMaintenance key={effectiveId} initialRunId={effectiveId===initialScope.current?initialMaintenanceRunId:undefined} tasks={maintenanceTasks} scopeType={effectiveId?'collection':'library'} scopeId={effectiveId||undefined} paperIds={effectiveId?papers.map(p=>p.id):undefined} openPaper={openPaper}/>}
 
     </>}
     {(selectedEntity||pendingRelation)&&<KnowledgeEntityDossier entityId={selectedEntity?.id} entityName={selectedEntity?.name} pendingRelation={pendingRelation} openPaper={openPaper} onClose={()=>{setSelectedEntity(null);setPendingRelation(null)}} onSelectEntity={selectEntity} onResolved={relation=>{setKnowledgeRelations(items=>items.map(item=>item.id===relation.id?relation:item));setPendingRelation(current=>current?.id===relation.id?relation:current)}} onChanged={detail=>{if(detail)setSelectedEntity(detail);void refreshKnowledge()}}/>}

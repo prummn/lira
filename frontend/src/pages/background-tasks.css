@@ -19,3 +19,5 @@
 .background-scheduler { display:flex; flex-wrap:wrap; align-items:center; gap:8px 22px; padding:12px 0; color:var(--text-2); font-size:12px; }
 .background-scheduler strong { margin-left:8px; font-weight:500; color:var(--text); font-variant-numeric:tabular-nums; }
 .background-scheduler [role="status"] { color:var(--accent); }
+
+.background-job-scope { margin:-8px 0 16px; color:var(--text-3); font-size:12px; line-height:1.7; }

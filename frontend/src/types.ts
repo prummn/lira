@@ -18,6 +18,9 @@ export interface PaperMetadataUpdate {
   title?: string; authors?: string[]; year?: number | null; venue?: string | null
   doi?: string | null; arxiv_id?: string | null
 }
+export type KnowledgePaperSummary = Pick<Paper,'id'|'title'|'abstract'|'year'|'venue'|'arxiv_id'|'source_url'|'authors'|'is_demo'|'analysis_status'|'intelligence_status'> & {
+  analysis: Pick<Analysis,'problem'|'method'|'findings'|'limitations'|'concepts'|'provider'|'mode'> | null
+}
 export interface Collection { id: string; name: string; description: string | null; color: string; paper_count: number }
 export interface ResearchSettings { enabled:boolean; profile_id:string|null; idle_seconds:number; start_remaining:number; stop_remaining:number; long_reserve:number; calls_per_hour:number; investigations_enabled?:boolean; maintenance_enabled:boolean; maintenance_interval_minutes:number; maintenance_calls_per_run:number; maintenance_scope:'library'|'enabled_collections' }
 export interface ResearchTask { id:string; collection_id:string; kind:'essay'|'findings'|'agenda'|'investigation'; status:string; stage:string; calls:number; error:string|null; created_at:string; updated_at:string; usage:Record<string,unknown> }
@@ -44,9 +47,14 @@ export interface MaintenanceRun { id:string; scope_type:'library'|'collection'|'
 export type MaintenanceIssueStatus = 'proposed'|'auto_applied'|'needs_review'|'accepted'|'rejected'|'stale'|'undone'
 export interface MaintenanceIssue { id:string; run_id:string; kind:'identity'|'relation'|'evidence'|'coverage'|'importance'|'structure'; severity:'critical'|'warning'|'info'; status:MaintenanceIssueStatus; confidence:number; confidence_basis:Record<string,unknown>; auto_eligible:boolean; subject_ids:string[]; evidence:KnowledgeEvidence[]; external_leads:Record<string,unknown>[]; summary:string; reasoning:string; proposed_action:Record<string,unknown>; source_fingerprint:string; applied_change_ids:string[]; created_at:string; updated_at:string }
 export interface MaintenanceRunDetail extends MaintenanceRun { issues:MaintenanceIssue[] }
+export interface MaintenanceTaskSummary {
+  id:string;scope_type:MaintenanceRun['scope_type'];scope_id:string|null;scope_title:string|null;status:MaintenanceRun['status']
+  paper_count:number;total:number;completed:number;pending:number;failed:number;reason:string|null
+  active_paper_id:string|null;active_paper_title:string|null;error:string|null;model_name:string|null
+}
 export interface MaintenanceBacklog {pending_papers:number;review_papers:number;checked_papers:number;pending_objects:number;pending_relations:number;items:Array<{paper_id:string;title:string;status:'running'|'queued'|'retry_wait'|'failed'|'untracked'|'needs_review';run_id:string|null;pending_objects:number;pending_relations:number;error:string|null}>}
 export interface ResearchBudget {allowed:boolean;reason:string;allowance?:number;observed_use?:number;remaining?:number;resumes_at?:number;resets_at?:number;day?:string}
-export interface ResearchStatus { scheduler?:{official:{configured:number;effective:number;active:number;waiting:number};active:number;waiting:number}; settings:ResearchSettings; reason:string; quota:Array<{name:string;used_percent:number|null;window_minutes:number|null;resets_at:number|null;limit_id?:string}>; quota_checked_at:number|null; quota_attempted_at?:number|null; quota_using_recent?:boolean; quota_error_code?:string|null; tasks:ResearchTask[]; scope_ids:string[]; maintenance:MaintenanceRun|null;budget?:ResearchBudget|null;translation_jobs?:TranslationJobSummary[];analysis_tasks?:AnalysisTaskSummary[] }
+export interface ResearchStatus { scheduler?:{official:{configured:number;effective:number;active:number;waiting:number};active:number;waiting:number}; settings:ResearchSettings; reason:string; quota:Array<{name:string;used_percent:number|null;window_minutes:number|null;resets_at:number|null;limit_id?:string}>; quota_checked_at:number|null; quota_attempted_at?:number|null; quota_using_recent?:boolean; quota_error_code?:string|null; tasks:ResearchTask[]; scope_ids:string[]; maintenance:MaintenanceRun|null;budget?:ResearchBudget|null;translation_jobs?:TranslationJobSummary[];analysis_tasks?:AnalysisTaskSummary[];maintenance_tasks?:MaintenanceTaskSummary[] }
 export interface Chunk {
   id: string; page: number; section: string | null; content: string; bbox: number[] | null
   page_width: number | null; page_height: number | null

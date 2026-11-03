@@ -8,10 +8,10 @@ from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload, raiseload
 
 from ..db import get_db
-from ..models import KnowledgeCandidate, KnowledgeEntity, KnowledgeRelation, PaperChunk, Paper
+from ..models import KnowledgeCandidate, KnowledgeEntity, KnowledgeRelation, PaperChunk, Paper, PaperAuthor, CollectionPaper
 from ..providers import get_model_provider
 from ..providers.base import ProviderError
 from ..schemas import KnowledgeEntityUpdate, KnowledgeEntityMerge, KnowledgeRelationUpdate, KnowledgeRelationCreate, CandidateDecision, CandidateBatchDecision, KnowledgeCandidateRead, KnowledgePaperRead, KnowledgeRelationRead, KnowledgeAuditRead, KnowledgeEntityDetailRead, KnowledgeRelationResolution
@@ -23,6 +23,29 @@ from ..services.reading_paragraphs import paragraphs_for
 from .dependencies import require_paper
 
 router = APIRouter()
+
+
+@router.get('/knowledge/papers')
+def field_papers(collection_id: str | None = None, session: Session = Depends(get_db)) -> dict:
+    """Stored reading summaries for field views; no source text or fresh audits."""
+    statement = select(Paper).options(selectinload(Paper.analysis),
+        selectinload(Paper.author_links).selectinload(PaperAuthor.author), raiseload('*'))
+    if collection_id:
+        from .dependencies import require_collection
+        require_collection(session, collection_id)
+        statement = statement.where(Paper.id.in_(select(CollectionPaper.paper_id).where(
+            CollectionPaper.collection_id == collection_id)))
+    items = []
+    for paper in session.scalars(statement.order_by(Paper.year, Paper.id)):
+        analysis = paper.analysis
+        items.append(dict(id=paper.id, title=paper.title, abstract=paper.abstract, year=paper.year,
+            venue=paper.venue, arxiv_id=paper.arxiv_id, source_url=paper.source_url,
+            authors=[link.author.name for link in paper.author_links], is_demo=paper.is_demo,
+            analysis_status=paper.analysis_status, intelligence_status=paper.intelligence_status,
+            analysis={**{key:getattr(analysis,key) for key in
+                ('problem','method','findings','limitations','provider','mode')},
+                'concepts':json.loads(analysis.concepts_json or '[]')} if analysis else None))
+    return {'items':items}
 
 
 def _paper_payload(session: Session, paper_id: str) -> KnowledgePaperRead:

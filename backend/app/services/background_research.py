@@ -215,15 +215,18 @@ class BackgroundResearchWorker:
             return history(db, finding_id)
 
     def status(self):
+        settings = self.settings()
         with self.database.sessions() as db:
             tasks = db.scalars(select(ResearchTask).order_by(ResearchTask.updated_at.desc()).limit(30)).all()
             scopes = db.scalars(select(ResearchScope).where(ResearchScope.enabled == True)).all()
             maintenance_run = db.scalar(select(KnowledgeMaintenanceRun).order_by(KnowledgeMaintenanceRun.updated_at.desc()).limit(1))
             from .translation_queue import monitor_jobs
-            from .task_monitor import monitor_analysis_tasks
+            from .task_monitor import monitor_analysis_tasks, monitor_maintenance_tasks
             translation_jobs = monitor_jobs(db)
             analysis_tasks = monitor_analysis_tasks(db)
-        return {'settings': self.settings().model_dump(), 'reason': self._reason,
+            maintenance_tasks = monitor_maintenance_tasks(db, reason=self._reason, enabled=settings.enabled,
+                maintenance_enabled=settings.maintenance_enabled)
+        return {'settings': settings.model_dump(), 'reason': self._reason,
                 'quota': self._quota, 'quota_checked_at': self._quota_at or None,
                 'quota_error_code': self._quota_error_code,
                 'quota_attempted_at': self._quota_attempted_at or None,
@@ -231,6 +234,7 @@ class BackgroundResearchWorker:
                 'tasks': [task_read(t) for t in tasks], 'scope_ids': [s.collection_id for s in scopes],
                 'maintenance': maintenance.serialize_run(maintenance_run) if maintenance_run else None,
                 'budget': self._budget, 'translation_jobs': translation_jobs, 'analysis_tasks': analysis_tasks,
+                'maintenance_tasks': maintenance_tasks,
                 'scheduler': self.profiles.capacity_status()}
 
     def _observe_budget(self, state, settings):

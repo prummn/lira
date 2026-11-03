@@ -33,6 +33,13 @@ for (const scope of ['collection', 'library'] as const) {
       }
       await expect(page.locator('.maintenance-status-strip')).toBeVisible()
       await expect(page.locator('.maintenance-error')).toHaveCount(0)
+      await page.getByRole('button',{name:'后台任务',exact:true}).click()
+      const task=page.locator(`[data-task-id="${run.id}"]`)
+      await expect(task).toContainText('AI 知识整理')
+      await expect(task).toContainText(`0 / ${run.issues.length}`)
+      await task.getByRole('button',{name:'查看整理进度',exact:true}).click()
+      await expect(page.locator('.collection-picker')).toHaveValue(collection?.id??'')
+      await expect(page.locator('.maintenance-status-strip')).toContainText('排队中')
     } finally {
       await request.post(`/api/knowledge/maintenance/runs/${run.id}/cancel`)
     }
