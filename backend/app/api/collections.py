@@ -16,7 +16,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 from starlette.concurrency import run_in_threadpool
@@ -94,6 +94,22 @@ def create_collection(
         session.rollback()
         raise HTTPException(409, "同名集合已存在") from error
     return collection_read(collection)
+
+
+@router.delete('/collections/{collection_id}', status_code=204)
+def delete_collection(
+    collection_id: str, request: Request, session: Session = Depends(get_db)
+) -> Response:
+    # 与研究检查点共用锁；只通过外键级联删除集合子记录，不触碰论文和文件。
+    with request.app.state.research_worker._mutation:
+        require_collection(session, collection_id)
+        deleted = session.scalars(
+            delete(Collection).where(Collection.id == collection_id).returning(Collection.id)
+        ).all()
+        if len(deleted) != 1:
+            raise HTTPException(409, '集合在删除期间发生变化')
+        session.commit()
+    return Response(status_code=204)
 
 
 @router.post('/collections/{collection_id}/papers', response_model=CollectionRead)

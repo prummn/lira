@@ -687,11 +687,15 @@ class BackgroundResearchWorker:
                 return False
             if not self._eligible(settings, running=task.calls > 0 or task.stage not in ('synthesis', 'discover', 'plan')):
                 return False
-            with self.database.sessions() as db:
+            with self._mutation, self.database.sessions() as db:
+                task = db.get(ResearchTask, task.id)
+                if task is None:
+                    return False
                 scope = db.get(ResearchScope, task.collection_id)
+                if scope is None:
+                    return False
                 if not self._current_material(db, task, scope):
-                    stored = db.get(ResearchTask, task.id)
-                    stored.status = 'superseded'
+                    task.status = 'superseded'
                     db.commit()
                     self._next_scan = 0
                     return False

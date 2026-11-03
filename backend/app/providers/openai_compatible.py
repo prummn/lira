@@ -5,6 +5,10 @@ import hashlib
 import math
 import time
 import ssl
+import os
+import errno
+import socket
+import certifi
 from contextlib import nullcontext
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -20,6 +24,21 @@ MAX_CONTEXT_CHARS = 24000
 MAX_CHUNK_CHARS = 4000
 MAX_TRANSLATION_CHARS = 12000
 ABSTENTION = '当前提供的原文中没有足够且可验证的证据，无法回答这个问题。'
+
+
+def model_ssl_context() -> ssl.SSLContext:
+    # 默认上下文加载系统信任（含 Windows 受管根证书）及 OpenSSL 环境配置。
+    try:
+        context = ssl.create_default_context()
+        context.load_verify_locations(cafile=certifi.where())
+        # 显式加载环境路径，避免无效路径被 OpenSSL 默认加载静默忽略。
+        if os.environ.get('SSL_CERT_FILE') or os.environ.get('SSL_CERT_DIR'):
+            context.load_verify_locations(cafile=os.environ.get('SSL_CERT_FILE') or None,
+                                          capath=os.environ.get('SSL_CERT_DIR') or None)
+        return context
+    except (OSError, ValueError):
+        raise ProviderError('模型 TLS 信任配置无法加载，请检查系统证书及 SSL_CERT_FILE/SSL_CERT_DIR 配置',
+                            code='tls_configuration', diagnostics={'request_sent': False}) from None
 
 
 def parse_json_object(content: str) -> dict[str, Any]:
@@ -98,23 +117,28 @@ class OpenAICompatibleProvider:
         return {'http_status': self.last_http_status} if self.last_http_status is not None else {}
 
     def _transport_diagnostics(self, error: Exception) -> dict:
-        known = {'ConnectError', 'ReadError', 'WriteError', 'CloseError', 'ConnectTimeout',
-                 'ReadTimeout', 'WriteTimeout', 'PoolTimeout', 'RemoteProtocolError'}
-        return {**self._http_diagnostics(), 'transport_type':
-                type(error).__name__ if type(error).__name__ in known else 'unknown'}
+        known = (httpx.ConnectError, httpx.ReadError, httpx.WriteError, httpx.CloseError,
+                 httpx.ConnectTimeout, httpx.ReadTimeout, httpx.WriteTimeout,
+                 httpx.PoolTimeout, httpx.RemoteProtocolError)
+        return {**self._http_diagnostics(), 'transport_type': next(
+            (kind.__name__ for kind in known if isinstance(error, kind)), 'unknown')}
 
     @staticmethod
-    def _certificate_error(error: Exception) -> ssl.SSLCertVerificationError | None:
-        pending, seen = [error], set()
+    def _connection_cause(error: Exception) -> BaseException | None:
+        pending, seen, causes = [error], set(), []
         while pending and len(seen) < 12:
             current = pending.pop()
             if id(current) in seen:
                 continue
             seen.add(id(current))
-            if isinstance(current, ssl.SSLCertVerificationError):
-                return current
-            pending.extend(value for value in (current.__cause__, current.__context__, *current.args)
-                           if isinstance(value, BaseException))
+            causes.append(current)
+            pending.extend(value for value in (current.__cause__, current.__context__, *current.args[:14])
+                           if isinstance(value, BaseException) and id(value) not in seen)
+        for kind in (ssl.SSLCertVerificationError, socket.gaierror, ConnectionRefusedError,
+                     ConnectionResetError, ssl.SSLError, OSError):
+            for current in causes:
+                if isinstance(current, kind) and not isinstance(current, httpx.HTTPError):
+                    return current
         return None
 
     @staticmethod
@@ -141,7 +165,8 @@ class OpenAICompatibleProvider:
             'Reply with the single word OK.',
             'OK',
             json_output=False,
-            max_output_tokens=64 if self.reasoning_effort == 'disabled' else 1024,
+            max_output_tokens=64 if self.reasoning_effort == 'disabled' else 4096 if self.reasoning_effort == 'xhigh' else 2048,
+            request_timeout=min(self.timeout, 120.0),
         )
 
     @staticmethod
@@ -281,16 +306,17 @@ class OpenAICompatibleProvider:
                 raise ProviderError('模型服务响应过大，已拒绝处理', code='invalid_response')
         raise ProviderError('模型流式连接结束但未完成输出，请重试；已有结果已保留', code='stream_interrupted', retryable=True)
 
-    def _complete(self, system: str, user: str, *, json_output: bool, max_output_tokens: int = 3000, reasoning_effort: str | None = None, image_data_url: str | None = None, output_schema: dict | None = None) -> str:
+    def _complete(self, system: str, user: str, *, json_output: bool, max_output_tokens: int = 3000, reasoning_effort: str | None = None, image_data_url: str | None = None, output_schema: dict | None = None, request_timeout: float | None = None) -> str:
         self.last_usage = {}
         self.response_model = None
         gate = self._capacity() if hasattr(self, '_capacity') else nullcontext()
         with gate:
             return self._complete_request(system, user, json_output=json_output,
                 max_output_tokens=max_output_tokens, reasoning_effort=reasoning_effort,
-                image_data_url=image_data_url, **({'output_schema': output_schema} if output_schema is not None else {}))
+                image_data_url=image_data_url, **({'output_schema': output_schema} if output_schema is not None else {}),
+                **({'request_timeout': request_timeout} if request_timeout is not None else {}))
 
-    def _complete_request(self, system: str, user: str, *, json_output: bool, max_output_tokens: int = 3000, reasoning_effort: str | None = None, image_data_url: str | None = None, output_schema: dict | None = None) -> str:
+    def _complete_request(self, system: str, user: str, *, json_output: bool, max_output_tokens: int = 3000, reasoning_effort: str | None = None, image_data_url: str | None = None, output_schema: dict | None = None, request_timeout: float | None = None) -> str:
         self.last_usage = {}
         self.response_model = None
         self.last_http_status = None
@@ -323,8 +349,12 @@ class OpenAICompatibleProvider:
             streamed = None
             response = None
             response_content = b''
-            deadline = time.monotonic() + self.timeout
-            with httpx.Client(transport=self._transport, timeout=self.timeout, follow_redirects=False, headers={'Authorization':f'Bearer {self._api_key}', 'Accept-Encoding':'identity'}) as client:
+            timeout = self.timeout if request_timeout is None else min(self.timeout, request_timeout)
+            context = model_ssl_context()
+            deadline = time.monotonic() + timeout
+            with httpx.Client(transport=self._transport, verify=context,
+                              timeout=httpx.Timeout(timeout, connect=min(timeout, 15.0)),
+                              follow_redirects=False, headers={'Authorization':f'Bearer {self._api_key}', 'Accept-Encoding':'identity'}) as client:
                 with client.stream('POST', self.base_url + endpoint, json=payload) as response:
                     self.last_http_status = response.status_code
                     if response.is_success:
@@ -342,13 +372,25 @@ class OpenAICompatibleProvider:
             raise ProviderError('模型服务连接中断，请稍后重试；原文和已有结果已保留', code='transport_protocol', retryable=True, diagnostics=self._transport_diagnostics(error)) from None
         except httpx.NetworkError as error:
             diagnostics = self._transport_diagnostics(error)
-            certificate = self._certificate_error(error)
-            if certificate is not None:
-                verify_code = getattr(certificate, 'verify_code', None)
+            cause = self._connection_cause(error)
+            if isinstance(cause, ssl.SSLCertVerificationError):
+                verify_code = getattr(cause, 'verify_code', None)
                 if isinstance(verify_code, int) and 0 <= verify_code <= 1000:
                     diagnostics['tls_verify_code'] = verify_code
                 raise ProviderError('模型服务证书验证失败，请检查服务证书与受信任 CA 配置；已有结果已保留', code='tls_certificate', diagnostics=diagnostics) from None
-            raise ProviderError('无法连接模型服务，请稍后重试；原文已保留', code='transport_connection', retryable=True, diagnostics=diagnostics) from None
+            number = (getattr(cause, 'winerror', None) or cause.errno) if isinstance(cause, OSError) else None
+            code, message = 'transport_connection', '无法连接模型服务，请检查网络、代理与模型地址'
+            if isinstance(cause, socket.gaierror):
+                code, message = 'transport_dns', '模型服务域名解析失败，请检查 DNS 与模型地址'
+            elif isinstance(cause, ConnectionRefusedError) or number in {errno.ECONNREFUSED, 10061}:
+                code, message = 'transport_refused', '模型服务连接被拒绝，请检查地址、端口与代理'
+            elif isinstance(cause, ConnectionResetError) or number in {errno.ECONNRESET, 10054}:
+                code, message = 'transport_reset', '模型服务连接被重置，请检查网络与代理'
+            elif isinstance(cause, ssl.SSLError):
+                code, message = 'transport_tls', '模型服务 TLS 握手失败，请检查服务与代理的 TLS 配置'
+            elif number in {errno.ENETUNREACH, errno.EHOSTUNREACH, 10051, 10065}:
+                code, message = 'transport_unreachable', '模型服务网络不可达，请检查网络与代理'
+            raise ProviderError(message + '；原文已保留', code=code, retryable=code != 'transport_tls', diagnostics=diagnostics) from None
         except (httpx.LocalProtocolError, httpx.UnsupportedProtocol):
             raise ProviderError('模型请求协议无效，请检查接口配置；原文已保留', code='invalid_request') from None
         except httpx.DecodingError:

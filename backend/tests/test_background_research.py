@@ -66,6 +66,39 @@ class Writer:
         return json.dumps(essay(), ensure_ascii=False)
 
 
+def test_collection_deleted_after_worker_selects_task(research, monkeypatch):
+    client, worker = research
+    worker.enqueue('topic')
+
+    def delete_before_material_check(*args, **kwargs):
+        assert client.delete('/api/collections/topic').status_code == 204
+        return True
+
+    monkeypatch.setattr(worker, '_eligible', delete_before_material_check)
+    assert worker.process_next(translations=False) is False
+    assert client.get('/api/collections/other').status_code == 200
+
+
+def test_collection_deleted_during_generation_does_not_restore_task(research):
+    from app.models import ResearchTask, ResearchRevision
+    client, worker = research
+    task = worker.enqueue('topic')
+
+    class DeletingWriter(Writer):
+        def _complete(self, *args, **kwargs):
+            assert client.delete('/api/collections/topic').status_code == 204
+            return super()._complete(*args, **kwargs)
+
+    writer = DeletingWriter()
+    worker.profiles.subscription_provider = lambda _: writer
+    worker._step(task['id'], worker.settings())
+    assert len(writer.calls) == 1
+    with worker.database.sessions() as db:
+        assert db.get(ResearchTask, task['id']) is None
+        assert db.scalar(select(ResearchRevision.id)) is None
+        assert db.get(Paper, 'p1') is not None
+
+
 def test_queue_fingerprint_is_scoped_and_notes_trigger_finite_update(research):
     client, worker = research
     with worker.database.sessions() as db:
