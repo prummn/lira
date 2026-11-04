@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, ChartNoAxesCombined, LoaderCircle, MessageSquare, RotateCcw, Table2 } from 'lucide-react'
+import { AlertCircle, ChartNoAxesCombined, LoaderCircle, MessageSquare, RotateCcw, Sigma, Table2 } from 'lucide-react'
 import { TextLayer } from 'pdfjs-dist'
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist'
 import { useUi } from '../lib/i18n'
@@ -245,7 +245,7 @@ export function PdfPage({ document, geometry, active, maxPixels, locator, query,
     const scaleX=canvas.width/viewport.width,scaleY=canvas.height/viewport.height
     // Detected tables already include a PDF-space safety margin. Adding a
     // second screen-space margin can pull in the next table's caption.
-    const padX=region.kind==='table'?0:Math.min(14,rectangle.width*.04),padY=region.kind==='table'?0:Math.min(14,rectangle.height*.05)
+    const padX=region.kind==='table'||region.kind==='equation'?0:Math.min(14,rectangle.width*.04),padY=region.kind==='table'||region.kind==='equation'?0:Math.min(14,rectangle.height*.05)
     const left=clamp(rectangle.left-padX,0,viewport.width),top=clamp(rectangle.top-padY,0,viewport.height)
     const right=clamp(rectangle.left+rectangle.width+padX,0,viewport.width),bottom=clamp(rectangle.top+rectangle.height+padY,0,viewport.height)
     const sx=clamp(Math.round(left*scaleX),0,Math.max(0,canvas.width-1))
@@ -311,7 +311,7 @@ export function PdfPage({ document, geometry, active, maxPixels, locator, query,
     })}
     {active && ready && highlighted && <div className="pdfv-evidence-overlay" style={highlighted} aria-label={`${t('pdfvEvidenceRegion')} · ${page} ${t('page')}`} />}
     {visualCandidates.map(({region,rect})=><div key={region.id} data-visual-id={region.id} data-visual-kind={region.kind} className={`pdfv-visual-region ${hoveredVisualId===region.id?'is-hovered':''}`} style={rect} aria-hidden="true"/>)}
-    {hoveredVisual&&onAskVisualRegion&&<button type="button" className={`pdfv-visual-region-action ${hoveredVisual.region.kind}`} style={{left:clamp(hoveredVisual.rect.left,4,Math.max(4,viewport.width-150)),top:Math.max(4,hoveredVisual.rect.top-32)}} aria-label={`${t('pdfvAskVisual')} ${hoveredVisual.region.label}`} title={hoveredVisual.region.caption} onClick={()=>askVisualRegion(hoveredVisual.region)}>{hoveredVisual.region.kind==='table'?<Table2 size={14}/>:<ChartNoAxesCombined size={14}/>}<span>{t('pdfvAskVisual')} {hoveredVisual.region.label}</span></button>}
+    {hoveredVisual&&onAskVisualRegion&&<button type="button" className={`pdfv-visual-region-action ${hoveredVisual.region.kind}`} style={{left:clamp(hoveredVisual.rect.left,4,Math.max(4,viewport.width-150)),top:Math.max(4,hoveredVisual.rect.top-32)}} aria-label={`${t('pdfvAskVisual')} ${hoveredVisual.region.label}`} title={hoveredVisual.region.caption} onClick={()=>askVisualRegion(hoveredVisual.region)}>{hoveredVisual.region.kind==='equation'?<Sigma size={14}/>:hoveredVisual.region.kind==='table'?<Table2 size={14}/>:<ChartNoAxesCombined size={14}/>}<span>{t('pdfvAskVisual')} {hoveredVisual.region.label}</span></button>}
     {regions.map(({ paragraph, rect, key }) => <div key={key} className={`pdfv-paragraph-marker ${key === hoveredKey ? 'hovered' : ''} ${paragraph.id === activeParagraphId ? 'selected' : ''}`} style={rect} aria-hidden="true" />)}
     {hovered && <PdfParagraphAction pageRef={pageRef} actionRef={actionRef} rect={hovered.rect} label={paragraphActionLabel} activate={()=>onTranslateParagraph?.(hovered.paragraph)}/>}
     {active && !ready && !error && <div className="pdfv-page-placeholder" role="status"><LoaderCircle size={18} className="pdfv-spin" />{t('pdfvRendering')} · {page}</div>}

@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 from dataclasses import dataclass
 import json
+import math
 from pathlib import Path
 import re
 import unicodedata
@@ -21,6 +22,28 @@ class SelectionSource:
     text: str
     layout_recovered: bool = False
     math_recovered: bool = False
+
+
+def visual_selection_chunks(paper: Paper, page: int, bbox) -> list[PaperChunk]:
+    """Pin actual crop contents before page headers and unrelated column text."""
+    if not bbox or len(bbox) != 4:
+        return []
+    matches = []
+    for chunk in paper.chunks:
+        if chunk.page != page or not chunk.bbox_json:
+            continue
+        try:
+            box = json.loads(chunk.bbox_json)
+            if not isinstance(box, list) or len(box) != 4 or not all(math.isfinite(value) for value in box):
+                continue
+            area = (box[2] - box[0]) * (box[3] - box[1])
+            intersection = max(0, min(box[2], bbox[2]) - max(box[0], bbox[0])) * max(0, min(box[3], bbox[3]) - max(box[1], bbox[1]))
+            if area > 0 and intersection / area >= .15:
+                matches.append((intersection / area, box[1], box[0], chunk.id, chunk))
+        except (TypeError, ValueError):
+            continue
+    matches.sort(key=lambda item: (-item[0], item[1], item[2], item[3]))
+    return [item[-1] for item in matches]
 
 
 def _view(value: str) -> str:

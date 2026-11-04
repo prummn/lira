@@ -154,6 +154,18 @@ def test_unicode_context_and_empty_selected_scope_do_not_lose_history(client):
     assert selected_chat['id'] != global_chat['id']
 
 
+def test_visual_equation_context_survives_conversation_normalization():
+    from app.services.conversations import normalize_context
+
+    normalized = normalize_context('explanation', {
+        'page': 4, 'selected_text': 'E = mc^2', 'visual': True,
+        'visual_kind': 'equation', 'visual_label': 'Equation (3)', 'bbox': [10, 20, 90, 55],
+    })
+
+    assert normalized['visual_kind'] == 'equation'
+    assert normalized['visual_label'] == 'Equation (3)'
+
+
 @pytest.mark.parametrize('kind,context', [
     ('explanation', {'selected_text': ['bad']}), ('explanation', {'page': 'bad'}),
     ('librarian', {'paper_ids': [None]}), ('librarian', {'paper_ids': 'paper-one'}),

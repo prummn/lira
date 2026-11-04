@@ -1,7 +1,7 @@
 import {test,expect} from '@playwright/test'
 
 test('quota reserves can be edited from the monitor, persist and retain drafts on failure',async({page})=>{
- let settings={enabled:false,profile_id:null,idle_seconds:180,start_remaining:50,stop_remaining:35,long_reserve:30,calls_per_hour:6,maintenance_enabled:false,maintenance_interval_minutes:720,maintenance_calls_per_run:3,maintenance_scope:'library'}
+ let settings={enabled:false,profile_id:null,idle_seconds:180,start_remaining:50,stop_remaining:35,long_reserve:30,maintenance_enabled:false,maintenance_interval_minutes:720,maintenance_calls_per_run:3,maintenance_scope:'library'}
  let fail=false
  const status=()=>({settings,reason:'quota_reserve',quota:[{name:'primary',used_percent:0,window_minutes:300,resets_at:1999999999},{name:'secondary',used_percent:77,window_minutes:10080,resets_at:1999999999}],quota_checked_at:1793611800,tasks:[],scope_ids:[],maintenance:null,translation_jobs:[],analysis_tasks:[]})
  await page.route('**/api/research/status',route=>route.fulfill({json:status()}))
@@ -18,7 +18,22 @@ test('quota reserves can be edited from the monitor, persist and retain drafts o
  await page.getByRole('button',{name:'调整保留线',exact:true}).click()
  const dialog=page.getByRole('dialog',{name:'额度保留线',exact:true})
  await expect(dialog).toContainText('23%')
+ await dialog.getByRole('button',{name:'优先留给阅读'}).click()
+ await expect(dialog.getByRole('button',{name:'优先留给阅读'})).toHaveAttribute('aria-pressed','true')
+ await dialog.getByText('自定义阈值').click()
  const long=dialog.getByRole('spinbutton',{name:'长窗口至少保留（%）',exact:true})
+ await long.fill('10')
+ await dialog.getByRole('button',{name:'保存保留线',exact:true}).click()
+ await expect(dialog.getByRole('status')).toContainText('已保存')
+ expect(settings.start_remaining).toBe(70)
+ expect(settings.stop_remaining).toBe(55)
+ expect(settings.long_reserve).toBe(10)
+ await dialog.getByRole('button',{name:'优先留给阅读'}).click()
+ await expect(dialog.getByRole('button',{name:'优先留给阅读'})).toHaveAttribute('aria-pressed','true')
+ await dialog.getByRole('button',{name:'保存保留线',exact:true}).click()
+ await expect(dialog.getByRole('status')).toContainText('已保存')
+ expect(settings.long_reserve).toBe(45)
+ await dialog.getByText('自定义阈值').click()
  await long.fill('10')
  await dialog.getByRole('button',{name:'保存保留线',exact:true}).click()
  await expect(dialog.getByRole('status')).toContainText('已保存')

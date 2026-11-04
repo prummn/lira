@@ -7,7 +7,7 @@ import pymupdf as fitz
 import pytest
 
 from app.services.pdf import HEADING, ParsedPDF, parse_pdf
-from app.services.pdf_metadata import detect_headings, read_lines
+from app.services.pdf_metadata import LayoutLine, detect_headings, extract_bibliography, read_lines
 
 
 def replay_layout(monkeypatch: pytest.MonkeyPatch, filename: str) -> ParsedPDF:
@@ -133,6 +133,88 @@ def test_multiline_title_and_plain_author_names():
     ]))
     assert parsed.title == "Learning Reliable Scientific Representations from Evidence"
     assert parsed.authors == ["Alice Smith", "Bob A. Jones"]
+
+
+def _line(key, text, bbox, size=10, bold=False):
+    return LayoutLine(key, text, bbox, size, bold, True,
+                      [{"text": text, "size": size, "flags": 16 if bold else 0}])
+
+
+def test_chinese_author_row_and_journal_citation_supply_metadata():
+    lines = [
+        _line((0, 0, 0), "SST 湍流模型改进研究综述", (60, 60, 340, 82), 18, True),
+        _line((0, 1, 0), "曾宇，汪洪波*，孙明波，王超，刘旭", (60, 100, 330, 118), 13),
+        _line((0, 2, 0), "引用格式：曾宇等．SST 湍流模型改进研究综述［J］．航空学报，2023，44（9）", (60, 125, 540, 138), 7),
+        _line((0, 3, 0), "摘", (60, 160, 72, 172), 8),
+        _line((0, 4, 0), "要：k-ω SST 湍流模型的研究综述。", (80, 160, 340, 172), 8),
+    ]
+    facts, title_keys = extract_bibliography({}, lines, 800, 10)
+    assert facts["title"] == "SST 湍流模型改进研究综述"
+    assert facts["authors"] == ["曾宇", "汪洪波", "孙明波", "王超", "刘旭"]
+    assert facts["year"] == 2023
+    assert facts["venue"] == "航空学报"
+    headings = detect_headings(lines, HEADING, 10, title_keys, first_page=True)
+    assert headings[(0, 3, 0)] == "Abstract"
+
+
+def test_equation_glyphs_and_body_sentences_are_not_sections():
+    lines = [
+        _line((0, 0, 0), "2", (60, 100, 66, 110), 10),
+        _line((0, 0, 1), "1 - F 1", (70, 100, 110, 110), 10),
+        _line((0, 1, 0), "2010 年AIAA 的SWTBLI 研讨会报告指出", (60, 130, 320, 140), 10),
+        _line((0, 2, 0), "第1章 绪论", (60, 170, 150, 185), 13, True),
+    ]
+    headings = detect_headings(lines, HEADING, 10, set(), first_page=False)
+    assert headings == {(0, 2, 0): "第1章 绪论"}
+
+
+def test_contents_page_is_not_used_as_the_paper_title():
+    lines = [
+        _line((0, 0, 0), "目 录", (240, 30, 280, 45), 14, True),
+        _line((0, 1, 0), "摘 要 ........................................................................ i", (60, 100, 500, 112), 10),
+        _line((0, 2, 0), "第1章 绪论 ............................................................... 1", (60, 125, 500, 137), 10),
+        _line((0, 3, 0), "1.1 研究背景 ............................................................ 2", (60, 150, 500, 162), 10),
+        _line((0, 4, 0), "1.2 研究现状 ............................................................ 4", (60, 175, 500, 187), 10),
+    ]
+
+    facts, _ = extract_bibliography({"title": "Microsoft Word - 10.论文.doc"}, lines, 800, 10)
+
+    assert facts["title"] is None
+
+
+def test_chapter_description_sentence_is_not_a_heading():
+    assert not HEADING.fullmatch("第一章为绪论，主要介绍本文的研究背景")
+    assert HEADING.fullmatch("第1章 绪论")
+
+
+def test_short_formula_fragments_are_not_heading_candidates():
+    from app.services.pdf_metadata import _math_like
+
+    assert all(_math_like(text) for text in (
+        "K 7C", "0. 3SF 2", "S", "S S", "R T", "I I",
+        "2 β ′2(Sik Ω kj - Ω ikSkj) +", "P" + chr(0xF03D) + "RT",
+    ))
+
+
+def test_standalone_formula_variable_cannot_create_a_section_title():
+    lines = [
+        _line((2, 4, 0), "Y", (150, 330, 160, 348), 12),
+        _line((2, 4, 1), "等于流经截面的燃料质量分数Y，混合效率为1", (164, 330, 390, 348), 10),
+    ]
+    assert detect_headings(lines, HEADING, 10, set(), first_page=False) == {}
+
+
+def test_spaced_unbolded_chinese_subheading_is_recognized():
+    lines = [
+        _line((3, 0, 0), "4.2 点火与燃烧过程", (85, 559, 211, 572), 12),
+        _line((3, 1, 0), "4.2.1 单凹腔燃烧室点火与燃烧过程", (85, 604, 302, 617), 12),
+        _line((3, 2, 0), "采用雷诺平均模拟方法，在冷流下点火到燃烧稳定的过程。", (112, 649, 440, 665), 12),
+    ]
+
+    headings = detect_headings(lines, HEADING, 12, set(), first_page=False)
+
+    assert headings[(3, 0, 0)] == "4.2 点火与燃烧过程"
+    assert headings[(3, 1, 0)] == "4.2.1 单凹腔燃烧室点火与燃烧过程"
 
 
 def test_identifiers_come_from_front_matter_not_abstract_or_references():

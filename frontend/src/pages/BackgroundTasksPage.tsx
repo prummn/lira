@@ -6,7 +6,6 @@ import { analysisPhaseKey, intelligenceKeys, isActiveTask } from '../lib/intelli
 import { useUi } from '../lib/i18n'
 import { ErrorBanner, Loading } from '../components/Shared'
 import { queueJobLabel, TranslationJobScope, TranslationJobActions } from '../components/TranslationQueueProgress'
-import { ResearchBudget } from '../components/ResearchBudget'
 import { QuotaPolicyControl } from '../components/QuotaPolicyControl'
 import './background-tasks.css'
 import {activeMaintenance,maintenanceStatus} from '../lib/maintenanceStatus'
@@ -99,7 +98,6 @@ export function BackgroundTasksPage({status,error,refresh,openPaper,openResearch
       <div className="background-section-heading"><h2>{t('backgroundActive')}</h2><span>{activeCount} {t('backgroundTaskUnit')}</span></div>
       {activeCount?<div className="background-job-list">{activeAnalyses.map(renderAnalysis)}{active.map(renderJob)}{activeCuration.map(renderMaintenance)}</div>:<div className="background-empty"><CheckCircle2 size={18}/><div><strong>{t('backgroundNoActive')}</strong><p>{t('backgroundNoActiveHint')}</p></div></div>}
       {recent.length+recentAnalyses.length+recentCuration.length>0&&<><div className="background-section-heading"><h2>{t('backgroundRecent')}</h2><span>{t('backgroundSaved')}</span></div><div className="background-job-list background-job-history">{recentAnalyses.map(renderAnalysis)}{recent.map(renderJob)}{recentCuration.map(renderMaintenance)}</div></>}
-      <ResearchBudget budget={status.budget}/>
       {collections.length>0&&<div className="background-research-links"><div><h2>{t('research')}</h2><p>{t('backgroundResearchHint')}</p></div><div>{collections.filter(c=>status.scope_ids.includes(c.id)||status.tasks.some(task=>task.collection_id===c.id)).map(c=><button key={c.id} onClick={()=>openResearch(c.id)}>{c.name}<ArrowUpRight size={14}/></button>)}</div></div>}
       <p className="background-footnote">{t('backgroundServiceHint')}</p>
     </>}

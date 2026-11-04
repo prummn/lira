@@ -16,8 +16,8 @@ from ..providers.base import ProviderError
 INVALID_TRANSLATION = '模型未返回有效译文，请重新翻译。原文已保留。'
 _MISSING_SOURCE = re.compile(
     r'(?:(?:抱歉|对不起)[，,：:\s]*)?(?:'
-    r'(?:未提供|没有提供|尚未提供|未收到|没有收到|缺少)(?:待翻译的?|需要翻译的?|要翻译的?)?(?:原文|文本|内容)'
-    r'|(?:请提供|请先提供|请发送)(?:待翻译的?|需要翻译的?|要翻译的?)?(?:原文|文本|内容)'
+    r'(?:未提供|没有提供|尚未提供|未收到|没有收到|缺少)(?:待翻译的?|需要翻译的?|要翻译的?)?(?:原文|文本|内容)(?:段落|部分)?'
+    r'|(?:请提供|请先提供|请发送)(?:待翻译的?|需要翻译的?|要翻译的?)?(?:原文|文本|内容)(?:段落|部分)?'
     r'|no (?:source |input )?(?:text|content|paragraph)(?: (?:was |has been )?provided)?'
     r'|please provide (?:the )?(?:source |input )?(?:text|content|paragraph)(?: to translate)?'
     r')[。.!！\s]*', re.I)

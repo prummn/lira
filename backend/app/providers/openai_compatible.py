@@ -512,7 +512,6 @@ class OpenAICompatibleProvider:
         payload = json.dumps(data, ensure_ascii=False)
         content: str | None = None
         first_error: ProviderError | None = None
-        text_fallback = False
         try:
             content = self._complete(
                 prompt, payload, json_output=True, max_output_tokens=2200,
@@ -520,19 +519,17 @@ class OpenAICompatibleProvider:
             )
         except ProviderError as error:
             first_error = error
-            # Some official CLI/model combinations accept an image input but
-            # fail to complete a schema-constrained visual turn. The extracted
-            # page text is still useful, so make one bounded text-only pass
-            # instead of exposing a dead-end "request not completed" state.
+            # Retry transient failures once, retaining the actual visual source.
+            # Extracted text can lose table columns or Symbol-font mathematics;
+            # a text-only fallback would silently change the answer's evidence.
             if error.code not in {'upstream_error', 'stream_interrupted', 'transport_timeout', 'output_incomplete'}:
                 raise
             try:
                 content = self._complete(
-                    prompt + '\n图像输入未能完成，请仅依据 supplied chunks 给出可核验的文字回答。',
+                    prompt,
                     payload, json_output=False, max_output_tokens=1600,
-                    reasoning_effort='medium', output_schema=output_schema,
+                    reasoning_effort='medium', image_data_url=image_data_url, output_schema=output_schema,
                 )
-                text_fallback = True
             except ProviderError:
                 raise first_error
         try:
@@ -542,7 +539,7 @@ class OpenAICompatibleProvider:
             # JSON formatting instruction. Preserve that useful answer as a
             # normal visual response; citations remain empty until verified
             # against the extracted chunks by a later pass.
-            if output_schema is None and content and content.strip() and (first_error is None or text_fallback):
+            if output_schema is None and content and content.strip():
                 return {'answer': content.strip(), 'facts': [], 'inferences': [], 'unknowns': [],
                         'needs_more_context': False, 'citations': [], 'insufficient_evidence': False}
             raise ProviderError('模型返回的结构化 JSON 无效，已有结果已保留', code='invalid_response', diagnostics=self._http_diagnostics()) from None
@@ -734,7 +731,10 @@ class OpenAICompatibleProvider:
         """
         from .mock import tokens
         query = tokens(question)
-        ordered = sorted(chunks, key=lambda c: (-len(tokens(c.content) & query), c.page or 0, c.id))
+        # The caller pins crop contents and their original document order.
+        # Stable ties keep those sources ahead of same-page headers when the
+        # question is Chinese and the equation has few lexical query terms.
+        ordered = sorted(chunks, key=lambda c: -len(tokens(c.content) & query))
         context, sent = self._context(ordered, prioritize_sections=False)
         # A scanned page or a figure-only page may have no extracted text. The
         # image is still a complete source for a vision-capable connection.

@@ -703,7 +703,7 @@ class ExplainRequest(ChatRequest):
     page: int | None = Field(default=None, ge=1)
     bbox: BBox | None = None
     image_data_url: str | None = Field(default=None, max_length=8000000)
-    visual_kind: Literal['figure','table'] | None = None
+    visual_kind: Literal['figure','table','equation'] | None = None
     visual_label: str | None = Field(default=None, max_length=100)
     question: str | None = Field(default=None, max_length=4000)
     style: Literal['technical','simple','mathematical','prerequisites'] = 'technical'

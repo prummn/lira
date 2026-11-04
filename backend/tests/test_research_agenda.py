@@ -98,7 +98,7 @@ def test_investigation_material_reads_full_local_sections_beyond_initial_snapsho
     assert all(s['paper_id'] == 'p1' for s in material['sources'])
 
 
-def test_reading_allows_agenda_but_hourly_budget_still_stops_calls(research):
+def test_reading_allows_agenda_despite_legacy_hourly_call_history(research):
     _, worker = research
     prepare(worker)
     planner = Planner()
@@ -114,8 +114,7 @@ def test_reading_allows_agenda_but_hourly_budget_still_stops_calls(research):
         task.usage_json = json.dumps({'call_times': [time.time()] * 18})
         db.commit()
     worker.process_next()
-    assert len(planner.calls) == count
-    assert worker.status()['reason'] == 'hourly_budget'
+    assert len(planner.calls) > count
 
 
 def test_turning_off_deep_research_stops_children_without_losing_queue(research):
@@ -158,7 +157,7 @@ def test_changed_material_supersedes_old_investigation(research):
     assert len(planner.calls) == 1
 
 
-def test_deep_research_budget_can_be_raised_without_removing_quota_reserves(research):
+def test_legacy_call_cap_is_ignored_without_removing_quota_reserves(research):
     client, worker = research
     prepare(worker)
     settings = worker.settings().model_dump()
@@ -168,10 +167,12 @@ def test_deep_research_budget_can_be_raised_without_removing_quota_reserves(rese
     assert response.json()['stop_remaining'] == 35
     assert response.json()['long_reserve'] == 30
     settings['calls_per_hour'] = 61
-    assert client.put('/api/research/settings', json=settings).status_code == 422
+    response = client.put('/api/research/settings', json=settings)
+    assert response.status_code == 200
+    assert 'calls_per_hour' not in response.json()
 
 
-def test_maintenance_batch_cannot_exceed_remaining_hourly_budget(research):
+def test_maintenance_batch_keeps_one_issue_checkpoint_per_tick(research):
     from test_background_research import MaintenanceWriter
     _, worker = research
     initial = prepare(worker)
@@ -352,8 +353,9 @@ def test_targeted_result_updates_original_even_when_model_omits_existing_id(rese
     assert len(worker.finding_history('prior')['revisions']) == 1
 
 
-def test_failed_maintenance_generations_consume_shared_hourly_budget(research):
+def test_failed_maintenance_generation_keeps_per_issue_retry_state(research):
     from app.providers.base import ProviderError
+    from app.models import KnowledgeMaintenanceRun
     from test_background_research import MaintenanceWriter
     _, worker = research
     initial = prepare(worker)
@@ -376,5 +378,10 @@ def test_failed_maintenance_generations_consume_shared_hourly_budget(research):
     for _ in range(4):
         worker._retry_at = 0
         worker.process_next()
-    assert len(writer.calls) == 1
-    assert worker._remaining_calls(settings) == 0
+    assert len(writer.calls) == 2
+    with worker.database.sessions() as db:
+        run = db.scalar(select(KnowledgeMaintenanceRun))
+        usage = json.loads(run.usage_json)
+        assert len(usage['attempts']) == 2
+        assert set(usage['attempts'].values()) == {1}
+        assert len(usage['retry_at']) == 2

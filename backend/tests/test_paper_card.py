@@ -350,6 +350,37 @@ def test_visual_region_context_accepts_canonical_bbox_and_preserves_chart_identi
     assert conversations[0]['context']['visual_label'] == 'Table 5'
 
 
+def test_formula_question_pins_the_selected_geometry_instead_of_the_page_header(client, monkeypatch):
+    from app.models import PaperChunk
+    from app.providers.base import AnswerResult
+
+    paper = card_paper(client)
+    with client.app.state.database.sessions() as session:
+        session.add(PaperChunk(id='selected-formula', paper_id=paper['id'], page=1,
+            section='Method', content='P \uf03d \uf072 R T', bbox_json='[200,500,350,525]',
+            page_width=600, page_height=800))
+        session.commit()
+    seen = {}
+    class Provider:
+        name, mode = 'FormulaVision', 'remote'
+        def ask_with_image(self, question, chunks, image):
+            seen.update(question=question, chunks=chunks, image=image)
+            return AnswerResult('这是状态方程。', [], False, [])
+    monkeypatch.setattr('app.api.papers.get_model_provider', lambda: Provider())
+    response = client.post(f"/api/papers/{paper['id']}/explain", json={
+        'page':1, 'bbox':[195,495,355,530], 'visual_kind':'equation', 'visual_label':'Equation (3-5)',
+        'selected_text':'Equation (3-5)', 'image_data_url':'data:image/png;base64,ZmFrZQ==',
+        'question':'各个符号是什么意思？',
+    })
+    assert response.status_code == 200, response.text
+    assert seen['chunks'][0].id == 'selected-formula'
+    assert '公式' in seen['question'] and 'LaTeX' in seen['question']
+    assert response.json()['visual_used'] is True
+    saved = client.get('/api/conversations/' + response.json()['conversation_id']).json()
+    assert saved['context']['visual_kind'] == 'equation'
+    assert saved['turns'][0]['status'] == 'completed'
+
+
 def test_selection_context_preserves_cross_page_paragraph_order(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services.explanation import selection_context
 

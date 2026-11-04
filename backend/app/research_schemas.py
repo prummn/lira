@@ -10,12 +10,19 @@ class ResearchSettings(BaseModel):
     start_remaining: int = Field(default=50, ge=1, le=100)
     stop_remaining: int = Field(default=35, ge=0, le=99)
     long_reserve: int = Field(default=30, ge=0, le=100)
-    calls_per_hour: int = Field(default=6, ge=1, le=60)
     investigations_enabled: bool = False
     maintenance_enabled: bool = False
     maintenance_interval_minutes: int = Field(default=720, ge=30, le=10080)
     maintenance_calls_per_run: int = Field(default=3, ge=1, le=12)
     maintenance_scope: Literal['library', 'enabled_collections'] = 'library'
+
+    @model_validator(mode='before')
+    @classmethod
+    def discard_legacy_call_cap(cls, value):
+        if isinstance(value, dict) and 'calls_per_hour' in value:
+            value = dict(value)
+            value.pop('calls_per_hour')
+        return value
 
     @model_validator(mode='after')
     def thresholds(self):

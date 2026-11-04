@@ -7,7 +7,7 @@ import pymupdf as fitz
 
 from .pdf_metadata import (
     ABSTRACT, ABSTRACT_END, ABSTRACT_CAPTION, LayoutLine, abstract_bounds, acm_abstract_lines, body_font, detect_headings,
-    extract_bibliography, read_lines, section_reading_order,
+    extract_bibliography, is_contents_page, read_lines, section_reading_order,
 )
 
 
@@ -40,7 +40,7 @@ class ParsedPDF:
 
 
 HEADING = re.compile(
-    r"^(?:\d+(?:\.\d+)*\.?\s+)?(?:abstract|introduction|motivation|background|core idea|contributions?|datasets?|metrics?|baselines?|ablation(?:s| findings| study)?|future work|claims?|related methods|prerequisite concepts|related work|problem(?: statement)?|method(?:s|ology)?|approach|experiment(?:s)?|results?|findings|evaluation|limitations?|discussion|conclusion(?:s)?|references|摘要|引言|动机|背景|核心思路|贡献|数据集|评估指标|基线|消融实验|未来工作|方法|实验|结果|局限性|结论)(?:\s*[:：].*)?$",
+    r"^(?:第\s*[零一二三四五六七八九十百\d]+\s*[章节部分](?:\s+|[：:、])[^，。；;！？!?]{1,40}|(?:\d+(?:\.\d+)*\.?\s+)?(?:abstract|introduction|motivation|background|core idea|contributions?|datasets?|metrics?|baselines?|ablation(?:s| findings| study)?|future work|claims?|related methods|prerequisite concepts|related work|problem(?: statement)?|method(?:s|ology)?|approach|experiment(?:s)?|results?|findings|evaluation|limitations?|discussion|conclusion(?:s)?|references|摘要|引言|动机|背景|核心思路|贡献|数据集|评估指标|基线|消融实验|未来工作|方法|实验|结果|局限性|结论)(?:\s*[:：].*)?)$",
     re.I,
 )
 
@@ -71,9 +71,11 @@ def parse_pdf(data: bytes) -> ParsedPDF:
             for page_index, (width, height, raw_blocks, lines) in enumerate(pages):
                 # Canonical top-left coordinates relative to the unrotated CropBox.
                 # PDF.js owns display rotation, including inverse selection transforms.
-                headings = detect_headings(lines, HEADING, body_size, title_keys,
-                                           first_page=page_index == 0)
-                abstract_region = abstract_bounds(lines)
+                navigation_page = is_contents_page(lines)
+                headings = ({} if navigation_page else detect_headings(
+                    lines, HEADING, body_size, title_keys, first_page=page_index == 0
+                ))
+                abstract_region = None if navigation_page else abstract_bounds(lines)
                 lookup = {line.key: line for line in lines}
                 following_heading = next((label for label in headings.values()
                                           if not ABSTRACT.fullmatch(label)), None)
@@ -115,7 +117,7 @@ def parse_pdf(data: bytes) -> ParsedPDF:
                             flush()
                             current_section = headings[key]
                         section = current_section
-                        if key in unlabeled_abstract:
+                        if key in unlabeled_abstract and not navigation_page:
                             section = 'Abstract'
                         if section == 'Abstract' and (ABSTRACT_END.match(line.text) or ABSTRACT_CAPTION.match(line.text)):
                             current_section = section = None

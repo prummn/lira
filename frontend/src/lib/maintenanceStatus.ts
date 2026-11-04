@@ -6,7 +6,7 @@ const states:Record<MaintenanceTaskSummary['status'],LocaleKey>={queued:'mainten
 const reasons:Record<string,LocaleKey>={reading:'curationWaitingReading',maintenance_reading:'curationWaitingReading',
   foreground_queue:'curationWaitingForeground',disabled:'curationDisabled',maintenance_disabled:'curationDisabled',
   profile_required:'curationProfileRequired',account_unavailable:'curationAccountUnavailable',
-  hourly_budget:'curationHourlyBudget',quota_reserve:'curationQuotaReserve',daily_budget:'curationQuotaReserve',
+  hourly_budget:'curationQuotaRecheck',quota_reserve:'curationQuotaReserve',daily_budget:'curationQuotaRecheck',
   quota_unknown:'quotaQueryHint',quota_timeout:'quotaQueryTimeout',quota_unavailable:'quotaQueryFailed',quota_stale:'quotaQueryHint',
   retry_wait:'curationRetryWait',cooldown:'curationRetryWait',maintenance_error:'curationRetryWait'}
 export function maintenanceStatus(task:MaintenanceTaskSummary,t:(key:LocaleKey)=>string){

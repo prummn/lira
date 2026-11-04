@@ -14,7 +14,7 @@ export function queueJobLabel(job:Pick<TranslationJob,'status'|'failed'|'reason'
     if(job.status==='cancelled')return t('queueCancelled')
     if(job.status==='completed')return t(job.failed?'batchCompletedWithErrors':'batchCompleted')
     if(job.status==='failed')return t('queueFailed')
-    const reasons:Record<string,LocaleKey>={reading:'queueReading',quota_reserve:'queueQuota',long_reserve:'queueQuota',daily_budget:'queueDaily',disabled:'queueDisabled',profile_required:'queueProfile',profile_changed:'queueProfileChanged',account_unavailable:'queueAccount',quota_unknown:'queueUnknownQuota',quota_stale:'queueUnknownQuota',quota_timeout:'queueQuotaTimeout',quota_unavailable:'queueQuotaUnavailable',hourly_limit:'queueHourly',hourly_budget:'queueHourly',foreground:'queueForeground',foreground_queue:'queueForeground',busy:'queueForeground',cooldown:'queueCooldown',idle_wait:'queueIdle'}
+    const reasons:Record<string,LocaleKey>={reading:'queueReading',quota_reserve:'queueQuota',long_reserve:'queueQuota',daily_budget:'queueQuotaRecheck',hourly_limit:'queueQuotaRecheck',hourly_budget:'queueQuotaRecheck',disabled:'queueDisabled',profile_required:'queueProfile',profile_changed:'queueProfileChanged',account_unavailable:'queueAccount',quota_unknown:'queueUnknownQuota',quota_stale:'queueUnknownQuota',quota_timeout:'queueQuotaTimeout',quota_unavailable:'queueQuotaUnavailable',foreground:'queueForeground',foreground_queue:'queueForeground',busy:'queueForeground',cooldown:'queueCooldown',idle_wait:'queueIdle'}
     return t(reasons[job.reason??'']??(job.status==='running'?'queueTranslating':'queueQueued'))
 }
 export function TranslationJobScope({job}:{job:Pick<TranslationJob,'mode'|'scope_total'|'scope_skipped'|'scope_reason'>}) {

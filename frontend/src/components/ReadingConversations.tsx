@@ -112,7 +112,7 @@ export function ReadingConversations({paper,request,locate}:{paper:PaperDetail;r
       // Re-entering the same saved chat after New chat must also reset local state.
       setTarget({key:`${saved.id}:${version}`,conversationId:saved.id,savedContext:context,
         ...(context.visual?{visualPage:page,selection:{page,bbox:Array.isArray(context.bbox)?context.bbox:[0,0,1,1],text:translated||source,
-          ...(context.visual_kind==='figure'||context.visual_kind==='table'?{visualKind:context.visual_kind}:{ }),
+          ...(context.visual_kind==='figure'||context.visual_kind==='table'||context.visual_kind==='equation'?{visualKind:context.visual_kind}:{ }),
           ...(typeof context.visual_label==='string'?{visualLabel:context.visual_label}:{}),
           ...(translated?{origin:'translation' as const,sourceText:source}:{})}}:{selection:{page,bbox:[0,0,1,1],text:translated||source,
           ...(translated?{origin:'translation' as const,sourceText:source}:{})}})})

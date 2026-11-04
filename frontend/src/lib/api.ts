@@ -38,7 +38,7 @@ async function loadPapers() {
 export const api = {
   knowledgePapers: (collectionId?:string) => request<{items:import('../types').KnowledgePaperSummary[]}>(`/knowledge/papers${collectionId?'?collection_id='+encodeURIComponent(collectionId):''}`),
   researchStatus: () => request<ResearchStatus>('/research/status'),
-  researchQuota: () => request<{quota:ResearchStatus['quota'];checked_at:number;available:boolean;quota_error_code?:string|null;quota_using_recent?:boolean;budget?:ResearchStatus['budget']}>('/research/quota'),
+  researchQuota: () => request<{quota:ResearchStatus['quota'];checked_at:number;available:boolean;quota_error_code?:string|null;quota_using_recent?:boolean}>('/research/quota'),
   followReading: (id:string) => request<{tasks:ResearchTask[]}>(`/research/collections/${encodeURIComponent(id)}/reading`, {method:'POST'}),
   researchSettings: (body:ResearchSettings) => request<ResearchSettings>('/research/settings', {method:'PUT',...json(body)}),
   quotaPolicy: (body:Pick<ResearchSettings,'start_remaining'|'stop_remaining'|'long_reserve'>) => request<ResearchSettings>('/research/quota-policy', {method:'PATCH',...json(body)}),
@@ -82,7 +82,7 @@ export const api = {
   addCollectionPapers: (collectionId: string, paperIds: string[]) => request<Collection>(`/collections/${encodeURIComponent(collectionId)}/papers`, {method: 'POST', ...json({paper_ids: paperIds})}),
   analyze: (id: string) => request<PaperDetail>(`/papers/${encodeURIComponent(id)}/analyze`, { method: 'POST' }),
   ask: (id: string, question: string, identity:ChatIdentity={},signal?:AbortSignal) => request<Answer>(`/papers/${encodeURIComponent(id)}/ask`, { method: 'POST', ...json({ question,...identity }),signal }),
-  explain: (id:string, body:ChatIdentity&{chunk_id?:string;selected_text?:string;translated_text?:string;page?:number;bbox?:number[];image_data_url?:string;visual_kind?:'figure'|'table';visual_label?:string;style?:ExplainStyle;question?:string;context_scope?:'auto'|'paragraph'|'section'|'full';allow_external?:boolean;history?:Array<{question:string;answer:string}>}) => request<Answer>(`/papers/${encodeURIComponent(id)}/explain`, {method:'POST',...json(body)}),
+  explain: (id:string, body:ChatIdentity&{chunk_id?:string;selected_text?:string;translated_text?:string;page?:number;bbox?:number[];image_data_url?:string;visual_kind?:'figure'|'table'|'equation';visual_label?:string;style?:ExplainStyle;question?:string;context_scope?:'auto'|'paragraph'|'section'|'full';allow_external?:boolean;history?:Array<{question:string;answer:string}>}) => request<Answer>(`/papers/${encodeURIComponent(id)}/explain`, {method:'POST',...json(body)}),
   note: (id: string, body: NoteInput) => request<Note>(`/papers/${encodeURIComponent(id)}/notes`, { method: 'POST', ...json(body) }),
   updateNote: (id:string,noteId:string,body:{content:string;kind:NoteKind}) => request<Note>(`/papers/${encodeURIComponent(id)}/notes/${encodeURIComponent(noteId)}`,{method:'PATCH',...json(body)}),
   deleteNote: (id: string, noteId: string) => request<unknown>(`/papers/${encodeURIComponent(id)}/notes/${encodeURIComponent(noteId)}`, { method: 'DELETE' }),

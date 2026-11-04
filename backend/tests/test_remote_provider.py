@@ -743,6 +743,25 @@ def test_remote_visual_ask_sends_page_image_to_chat_completions() -> None:
     assert result.citations[0].source_text == chunk.content
 
 
+def test_visual_crop_source_is_not_dropped_when_many_same_page_chunks_tie():
+    from app.models import PaperChunk
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+    seen = {}
+    def respond(request):
+        content = json.loads(request.content)['messages'][-1]['content']
+        text = next(item['text'] for item in content if item['type'] == 'text')
+        seen['payload'] = json.loads(text[text.index('{'):])
+        return httpx.Response(200, json={'choices':[{'message':{'content':json.dumps({
+            'answer':'这是状态方程。','citations':[],'insufficient_evidence':False,
+        })}}]})
+    provider = OpenAICompatibleProvider(api_key='test', base_url='https://model.example/v1',
+        model='vision', transport=httpx.MockTransport(respond))
+    selected = PaperChunk(id='z-formula',paper_id='p',page=1,content='P = rho R T')
+    irrelevant = [PaperChunk(id=f'a-header-{index:02}',paper_id='p',page=1,content='Running header') for index in range(30)]
+    provider.ask_with_image('请解释这些符号。',[selected,*irrelevant],'data:image/png;base64,ZmFrZQ==')
+    assert seen['payload']['chunks'][0]['chunk_id'] == 'z-formula'
+
+
 def test_remote_visual_ask_keeps_a_plain_answer_when_json_format_is_ignored() -> None:
     from app.providers.openai_compatible import OpenAICompatibleProvider
     calls = 0
@@ -758,6 +777,31 @@ def test_remote_visual_ask_keeps_a_plain_answer_when_json_format_is_ignored() ->
     assert result.insufficient_evidence is False
     assert 'The chart shows Apply' in result.answer
     assert calls == 1
+
+
+@pytest.mark.parametrize('recover', [True, False])
+def test_visual_retry_keeps_the_image_instead_of_silently_answering_from_text(monkeypatch, recover):
+    from app.providers.base import ProviderError
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+
+    provider = OpenAICompatibleProvider(api_key='test-secret', base_url='https://model.example/v1', model='vision')
+    seen = []
+
+    def complete(prompt, payload, **options):
+        seen.append(options)
+        if len(seen) == 1 or not recover:
+            raise ProviderError('Visual request failed', code='upstream_error', retryable=True)
+        return json.dumps({'answer': '最后一行 C2H4 为 0、1、1。', 'citations': [], 'insufficient_evidence': False})
+
+    monkeypatch.setattr(provider, '_complete', complete)
+    image = 'data:image/png;base64,ZmFrZQ=='
+    if recover:
+        assert 'C2H4' in provider.ask_with_image('表格最后一行是什么？', [sample_chunk()], image).answer
+    else:
+        with pytest.raises(ProviderError, match='Visual request failed'):
+            provider.ask_with_image('表格最后一行是什么？', [sample_chunk()], image)
+    assert len(seen) == 2
+    assert all(call.get('image_data_url') == image for call in seen)
 
 
 def test_translation_uses_adapter_and_preserves_input_formula_in_prompt() -> None:

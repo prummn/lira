@@ -276,6 +276,50 @@ def test_overlapping_pdf_math_blocks_keep_their_original_reading_position(tmp_pa
     assert all(chunk.content in source for chunk in chunks)
 
 
+def test_math_operator_in_a_separate_glyph_block_marks_overlapping_fragments():
+    from app.models import PaperChunk
+    from app.services.reading_paragraphs import _math_chunks
+    chunks = [
+        PaperChunk(id='derivative', paper_id='p', page=3, section='Method',
+                   content='∂u_i/∂x_j', bbox_json='[100,200,180,220]'),
+        PaperChunk(id='superscript', paper_id='p', page=3, section='Method',
+                   content='2', bbox_json='[130,195,136,203]'),
+    ]
+    assert _math_chunks(chunks) == {'derivative', 'superscript'}
+
+
+def test_compact_formula_tokens_are_kept_with_their_display_equation():
+    from app.models import PaperChunk
+    from app.services.reading_paragraphs import _math_chunks
+
+    chunks = [
+        PaperChunk(id='formula', paper_id='p', page=3, section='Method',
+                   content='∂(ρu_i u_j)/∂x_j', bbox_json='[100,200,180,220]'),
+        PaperChunk(id='variable-line', paper_id='p', page=3, section='Method',
+                   content='R T', bbox_json='[181,200,202,212]'),
+    ]
+
+    assert _math_chunks(chunks) == {'formula', 'variable-line'}
+
+
+def test_multiline_equation_is_not_discarded_as_a_layout_artifact():
+    from types import SimpleNamespace
+    from app.services.reading_paragraphs import _layout_artifact
+    equation = '∂(ρu_i u_j)/∂x_j = ∂[(μ + μ_t) ∂u_i/∂x_j]/∂x_j'
+    lines = [SimpleNamespace(size=6)]
+    assert not _layout_artifact(equation, lines, 10)
+
+
+def test_private_use_math_operators_from_legacy_chinese_fonts_are_preserved():
+    from types import SimpleNamespace
+    from app.services.reading_paragraphs import MATH_GLYPHS, _layout_artifact
+
+    equation = "P" + chr(0xF03D) + chr(0xF072) + "RT"
+
+    assert MATH_GLYPHS.search(equation)
+    assert not _layout_artifact(equation, [SimpleNamespace(size=6)], 10)
+
+
 def test_inline_math_fragments_follow_the_visual_left_to_right_order(tmp_path):
     import pymupdf as fitz
     from app.models import PaperChunk

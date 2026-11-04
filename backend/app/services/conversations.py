@@ -38,7 +38,7 @@ def normalize_context(kind, context):
             or context.get('selected_text') is not None and not isinstance(context['selected_text'], str)
             or context.get('translated_text') is not None and not isinstance(context['translated_text'], str)
             or context.get('visual') is not None and not isinstance(context['visual'], bool)
-            or context.get('visual_kind') is not None and context['visual_kind'] not in {'figure', 'table'}
+            or context.get('visual_kind') is not None and context['visual_kind'] not in {'figure', 'table', 'equation'}
             or context.get('visual_label') is not None and (not isinstance(context['visual_label'], str) or len(context['visual_label']) > 100)):
         raise HTTPException(422, '选段上下文格式无效')
     result = {'page': context.get('page'), 'chunk_id': context.get('chunk_id'),
@@ -46,7 +46,7 @@ def normalize_context(kind, context):
         'visual': bool(context.get('visual'))}
     if context.get('visual') and isinstance(bbox, list):
         result['bbox'] = [float(item) for item in bbox]
-    if context.get('visual') and context.get('visual_kind') in {'figure', 'table'}:
+    if context.get('visual') and context.get('visual_kind') in {'figure', 'table', 'equation'}:
         result['visual_kind'] = context['visual_kind']
     if context.get('visual') and context.get('visual_label'):
         result['visual_label'] = context['visual_label'].strip()

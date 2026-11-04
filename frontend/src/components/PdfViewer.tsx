@@ -34,7 +34,7 @@ export interface PdfSelection {
   /** Text selected in the bilingual margin, with the original kept as evidence. */
   origin?: 'pdf' | 'translation'
   sourceText?: string
-  visualKind?: 'figure'|'table'
+  visualKind?: 'figure'|'table'|'equation'
   visualLabel?: string
   /** Selection bounds in viewport coordinates, used to place the action bar. */
   selectionRect?: { left: number; top: number; width: number; height: number }
@@ -44,7 +44,7 @@ export interface PdfRegionSelection {
   imageDataUrl: string
   selectedText: string
   bbox: number[]
-  kind: 'figure'|'table'
+  kind: 'figure'|'table'|'equation'
   label: string
 }
 export interface PdfViewerProps {

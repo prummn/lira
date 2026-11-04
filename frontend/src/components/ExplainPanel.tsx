@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { ArrowUp, ArrowUpRight, ChartNoAxesCombined, ChevronDown, FileText, Image as ImageIcon, LoaderCircle, PanelRightClose, SlidersHorizontal, Table2 } from 'lucide-react'
+import { ArrowUp, ArrowUpRight, ChartNoAxesCombined, ChevronDown, FileText, Image as ImageIcon, LoaderCircle, PanelRightClose, Sigma, SlidersHorizontal, Table2 } from 'lucide-react'
 import type { Answer, Evidence, PaperDetail, SavedConversation } from '../types'
 import type { PdfSelection } from './PdfViewer'
 import { api, errorMessage } from '../lib/api'
@@ -76,9 +76,10 @@ export function ExplainPanel({ paper, selection, visualPage, visualImage, close,
   const [imageAttempt, setImageAttempt] = useState(0)
   const image = visualImage || restoredImage
   const visual = Boolean(visualPage)
-  const visualKind=selection?.visualKind??(savedContext?.visual_kind==='figure'||savedContext?.visual_kind==='table'?savedContext.visual_kind:undefined)
+  const visualKind=selection?.visualKind??(savedContext?.visual_kind==='figure'||savedContext?.visual_kind==='table'||savedContext?.visual_kind==='equation'?savedContext.visual_kind:undefined)
   const visualLabel=selection?.visualLabel??(typeof savedContext?.visual_label==='string'?savedContext.visual_label:'')
   const sourceSelection = selection?.sourceText ?? selection?.text ?? (typeof savedContext?.selected_text==='string'?savedContext.selected_text:'')
+  const formulaImageOnly=visualKind==='equation'&&/[\uf000-\uf8ff\ufffd■]/.test(sourceSelection)
   const chunk = savedContext?.chunk_id
     ? paper.chunks.find(c => c.id === savedContext.chunk_id)
     : visual
@@ -203,8 +204,8 @@ export function ExplainPanel({ paper, selection, visualPage, visualImage, close,
   const submit = (event: FormEvent) => { event.preventDefault(); void ask() }
 
   if(hidden)return null
-  const visualTitle=visualKind==='table'?t('askVisualTable'):visualKind==='figure'?t('askVisualFigure'):t('askVisualRegion')
-  const visualContextLabel=visualKind==='table'?t('explainVisualTable'):visualKind==='figure'?t('explainVisualFigure'):t('explainVisualRegion')
+  const visualTitle=visualKind==='equation'?t('askVisualEquation'):visualKind==='table'?t('askVisualTable'):visualKind==='figure'?t('askVisualFigure'):t('askVisualRegion')
+  const visualContextLabel=visualKind==='equation'?t('explainVisualEquation'):visualKind==='table'?t('explainVisualTable'):visualKind==='figure'?t('explainVisualFigure'):t('explainVisualRegion')
   return <Modal title={visual ? visualTitle : t('explainSelection')} close={close} variant="drawer" className="ask-drawer-modal" headerActions={<button type="button" className="explain-minimize" aria-label={t('readingChatMinimize')} title={t('readingChatBackgroundHint')} onClick={close}><PanelRightClose size={15}/><span>{t('readingChatReadOn')}</span></button>}>
     <div className={`explain-panel${hasConversation ? ' has-conversation' : ' is-empty'}`}>
       <ConversationHistory items={archive.items} current={chat.id} loading={chat.loading||archive.loading} disabled={busy} hasMore={archive.hasMore} onMore={archive.more} onSelect={archive.select} onNew={()=>{setQuestion('');chat.newChat()}}/>
@@ -223,12 +224,12 @@ export function ExplainPanel({ paper, selection, visualPage, visualImage, close,
         <form className="explain-question-form" onSubmit={submit}>
           <details className="explain-context" open={contextOpen} onToggle={event => setContextOpen(event.currentTarget.open)}>
             <summary className="explain-context-toggle">
-              {visual ? visualKind==='table'?<Table2 size={15}/>:<ChartNoAxesCombined size={15}/> : <FileText size={15}/>}
+              {visual ? visualKind==='equation'?<Sigma size={15}/>:visualKind==='table'?<Table2 size={15}/>:<ChartNoAxesCombined size={15}/> : <FileText size={15}/>}
               <span className="explain-context-label">{visual ? visualContextLabel : t('selectedPassage')}{visualLabel&&<span> · {visualLabel}</span>}<span> · {t('page')} {visual ? visualPage : selection?.page}</span></span>
-              {(visual ? sourceSelection : selection?.text) && <span className="explain-context-excerpt">{visual ? sourceSelection : selection?.text}</span>}
+              {(visual ? sourceSelection : selection?.text) && <span className="explain-context-excerpt">{formulaImageOnly?t('equationImageSource'):visual ? sourceSelection : selection?.text}</span>}
               <ChevronDown className="explain-context-chevron" size={14}/>
             </summary>
-            {visual ? image ? <><figure className="explain-page-preview"><img src={image} alt={t('explainVisualPreview')}/></figure>{sourceSelection && <ScientificText text={sourceSelection} className="explain-selection-quote"/>}</> : <p className="explain-restoring-page"><LoaderCircle size={14} className="spin"/>{t('loading')}</p> : <>
+            {visual ? image ? <><figure className="explain-page-preview"><img src={image} alt={t('explainVisualPreview')}/></figure>{formulaImageOnly?<p className="explain-selection-quote">{t('equationImageSource')}</p>:sourceSelection && <ScientificText text={sourceSelection} className="explain-selection-quote"/>}</> : <p className="explain-restoring-page"><LoaderCircle size={14} className="spin"/>{t('loading')}</p> : <>
               <ScientificText text={selection?.text ?? ''} className="explain-selection-quote"/>
               {selection?.origin === 'translation' && <div className="explain-selection-source"><span>{t('translationSource')}</span><ScientificText text={sourceSelection} /></div>}
             </>}

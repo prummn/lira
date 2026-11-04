@@ -4,92 +4,12 @@ import time
 import pytest
 from sqlalchemy import select
 
-from app.models import ChatConversation, ChatTurn, Note, PaperChunk, ResearchControl, ResearchScope, ResearchTask
+from app.models import ChatConversation, ChatTurn, Note, PaperChunk, ResearchScope, ResearchTask
 from app.research_schemas import ResearchSettings, ScopeUpdate
 from test_background_research import research
 
 
-def test_week_budget_survives_restart_and_accounts_for_all_observed_use(research):
-    from app.services.research_policy import observe_budget
-    _, worker = research
-    now = time.time()
-    windows = [dict(name='secondary', limit_id='codex', used_percent=7,
-                    window_minutes=10080, resets_at=now+6*86400)]
-    ledger, decision = observe_budget({}, windows, now=now, day='2026-10-25', reserve=30)
-    assert decision['allowed']
-    assert 9 <= decision['allowance'] <= 11
-    windows[0]['used_percent'] = 19
-    ledger, decision = observe_budget(json.loads(json.dumps(ledger)), windows, now=now+60,
-                                      day='2026-10-25', reserve=30)
-    assert not decision['allowed']
-    assert decision['reason'] == 'daily_budget'
-    assert decision['observed_use'] == 12
-    # A temporary reporting rollback and lowering the reserve cannot reset today's baseline.
-    windows[0]['used_percent'] = 8
-    _, decision = observe_budget(ledger, windows, now=now+120, day='2026-10-25', reserve=10)
-    assert not decision['allowed']
-    windows[0]['used_percent'] = 19
-    _, decision = observe_budget(ledger, windows, now=now+86400, day='2026-10-26', reserve=30)
-    assert decision['allowed']
-    assert decision['observed_use'] == 0
-
-
-def test_week_budget_reset_short_only_and_multiple_buckets():
-    from app.services.research_policy import observe_budget
-    now = time.time()
-    assert observe_budget({}, [], now=now)[1]['reason'] == 'short_window_only'
-    windows = [dict(name='secondary', used_percent=65, window_minutes=10080, resets_at=now+60)]
-    ledger, first = observe_budget({}, windows, now=now, day='2026-10-25')
-    assert first['allowance'] == 5
-    windows[0].update(used_percent=1, resets_at=now+10080*60)
-    _, fresh = observe_budget(ledger, windows, now=now+61, day='2026-10-25')
-    assert fresh['allowed'] and fresh['observed_use'] == 0
-    assert fresh['allowance'] > 5
-    windows += [dict(name='secondary', limit_id='other', used_percent=20, window_minutes=10080, resets_at=now+3*86400)]
-    ledger, _ = observe_budget({}, windows, now=now, day='2026-10-25')
-    windows[-1]['used_percent'] = 40
-    _, blocked = observe_budget(ledger, windows, now=now+1, day='2026-10-25')
-    assert not blocked['allowed']
-
-
-def test_corrected_reset_time_and_small_estimate_drift_do_not_trap_or_refill_budget():
-    from app.services.research_policy import observe_budget
-    now = time.time()
-    windows = [dict(name='secondary', used_percent=7, window_minutes=10080, resets_at=now+26*3600)]
-    ledger, first = observe_budget({}, windows, now=now, day='2026-10-25')
-    windows[0].update(used_percent=39, resets_at=now+3600)
-    ledger, blocked = observe_budget(ledger, windows, now=now+1800, day='2026-10-25')
-    assert not blocked['allowed']
-    windows[0].update(used_percent=39, resets_at=now+3610)
-    ledger, blocked = observe_budget(ledger, windows, now=now+3605, day='2026-10-25')
-    assert not blocked['allowed']
-    windows[0].update(used_percent=1, resets_at=now+7*86400)
-    _, reset = observe_budget(ledger, windows, now=now+7200, day='2026-10-25')
-    assert reset['allowed'] and reset['observed_use'] == 0
-
-
-def test_budget_persists_when_worker_or_model_profile_changes(research):
-    from app.services.background_research import BackgroundResearchWorker
-    _, worker = research
-    used = [7]
-    reset = time.time()+6*86400
-    worker.profiles.codex.status = lambda **kw: dict(authenticated=True, email='same-account', limits=[
-        dict(name='primary', used_percent=10, window_minutes=300, resets_at=time.time()+300),
-        dict(name='secondary', used_percent=used[0], window_minutes=10080, resets_at=reset)])
-    settings = worker.settings()
-    assert worker._eligible(settings)
-    used[0] = 20
-    replacement = BackgroundResearchWorker(worker.database, worker.profiles)
-    worker.profiles.public = lambda: {'profiles': [{'id': 'other-model', 'provider_kind': 'codex'}]}
-    settings.profile_id = 'other-model'
-    replacement.settings(settings)
-    assert not replacement._eligible(settings)
-    assert replacement.status()['reason'] == 'daily_budget'
-    with worker.database.sessions() as db:
-        assert json.loads(db.get(ResearchControl, 1).budget_json)
-
-
-def test_maintenance_rechecks_quota_between_every_generation(research):
+def test_maintenance_rechecks_actual_quota_between_every_generation(research):
     from app.models import KnowledgeCandidate
     from test_background_research import MaintenanceWriter
     _, worker = research
@@ -105,7 +25,7 @@ def test_maintenance_rechecks_quota_between_every_generation(research):
         dict(name='secondary', used_percent=used[0], window_minutes=10080, resets_at=reset)])
     class ConsumingAuditor(MaintenanceWriter):
         def audit_knowledge_bundle(self, bundle):
-            used[0] = 25
+            used[0] = 75
             return super().audit_knowledge_bundle(bundle)
     with worker.database.sessions() as db:
         for i in range(2):
@@ -117,7 +37,7 @@ def test_maintenance_rechecks_quota_between_every_generation(research):
     worker.process_next()
     worker.process_next()
     assert len(writer.calls) == 1
-    assert worker.status()['reason'] == 'daily_budget'
+    assert worker.status()['reason'] == 'quota_reserve'
 
 
 @pytest.mark.parametrize('started,used,allowed', [(False, 50, False), (True, 50, True), (True, 65, False)])

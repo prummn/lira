@@ -13,7 +13,7 @@ export function QuestionSource({context,paper,locate}:{context:Record<string,unk
   const contentId=useId()
   const original=typeof context.selected_text==='string'?context.selected_text:''
   const translated=typeof context.translated_text==='string'?context.translated_text:''
-  const text=translated||original
+  const text=context.visual_kind==='equation'&&/[\uf000-\uf8ff\ufffd■]/.test(original)?t('equationImageSource'):translated||original
   const label=typeof context.visual_label==='string'?context.visual_label:''
   const chunk=paper.chunks.find(item=>item.id===context.chunk_id)
   const page=typeof context.page==='number'?context.page:chunk?.page

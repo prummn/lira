@@ -22,7 +22,8 @@ NUMBERED = re.compile(r"^(\d+(?:\.\d+)*\.?)\s+(.+)$")
 LICENSE = re.compile(r"permission|copyright|all rights reserved|provided proper attribution|reproduce the tables|scholarly works|preprint|submitted|accepted|published|version\s*\d", re.I)
 ORGANIZATION = re.compile(r"\b(?:university|institute|department|school|laboratory|labs?|google|microsoft|research|brain|corporation|company|inc|corp|ltd|college|academy|hospital|centre|center|technology|technologies|language|conference|proceedings|journal|workshop)\b", re.I)
 VENUE = re.compile(r"\b(?:conference|proceedings|journal|workshop|transactions|symposium)\b", re.I)
-PUBLICATION_YEAR = re.compile(r"(?:\bpublished(?:\s+online)?\b|\bcopyright\b|©)\D{0,30}\b((?:19|20)\d{2})\b", re.I)
+PUBLICATION_YEAR = re.compile(r"(?:\bpublished(?:\s+online)?\b|\bcopyright\b|©)\D{0,30}\b((?:19|20)\d{2})\b|\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}\s+((?:19|20)\d{2})\b", re.I)
+CHINESE_CITATION = re.compile(r"(?:引用格式|citation)\s*[:：].{0,600}?[［\[]J[］\]]\s*[．.]\s*([^，,．.]{2,80}?)\s*[，,]\s*((?:19|20)\d{2})\s*[，,]", re.I)
 TEMPLATE = re.compile(r"make sure to enter|your rights confirmation|conference acronym|\b[xn]{4,}\b", re.I)
 CONFERENCE_PUBLICATION = re.compile(
     r"^\s*Published\s+as\s+a\s+conference\s+paper\s+at\s+(.+?\b((?:19|20)\d{2}))\s*\.?\s*$", re.I,
@@ -83,7 +84,30 @@ def heading_text(text: str) -> bool:
             and any(c.isalpha() for c in text))
 
 
+def _latin_upper(text: str) -> bool:
+    return (any(c.isascii() and c.isalpha() for c in text)
+            and not any("\u3400" <= c <= "\u9fff" for c in text)
+            and text.isupper())
+
+
+def _spaced_chinese_subheading(line: LayoutLine, lines: list[LayoutLine], body_size: float) -> bool:
+    if (not re.match(r"^\d+(?:\.\d+)+\s+\S", line.text)
+            or len(line.text) > 64 or _math_like(line.text)
+            or re.search(r"[，。；;！？!?]", line.text)):
+        return False
+    following = [other for other in lines if other.key != line.key and other.horizontal
+                 and other.bbox[1] >= line.bbox[3]
+                 and abs(other.bbox[0] - line.bbox[0]) <= body_size * 3
+                 and other.size >= body_size * .88 and len(other.text) > 15]
+    if not following:
+        return False
+    next_line = min(following, key=lambda other: other.bbox[1])
+    return next_line.bbox[1] - line.bbox[3] >= body_size * 1.5
+
+
 def _title(lines: list[LayoutLine], height: float, body_size: float) -> list[LayoutLine]:
+    if _contents_page(lines):
+        return []
     abstract_y = min((l.bbox[1] for l in lines if ABSTRACT.fullmatch(l.text)), default=height * .55)
     candidates = [l for l in lines if l.horizontal and l.bbox[1] < min(abstract_y, height * .55)
                   and 4 < len(l.text) < 300 and not LICENSE.search(l.text)
@@ -112,6 +136,20 @@ def _title(lines: list[LayoutLine], height: float, body_size: float) -> list[Lay
     return selected
 
 
+def _contents_page(lines: list[LayoutLine]) -> bool:
+    """Detect front-matter indexes before their entries can become titles or sections."""
+    leader_rows = sum(bool(re.search(r"(?:\.{3,}|…{2,}|·{3,})\s*[ivxlcdm\d]+\s*$", line.text, re.I))
+                      for line in lines)
+    if leader_rows >= 3:
+        return True
+    return any(re.fullmatch(r"(?:目\s*录|contents|图目录|表目录|figure list|table list)", line.text, re.I)
+               for line in lines)
+
+
+def is_contents_page(lines: list[LayoutLine]) -> bool:
+    return _contents_page(lines)
+
+
 def _join_title(lines: list[LayoutLine]) -> str | None:
     title = ""
     for line in lines:
@@ -124,6 +162,10 @@ def _join_title(lines: list[LayoutLine]) -> str | None:
 
 def _names(text: str) -> list[str]:
     text = re.sub(r"[∗*†‡⁎♢¹²³⁴⁵⁶⁷⁸⁹\d]+", "", text)
+    cjk_parts = re.split(r"\s*[，,、；;]\s*", re.sub(r"\s+", "", text).strip(" ，,、；;"))
+    if len(cjk_parts) > 1 and all(re.fullmatch(r"[\u3400-\u4dbf\u4e00-\u9fff·]{2,5}", part)
+                                  for part in cjk_parts):
+        return cjk_parts
     text = re.sub(r"\s+", " ", text).strip(" ,;")
     if ORGANIZATION.search(text) or any(c in text for c in "@{}()/:="):
         return []
@@ -199,6 +241,10 @@ def extract_bibliography(metadata: dict, lines: list[LayoutLine], height: float,
     for line in front:
         if TEMPLATE.search(line.text):
             continue
+        if not facts["venue"] and (citation := CHINESE_CITATION.search(line.text)):
+            facts["venue"] = citation.group(1).strip()
+            facts["year"] = int(citation.group(2))
+            sources["venue"] = sources["year"] = "pdf_citation_format"
         # This exact front-matter declaration is publication evidence, even
         # though the generic license filter also contains the word published.
         if (not facts["venue"] and line.horizontal and line.bbox[1] < abstract_y
@@ -216,7 +262,7 @@ def extract_bibliography(metadata: dict, lines: list[LayoutLine], height: float,
             facts["doi"] = match.group(1).rstrip(".,;)")
             sources["doi"] = "pdf_text"
         if facts["year"] is None and (match := PUBLICATION_YEAR.search(line.text)):
-            facts["year"] = int(match.group(1))
+            facts["year"] = int(match.group(1) or match.group(2))
             sources["year"] = "pdf_text"
         if not facts["venue"] and line.horizontal and VENUE.search(line.text) and not LICENSE.search(line.text):
             facts["venue"] = line.text.rstrip(".")
@@ -274,14 +320,26 @@ def detect_headings(lines: list[LayoutLine], known: re.Pattern, body_size: float
     by_position = sorted((line for line in lines if line.key not in toc_rows),
                          key=lambda l: (l.bbox[1], l.bbox[0]))
     paired = set()
+    for line in by_position:
+        if line.text not in {"摘", "要"}:
+            continue
+        neighbor = next((other for other in by_position if other.key != line.key and other.horizontal
+                         and abs(other.bbox[1] - line.bbox[1]) < max(2, line.size * .3)
+                         and ((line.text == "摘" and other.text.startswith("要"))
+                              or (line.text == "要" and other.text.startswith("摘")))), None)
+        if neighbor:
+            first = min((line, neighbor), key=lambda item: item.bbox[0])
+            headings[first.key] = "Abstract"
+            paired.update((line.key, neighbor.key))
     for number in by_position:
         if not number.horizontal or not SECTION_NUMBER.fullmatch(number.text):
             continue
         neighbors = [l for l in by_position if l.key != number.key and l.horizontal
                      and abs(l.bbox[1] - number.bbox[1]) < max(2, number.size * .3)
                      and 0 <= l.bbox[0] - number.bbox[2] <= 40
-                     and (known.fullmatch(l.text) or (heading_text(l.text) and
-                          (l.bold or (l.text.isupper() and l.size >= body_size * .95))))]
+                     and (known.fullmatch(l.text) or (len(l.text) >= 3 and heading_text(l.text)
+                          and not _math_like(l.text)
+                          and (l.bold or (_latin_upper(l.text) and l.size >= body_size * .95))))]
         if neighbors:
             title = min(neighbors, key=lambda l: l.bbox[0])
             # Preserve the established chunk split for known headings. Generic
@@ -324,7 +382,7 @@ def detect_headings(lines: list[LayoutLine], known: re.Pattern, body_size: float
         if (known.fullmatch(line.text) and line.size >= body_size * .95
                 and len(line.text) <= 100 and len(line.text.split()) <= 12):
             headings[line.key] = line.text
-        elif (not first_page or line.bbox[1] > abstract_y) and heading_text(line.text):
+        elif (not first_page or line.bbox[1] > abstract_y) and heading_text(line.text) and not _math_like(line.text):
             numbered = NUMBERED.match(line.text) or (line.size >= body_size * .95
                 and re.match(r'^(?:[IVXLCDM]+\.|[A-Z](?:\.\d+)*\.?)\s+\S', line.text))
             # Isolated diagram labels often use bold heading-sized text. A
@@ -335,10 +393,13 @@ def detect_headings(lines: list[LayoutLine], known: re.Pattern, body_size: float
                 and abs(other.bbox[0] - line.bbox[0]) < body_size * 2
                 and 0 <= other.bbox[1] - line.bbox[3] <= body_size * 2.5
                 for other in lines)
+            latin_upper = _latin_upper(line.text)
             if (numbered and (line.bold or line.size > body_size * 1.05
-                or (line.text.isupper() and line.size >= body_size * .95))) or (
+                or (latin_upper and line.size >= body_size * .95)
+                or (line.size >= body_size * .95
+                    and _spaced_chinese_subheading(line, lines, body_size)))) or (
                     (line.bold and line.size >= body_size * .95
-                     or line.text.isupper() and line.size > body_size * 1.05)
+                     or latin_upper and line.size > body_size * 1.05)
                     and following_prose):
                 headings[line.key] = line.text
     # Wrapped numbered titles remain one section. Do not alter the original
@@ -365,6 +426,30 @@ def detect_headings(lines: list[LayoutLine], known: re.Pattern, body_size: float
             headings.pop(continuation.key, None)
             previous = continuation
     return headings
+
+
+def _math_like(text: str) -> bool:
+    """Keep displayed math and isolated symbols out of heading detection."""
+    if (re.search(r"[=<>∑∏∫∂∇√≤≥±∞∈∝≈≠×÷−\uf000-\uf0ff]", text)
+            or re.search(r"\d\s*[-+*/]\s*(?:\d|[A-Za-zΑ-Ωα-ω])", text)):
+        return True
+    if (len(text) <= 80 and re.search(r"[+]|\s-\s", text)
+            and (re.search(r"\d|[Α-Ωα-ω]", text) or text.count("(") >= 1)
+            and len(re.findall(r"[A-Za-zΑ-Ωα-ω]", text)) >= 3):
+        return True
+    if (len(text) <= 24 and re.fullmatch(r"[\dA-ZΑ-Ωα-ω′″¯_.,()\s]+", text)
+            and (re.search(r"[Α-Ωα-ω′″¯]", text)
+                 or re.fullmatch(r"\d+\s+[A-Z](?:\s+\w+)?", text))):
+        return True
+    tokens = text.split()
+    if len(tokens) == 1 and re.fullmatch(r"[A-ZΑ-Ω]", text):
+        return True
+    if (2 <= len(tokens) <= 5 and len(text) <= 20
+            and all(re.fullmatch(r"[A-ZΑ-Ωα-ω\d′″¯_.]+", token) for token in tokens)
+            and (any(any(char.isdigit() for char in token) for token in tokens)
+                 or all(len(token) <= 2 for token in tokens))):
+        return True
+    return False
 
 
 def abstract_bounds(lines: list[LayoutLine]) -> tuple[float, float, float] | None:

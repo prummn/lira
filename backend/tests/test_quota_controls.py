@@ -6,7 +6,8 @@ import time
 def test_quota_patch_preserves_other_settings_and_persists(client):
     worker = client.app.state.research_worker
     worker.stop()
-    worker.settings(ResearchSettings(idle_seconds=321, calls_per_hour=17, maintenance_enabled=True))
+    worker.settings(ResearchSettings.model_validate({'idle_seconds':321, 'calls_per_hour':17,
+                                                     'maintenance_enabled':True}))
     worker._retry_at = time.time() + 600
     worker._research_pool.wake_event.clear()
     worker._translation_pool.wake_event.clear()
@@ -14,7 +15,7 @@ def test_quota_patch_preserves_other_settings_and_persists(client):
     assert response.status_code == 200
     saved = response.json()
     assert saved['long_reserve'] == 0
-    assert saved['idle_seconds'] == 321 and saved['calls_per_hour'] == 17
+    assert saved['idle_seconds'] == 321 and 'calls_per_hour' not in saved
     assert saved['maintenance_enabled'] and not saved['enabled']
     assert saved['start_remaining'] == 50 and saved['stop_remaining'] == 35
     assert worker.settings().long_reserve == 0 and worker._retry_at == 0

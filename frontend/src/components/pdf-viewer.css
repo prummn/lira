@@ -105,6 +105,7 @@
 .pdfv-visual-region.is-hovered { border-color:rgba(56,106,133,.78); background:rgba(76,139,161,.08); box-shadow:0 0 0 2px rgba(76,139,161,.11); }
 .pdfv-visual-region-action { position:absolute; z-index:7; display:inline-flex; align-items:center; gap:6px; max-width:190px; min-height:27px; padding:0 8px; border:1px solid #b9ccd0; border-radius:4px; color:#31555c; background:#f6fbfa; box-shadow:0 2px 8px rgba(24,48,51,.13); font-size:10px; font-weight:600; cursor:pointer; white-space:nowrap; }
 .pdfv-visual-region-action.figure { color:#365a76; background:#f3f8fc; border-color:#b9cada; }
+.pdfv-visual-region-action.equation { color:#664b32; background:#fbf7f0; border-color:#d8c6a9; }
 .pdfv-visual-region-action.table { color:#315f58; background:#f3faf7; border-color:#bad4c9; }
 .pdfv-visual-region-action:hover { filter:brightness(.97); box-shadow:0 3px 10px rgba(24,48,51,.19); }
 .pdfv-visual-region-action span { overflow:hidden; text-overflow:ellipsis; }

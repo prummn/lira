@@ -152,23 +152,23 @@ Citation Graph 的明确引用边应来自 `metadata` 或 `explicit`；Method Li
 
 ### 专题文章与后台研究（0013）
 
-`research_control` 单例保存全局订阅连接、空闲时间、额度阈值和每小时调用次数。`research_scopes` 按 collection_id 保存是否启用和研究方向。默认关闭，显式指定官方连接后才生成；只使用 Codex，不读取付费备用路由。
+`research_control` 单例保存全局订阅连接、空闲时间和额度保留阈值。旧版小时调用字段会在读取时忽略；旧预算快照列保留以兼容现存数据库，但不参与后台准入。`research_scopes` 按 collection_id 保存是否启用和研究方向。默认关闭，显式指定官方连接后才生成；只使用 Codex，不读取付费备用路由。
 
-`research_tasks` 保存材料指纹、原文快照、阶段检查点、尝试次数和调用记录。阶段为 synthesis → draft → review → published；状态为 queued/running/paused/completed/failed/cancelled/superseded。相同材料复用任务，变化后替代旧活动任务；恢复历史研究方向可继续被替代的任务。历史完成内容再次成为当前方向时建立新的版本任务，保留旧版本。每个阶段最多两次失败尝试，每小时调用上限另行限制；取消/重试只影响明确的任务。
+`research_tasks` 保存材料指纹、原文快照、阶段检查点、尝试次数和调用记录。阶段为 synthesis → draft → review → published；状态为 queued/running/paused/completed/failed/cancelled/superseded。相同材料复用任务，变化后替代旧活动任务；恢复历史研究方向可继续被替代的任务。历史完成内容再次成为当前方向时建立新的版本任务，保留旧版本。每个阶段最多两次失败尝试；调用前按官方额度窗口、保留线和前台优先级准入。取消/重试只影响明确的任务。
 
 `research_revisions` 追加保存标题、导语、正文、更新说明、原文引语与定位、覆盖范围和审读模型。发布前匹配原句、检查全部引用目标并核对材料指纹；失败不得覆盖前版。引文匹配不等于论断被形式证明，语义由独立模型审读和用户回到原文检验。模型调用期间不持有写事务，重启及异常保存后的下一轮均恢复 stranded running 任务。
 
 ### 研究线索与复习（0014）
 
-`research_scopes.work_types_json` 保存选择的 `essay/connections/gaps/review/questions`，迁移默认 `["essay"]`。`research_tasks.kind` 默认 `essay`，新增 `findings` 使用 discover → assess → published；两类任务的活动状态互不替代，仍共享原额度、每小时调用预算与前台优先通道。
+`research_scopes.work_types_json` 保存选择的 `essay/connections/gaps/review/questions`，迁移默认 `["essay"]`。`research_tasks.kind` 默认 `essay`，新增 `findings` 使用 discover → assess → published；两类任务的活动状态互不替代，共享官方额度窗口与前台优先通道。
 
 `research_findings` 按专题保存 `connection/gap/review/question`，内容包括标题、解释/参考答案、下一步、完整原文摘录与定位、模型；独立字段保存 unread/kept/dismissed/done、复习次数与下次时间。专题与 identity 唯一。模型沿用已有ID时可以修订标题和证据，但不会重置人工状态或复习计划。程序同时识别标题相同及正文/下一步/证据锚点相同的副本，语义复核负责其他同义表达。
 
 `research_finding_revisions` 追加保存线索ID、任务ID、内容摘要、完整内容快照和时间。完全相同的发布重放不追加历史；改写后的解释与原文保留为新修订。状态变更不改写内容历史，也不改变后台材料指纹。「记住了」按1/3/7/14/30/60天递增；「再复习」将熟悉次数重置并安排十分钟后，均由本地程序计算。
 
-### 阅读疑问与持久预算（0016）
+### 阅读疑问与持久额度记录（0016）
 
-`research_control.budget_json` 独立于可编辑设置保存账号预算账本。每个长窗口包含日期、首次观测基线、用量高水位、固定日额度与重置时间。它记录账号整体观测增长，不是单任务的费用表。设置保存不得清空账本；同账号换模型不另起预算。
+0016 曾使用 `research_control.budget_json` 保存账号级长窗口估算账本。该估算准入规则现已移除；数据库列仍保留给旧库兼容，不读取、不更新，也不限制后台任务。当前任务只检查官方额度窗口及保留线。
 
 `research_tasks.intent_key` 为可空、有索引的阅读意图身份，包含论文、问题、选段与定位。阅读任务继续使用 `kind=investigation`，通过材料中的 `origin` 保存问题笔记或原始提问身份，并产出 `research_findings.kind=reading`。同一论文跨专题只安排一次；取消、忽略和完成不自动复活。问题修改按新内容调度，原文更新可在原答案上增加修订。
 

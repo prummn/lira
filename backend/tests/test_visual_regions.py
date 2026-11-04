@@ -20,6 +20,8 @@ def pdf_with_figure_and_table() -> bytes:
             "This long paragraph below the figure must remain a separate selectable and translatable paragraph. It explains the result in complete sentences without becoming part of the figure selection.",
             fontsize=11,
         )
+        page.insert_text((190, 510), 'P = rho R T + mu * du/dx', fontsize=12)
+        page.insert_text((510, 510), '(3)', fontsize=9)
 
         page.insert_text((90, 535), "Table 5: SWE-bench results", fontsize=10)
         for y in (550, 575, 600, 625):
@@ -51,12 +53,15 @@ def test_visual_regions_are_precomputed_and_do_not_swallow_prose(client):
     regions = response.json()["items"]
     figure = next(region for region in regions if region["label"].startswith("Figure 1"))
     table = next(region for region in regions if region["label"].startswith("Table 5"))
+    equation = next(region for region in regions if region["kind"] == "equation")
     assert figure["kind"] == "figure"
     assert figure["bbox"][1] > 145
     assert figure["bbox"][3] < 430
     assert table["kind"] == "table"
     assert table["bbox"][1] < 550
     assert table["bbox"][3] < 655
+    assert equation['label'] == 'Equation (3)'
+    assert equation['bbox'][3] < table['bbox'][1]
 
     reading = client.get(f"/api/papers/{paper['id']}/reading-paragraphs").json()["paragraphs"]
     prose = [paragraph for paragraph in reading if paragraph["kind"] == "prose"]
@@ -203,6 +208,58 @@ def test_reference_immediately_after_real_caption_does_not_create_a_second_figur
         assert regions[0]['bbox'][3] < 260
 
 
+def test_chinese_hyphenated_figure_number_is_kept_whole():
+    from app.services.visual_regions import CAPTION, _page_regions
+    with fitz.open() as document:
+        page = document.new_page(width=600, height=800)
+        page.draw_rect(fitz.Rect(100, 100, 500, 260), width=1)
+        page.insert_text((105, 282), 'Figure 1-1 Scramjet combustor schematic', fontsize=10)
+
+        regions = _page_regions(page, 1)
+
+        assert len(regions) == 1
+        assert regions[0]['label'] == 'Figure 1-1'
+        assert CAPTION.match('图1-1 超声速燃烧室结构示意图').group(1) == '图1-1'
+
+
+def test_chinese_body_figure_reference_is_not_detected_as_a_caption():
+    from app.services.visual_regions import _body_reference_caption
+
+    assert _body_reference_caption('图1', '所示，近年来对这些内容的研究仍在进行')
+
+
+def test_bilingual_captions_for_one_figure_are_one_visual_region():
+    from app.services.visual_regions import _merge_bilingual_regions
+
+    base = {'id':'figure-cn','page':1,'kind':'figure','label':'图 1',
+            'caption':'图 1 SST 湍流模型主要发展历程','bbox':[100,100,500,320],
+            'page_width':600,'page_height':800}
+    english = {**base,'id':'figure-en','label':'Fig. 1',
+               'caption':'Fig. 1 Major developments in SST turbulence model'}
+
+    regions = _merge_bilingual_regions([base,english])
+
+    assert len(regions) == 1
+    assert '图 1' in regions[0]['caption']
+    assert 'Fig. 1' in regions[0]['caption']
+
+
+def test_contents_and_figure_index_pages_do_not_emit_visual_regions():
+    from app.services.visual_regions import _page_regions
+    with fitz.open() as document:
+        page = document.new_page(width=600, height=800)
+        page.insert_text((250, 40), 'Figure List', fontsize=14)
+        for index, text in enumerate((
+            'Figure 1-1 Engine schematic ........................................ 1',
+            'Figure 1-2 Combustion process ..................................... 2',
+            'Figure 2-1 Computational domain ................................... 3',
+        )):
+            page.insert_text((65, 100 + index * 24), text, fontsize=10)
+        page.draw_rect(fitz.Rect(100, 190, 500, 260), width=1)
+
+        assert _page_regions(page, 1) == []
+
+
 @pytest.mark.parametrize('caption_above', [False, True])
 def test_real_figure_caption_can_start_with_a_verb_without_special_typography(caption_above):
     from app.services.visual_regions import _page_regions
@@ -243,3 +300,166 @@ def test_body_figure_reference_remains_a_readable_prose_paragraph(client, wrappe
     assert reference['kind'] == 'prose'
     caption = next(p for p in paragraphs if p['text'].startswith('Figure 5 shows'))
     assert caption['kind'] == 'caption'
+
+
+def test_display_equations_are_selectable_regions_but_inline_math_is_not():
+    from app.services.visual_regions import _equation_regions
+
+    with fitz.open() as document:
+        page = document.new_page(width=600, height=800)
+        page.insert_textbox(fitz.Rect(60, 70, 540, 125),
+            'The objective uses x = y to describe the result in this ordinary sentence. '
+            'This inline expression must stay part of the paragraph.', fontsize=11)
+        page.insert_text((205, 190), 'F1 = tanh(arg1) + (1 - F1) phi2', fontsize=12)
+        page.insert_text((510, 190), '(1)', fontsize=9)
+        page.insert_text((190, 240), 'Dk/Dt = -rho u_i du_i/dx_j', fontsize=11)
+        page.insert_text((205, 256), '+ d/dx_j [(mu + mu_t) dk/dx_j]', fontsize=11)
+        page.insert_text((510, 256), '(2)', fontsize=9)
+
+        regions = _equation_regions(page, 1)
+
+    assert len(regions) == 2
+    assert regions[0]['kind'] == 'equation'
+    assert regions[0]['label'] == 'Equation (1)'
+    assert regions[1]['label'] == 'Equation (2)'
+    assert regions[1]['bbox'][3] - regions[1]['bbox'][1] > 25
+
+
+def test_same_baseline_equations_in_two_columns_remain_separate():
+    from app.services.visual_regions import _equation_regions
+
+    with fitz.open() as document:
+        page = document.new_page(width=600, height=800)
+        page.insert_textbox(fitz.Rect(60, 50, 285, 125),
+            'The left column introduces a model and describes its assumptions in several lines of ordinary prose.', fontsize=10)
+        page.insert_textbox(fitz.Rect(315, 50, 540, 125),
+            'The right column discusses a separate model and explains the evaluation setup in regular prose.', fontsize=10)
+        page.insert_text((65, 190), 'x = a + b', fontsize=12)
+        page.insert_text((320, 190), 'y = c + d', fontsize=12)
+
+        regions = _equation_regions(page, 1)
+
+    assert len(regions) == 2
+    assert regions[0]['bbox'][2] < 300
+    assert regions[1]['bbox'][0] > 300
+
+
+@pytest.fixture
+def real_equation_page():
+    import json
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    samples = json.loads((Path(__file__).parent / 'fixtures/chinese_equation_layout.json').read_text(encoding='utf-8'))
+    def load(source, number):
+        sample = next(item for item in samples if item['source'] == source and item['page'] == number)
+        return SimpleNamespace(cropbox=SimpleNamespace(width=sample['width'], height=sample['height']),
+                               get_text=lambda *args, **kwargs: {'blocks': sample['blocks']},
+                               get_drawings=lambda: sample['drawings'],
+                               get_images=lambda **kwargs: [(index,) for index, _ in enumerate(sample['images'])],
+                               get_image_rects=lambda index: [sample['images'][index]])
+    return load
+
+
+def test_real_sst_equation_nine_includes_both_lines_and_fraction_extents(real_equation_page):
+    from app.services.visual_regions import _equation_regions
+    regions = _equation_regions(real_equation_page('sst', 10), 10)
+    equation = next(region for region in regions if region['label'] == 'Equation (9)')
+    assert equation['bbox'][0] <= 308
+    assert equation['bbox'][1] < 104
+    assert equation['bbox'][3] >= 188
+    assert equation['bbox'][3] < 197
+
+
+def test_real_sst_dense_math_never_merges_across_columns(real_equation_page):
+    from app.services.visual_regions import _equation_regions
+    page = real_equation_page('sst', 20)
+    regions = _equation_regions(page, 20)
+    assert any(region['label'] == 'Equation (16)' for region in regions)
+    for region in regions:
+        left, _, right, _ = region['bbox']
+        assert right < 302 or left > 298, region
+
+
+def test_real_thesis_symbol_font_equations_keep_hyphenated_numbers(real_equation_page):
+    from app.services.visual_regions import _equation_regions
+    regions = _equation_regions(real_equation_page('thesis', 22), 22)
+    for number in range(1, 7):
+        assert any(region['label'] == f'Equation (2-{number})' for region in regions)
+    first = next(region for region in regions if region['label'] == 'Equation (2-1)')
+    assert first['bbox'][1] < 336
+    assert first['bbox'][3] >= 367
+    assert first['bbox'][3] < 380
+
+
+def test_formula_literals_in_running_prose_are_not_display_equations():
+    from app.services.visual_regions import _equation_regions
+    with fitz.open() as document:
+        page = document.new_page(width=600, height=800)
+        page.insert_text((60, 100), 'The loss x = a + b is measured for every training example.', fontsize=11)
+        page.insert_text((60, 150), 'For x >= 2 and y <= 5 we observe a stable configuration.', fontsize=11)
+        assert _equation_regions(page, 1) == []
+
+
+def test_numbered_simple_fraction_needs_no_second_operator():
+    from app.services.visual_regions import _equation_regions
+    with fitz.open() as document:
+        page = document.new_page(width=600, height=800)
+        page.insert_text((260, 190), 'Ma =', fontsize=12)
+        page.insert_text((300, 184), 'u', fontsize=12)
+        page.insert_text((300, 198), 'c', fontsize=12)
+        page.insert_text((510, 190), '(3-6)', fontsize=11)
+        regions = _equation_regions(page, 1)
+        assert len(regions) == 1
+        assert regions[0]['label'] == 'Equation (3-6)'
+        assert regions[0]['bbox'][3] >= 201
+
+
+@pytest.mark.parametrize('page,label,bottom', [(36,'表3-1',737),(37,'表3-2',491),(42,'表3-3',709)])
+def test_real_thesis_three_rule_tables_include_all_data_rows(real_equation_page, page, label, bottom):
+    from app.services.visual_regions import _page_regions
+    regions = _page_regions(real_equation_page('thesis', page), page)
+    table = next(region for region in regions if region['label'] == label)
+    assert table['bbox'][3] >= bottom
+    assert table['bbox'][3] < 753
+
+
+def test_real_sst_page_header_does_not_attach_itself_to_figure_six(real_equation_page):
+    from app.services.visual_regions import _page_regions
+    regions = _page_regions(real_equation_page('sst', 20), 20)
+    figure = next(region for region in regions if region['kind'] == 'figure' and region['label'] == '图 6')
+    assert figure['bbox'][0] > 300
+    assert figure['bbox'][1] > 80
+    assert any(region['kind'] == 'equation' and region['bbox'][1] < 200 for region in regions)
+
+
+def test_adjacent_thesis_images_do_not_merge_through_their_captions(real_equation_page):
+    from app.services.visual_regions import _page_regions
+    regions = _page_regions(real_equation_page('thesis', 42), 42)
+    first = next(region for region in regions if region['label'] == '图3-10')
+    second = next(region for region in regions if region['label'] == '图3-11')
+    assert first['bbox'][3] < second['bbox'][1]
+
+
+def test_nearly_transparent_watermark_does_not_expand_the_figure_into_body_text():
+    from app.services.visual_regions import _page_regions
+    with fitz.open() as document:
+        page = document.new_page(width=600, height=800)
+        watermark = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 100, 100), True)
+        watermark.clear_with(0)
+        watermark.set_alpha(bytes([5]) * 10000)
+        page.insert_image(fitz.Rect(100, 200, 500, 600), pixmap=watermark)
+        page.insert_text((110, 230), 'Ordinary body text above the actual chart.', fontsize=11)
+        page.draw_rect(fitz.Rect(110, 450, 490, 630))
+        page.insert_text((150, 655), 'Figure 1: The actual visible chart.', fontsize=10)
+        figure = next(r for r in _page_regions(page, 1) if r['kind'] == 'figure')
+        assert figure['bbox'][1] >= 440
+
+
+def test_real_sst_multiline_bilingual_caption_is_complete_without_the_next_paragraph(real_equation_page):
+    from app.services.visual_regions import _page_regions
+    figure = next(r for r in _page_regions(real_equation_page('sst', 20), 20) if r['label'] == '图 6')
+    assert 'mental data for two' in figure['caption']
+    assert '数与实验数据的比较' in figure['caption']
+    assert figure['bbox'][3] >= 272.4
+    assert figure['bbox'][3] < 285

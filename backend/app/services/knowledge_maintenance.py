@@ -793,7 +793,7 @@ def skip_demo_audits(session: Session, run: KnowledgeMaintenanceRun) -> None:
 
 
 def execute_run(session: Session, run: KnowledgeMaintenanceRun, provider=None, *, max_calls: int | None = None,
-                issue_id=None, checkpoint_lock=None, reserve_call=None) -> KnowledgeMaintenanceRun:
+                issue_id=None, checkpoint_lock=None, preflight_call=None) -> KnowledgeMaintenanceRun:
     """Serialize checkpoints, releasing the lock only during model generation.
 
     An issue lease belongs to the worker, not this session. Different papers in
@@ -807,13 +807,13 @@ def execute_run(session: Session, run: KnowledgeMaintenanceRun, provider=None, *
             if run.status not in {'queued', 'partial', 'running'}:
                 return run
         result = _execute_run(session, run, provider, max_calls=max_calls, issue_id=issue_id,
-                              checkpoint_lock=checkpoint_lock, reserve_call=reserve_call)
+                              checkpoint_lock=checkpoint_lock, preflight_call=preflight_call)
         if checkpoint_lock is not None:
             session.commit()
         return result
 
 
-def _execute_run(session, run, provider, *, max_calls, issue_id, checkpoint_lock, reserve_call):
+def _execute_run(session, run, provider, *, max_calls, issue_id, checkpoint_lock, preflight_call):
     """Run the model stage for a prepared batch; local findings always survive."""
     from ..providers.base import ProviderError
 
@@ -916,8 +916,8 @@ def _execute_run(session, run, provider, *, max_calls, issue_id, checkpoint_lock
             bundle = build_model_bundle(session, finding)
         # Count attempts before generation: a rejected response or cancellation
         # can still consume quota. The caller commits partial runs on failure.
-        if reserve_call is not None:
-            reserve_call()
+        if preflight_call is not None:
+            preflight_call()
         calls += 1
         usage['active_issue_ids'] = sorted(set(usage.get('active_issue_ids', [])) | {issue.id})
         usage['active_issue_id'] = usage['active_issue_ids'][0]

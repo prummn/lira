@@ -13,6 +13,7 @@ async function openQuestion(page: Page, visual = true) {
   await page.route(`**/api/papers/${paper.id}/visual-regions`, route => route.fulfill({ json: { items: [
     { id:'fixture-figure',page:1,kind:'figure',label:'Figure 1',caption:'Figure 1: Verifier-guided reasoning',bbox:[48,120,548,290],page_width:595,page_height:842 },
     { id:'fixture-table',page:1,kind:'table',label:'Table 1',caption:'Table 1: Verifier results',bbox:[48,330,548,480],page_width:595,page_height:842 },
+    { id:'fixture-equation',page:1,kind:'equation',label:'Equation (3)',caption:'P \uf03d \uf072 R T',bbox:[100,520,500,570],page_width:595,page_height:842 },
   ] } }))
   await page.goto('/')
   await page.locator('.paper-row').filter({ hasText: `Question layout ${paper.id}` }).locator('.paper-name > button').click()
@@ -73,6 +74,34 @@ test('figures and tables have distinct question actions and no page or drag sele
   await expect(tableAction).toBeVisible()
   const tableIcon = await tableAction.locator('svg').evaluate(element => element.outerHTML)
   expect(tableIcon).not.toBe(figureIcon)
+})
+
+test('a detected equation opens its own visual question and keeps its identity in saved history', async ({page}) => {
+  const {dialog,input,paper} = await openQuestion(page)
+  await dialog.getByRole('button',{name:'收起对话',exact:true}).click()
+  const box = await page.locator('[data-visual-id="fixture-equation"]').boundingBox()
+  expect(box).not.toBeNull()
+  await page.mouse.move(box!.x+box!.width/2,box!.y+box!.height/2)
+  await page.locator('.pdfv-visual-region-action.equation').click()
+  await expect(dialog).toContainText('询问公式')
+  await dialog.locator('.explain-context-toggle').click()
+  await expect(dialog.locator('.explain-page-preview img')).toBeVisible()
+  await expect(dialog.locator('.explain-selection-quote')).toContainText('以原文公式图像为准')
+  let request:Record<string,unknown>|undefined
+  await page.route('**/api/papers/*/explain',async route=>{
+    request=route.request().postDataJSON()
+    await route.fulfill({json:answer('这是理想气体的状态方程。')})
+  })
+  await input.fill('各个符号是什么意思？')
+  await input.press('Enter')
+  await expect(dialog.locator('.explain-answer-text')).toContainText('状态方程')
+  expect(request?.visual_kind).toBe('equation')
+  expect(request?.bbox).toEqual([100,520,500,570])
+  expect(request?.image_data_url).toMatch(/^data:image\/jpeg;base64,/)
+  const conversations=await (await page.request.get(`/api/conversations?kind=explanation&paper_id=${paper.id}`)).json()
+  const equation=conversations.items.find((item:{context?:Record<string,unknown>})=>item.context?.visual_kind==='equation')
+  expect(equation?.context?.visual_label).toBe('Equation (3)')
+  await page.screenshot({path:'test-artifacts/equation-question.png'})
 })
 
 test('table question images use the detected bounds without padding into adjacent content', async ({ page }) => {

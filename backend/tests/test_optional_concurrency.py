@@ -4,7 +4,7 @@ import json
 import threading
 import time
 
-from app.models import CollectionPaper, KnowledgeMaintenanceRun, ResearchTask
+from app.models import CollectionPaper, KnowledgeMaintenanceRun, ResearchControl, ResearchTask
 from app.providers.priority import check_background, scheduled_work
 from app.providers.profiles import ProfileStore
 from app.research_schemas import ScopeUpdate
@@ -116,32 +116,42 @@ def test_one_curation_batch_checks_distinct_papers_concurrently_without_losing_p
         assert usage['total_tokens'] == 104
 
 
-def test_parallel_optional_calls_cannot_overrun_hourly_budget(research):
+def test_official_quota_admission_ignores_legacy_hourly_call_cap(research):
+    from app.research_schemas import ResearchSettings
     _, worker = research
-    worker.scope('topic', ScopeUpdate(enabled=False))
-    worker.settings(worker.settings().model_copy(update={'maintenance_enabled': True, 'calls_per_hour': 1}))
+    settings_data = worker.settings().model_dump()
+    settings_data['calls_per_hour'] = 1
+    settings = ResearchSettings.model_validate(settings_data)
+    task = worker.enqueue('topic')
     with worker.database.sessions() as db:
-        run = prepare_run(db, scope_type='library', allow_external=False)
+        row = db.get(ResearchTask, task['id'])
+        row.usage_json = json.dumps({'call_times': [time.time()]})
         db.commit()
-    entered, release = threading.Event(), threading.Event()
-    calls = []
-    class Curator(MaintenanceWriter):
-        def audit_knowledge_bundle(self, bundle):
-            calls.append(bundle)
-            entered.set()
-            assert release.wait(4)
-            return super().audit_knowledge_bundle(bundle)
-    worker.profiles.subscription_provider = lambda _: Curator()
-    with ThreadPoolExecutor(1) as pool:
-        first = pool.submit(worker.process_next, translations=False)
-        try:
-            assert entered.wait(2)
-            assert not worker.process_next(translations=False)
-            assert len(calls) == 1
-        finally:
-            release.set()
-        assert first.result(4)
-    assert worker._remaining_calls(worker.settings()) == 0
+    assert worker._eligible(settings)
+
+
+def test_official_quota_admission_ignores_exhausted_daily_estimate(research):
+    import hashlib
+    from datetime import datetime, timezone
+
+    _, worker = research
+    settings = worker.settings()
+    now = time.time()
+    email = 'budget-test@example.test'
+    identity = hashlib.sha256(email.encode()).hexdigest()
+    day = datetime.now().astimezone().date().isoformat()
+    worker.profiles.codex.status = lambda **kw: {'authenticated': True, 'email': email, 'limits': [
+        dict(name='primary', used_percent=10, window_minutes=300, resets_at=now+300),
+        dict(name='secondary', used_percent=21, window_minutes=10080, resets_at=now+6*86400),
+    ]}
+    with worker.database.sessions() as db:
+        control = db.get(ResearchControl, 1)
+        control.budget_json = json.dumps({identity: {
+            'codex:secondary:10080': dict(day=day, baseline=10, peak=20, allowance=10,
+                                          resets_at=now+6*86400)
+        }})
+        db.commit()
+    assert worker._eligible(settings)
 
 
 def test_foreground_already_using_reserved_position_does_not_leave_another_empty(tmp_path):
@@ -163,27 +173,6 @@ def test_foreground_already_using_reserved_position_does_not_leave_another_empty
                 release.set()
         for job in jobs:
             job.result(3)
-
-
-def test_official_early_week_reset_retires_previous_daily_budget():
-    from app.services.research_policy import observe_budget
-    now = time.time()
-    windows = [dict(name='secondary', limit_id='codex', used_percent=83,
-                    window_minutes=10080, resets_at=now+8*86400)]
-    ledger, _ = observe_budget({}, windows, now=now, reserve=0)
-    windows[0]['used_percent'] = 92
-    windows[0]['resets_at'] = now+86400
-    ledger, blocked = observe_budget(ledger, windows, now=now+10, reserve=0)
-    assert not blocked['allowed']
-    # A rollback without a new official period must not replenish anything.
-    windows[0]['used_percent'] = 0
-    _, rolled_back = observe_budget(ledger, windows, now=now+20, reserve=0)
-    assert not rolled_back['allowed']
-    # An early reset changes both the usage and the period by several days.
-    windows[0]['resets_at'] = now+7*86400
-    _, reset = observe_budget(ledger, windows, now=now+30, reserve=0)
-    assert reset['allowed'] and reset['observed_use'] == 0
-    assert reset['remaining'] > 14
 
 
 def test_overlapping_batches_do_not_check_same_paper_twice_and_cancel_is_local(research):

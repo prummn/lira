@@ -18,7 +18,7 @@ from ..providers.base import ProviderError
 from ..providers.priority import scheduled_work, check_background
 from ..research_schemas import ResearchSettings
 from .research_materials import dumps, snapshot, snapshot_fingerprint, verify_article, verify_synthesis
-from .research_policy import quota_decision, observe_budget
+from .research_policy import quota_decision
 from .research_findings import list_findings, publish_findings, verify_findings, act, history
 from . import knowledge_maintenance as maintenance
 from . import research_agenda as agenda
@@ -74,7 +74,6 @@ class BackgroundResearchWorker:
         self._next_scan = 0
         self._next_maintenance_scan = 0
         self._next_reading_scan = 0
-        self._budget = None
         self._translation_served = False
         self._research_served = False
         self._translation_claims = {}
@@ -251,29 +250,9 @@ class BackgroundResearchWorker:
                 'quota_using_recent': bool(self._quota_using_recent and time.time()-self._quota_at <= 120),
                 'tasks': [task_read(t) for t in tasks], 'scope_ids': [s.collection_id for s in scopes],
                 'maintenance': maintenance.serialize_run(maintenance_run) if maintenance_run else None,
-                'budget': self._budget, 'translation_jobs': translation_jobs, 'analysis_tasks': analysis_tasks,
+                'translation_jobs': translation_jobs, 'analysis_tasks': analysis_tasks,
                 'maintenance_tasks': maintenance_tasks,
                 'scheduler': self.profiles.capacity_status()}
-
-    def _observe_budget(self, state, settings):
-        # Every profile uses the same official account manager. Hash identity so
-        # email is neither exposed in status nor used as a model-profile key.
-        identity = hashlib.sha256((state.get('email') or 'official-account').casefold().encode()).hexdigest()
-        with self._mutation, self.database.sessions() as db:
-            row = db.get(ResearchControl, 1)
-            if row is None:
-                row = ResearchControl(id=1, settings_json=settings.model_dump_json())
-                db.add(row)
-                db.flush()
-            accounts = json.loads(row.budget_json)
-            ledger, self._budget = observe_budget(accounts.get(identity, {}), state.get('limits', []),
-                                                  reserve=settings.long_reserve)
-            accounts[identity] = ledger
-            encoded = dumps(accounts)
-            if encoded != row.budget_json:
-                row.budget_json = encoded
-                db.commit()
-        return self._budget
 
     def _capture_quota(self, state):
         self._quota = state.get('limits', [])
@@ -288,7 +267,6 @@ class BackgroundResearchWorker:
         state = self.profiles.codex.status(refresh=True)
         self._capture_quota(state)
         if state.get('authenticated') and not state.get('error_code'):
-            self._observe_budget(state, self.settings())
             if (self._quota and not self._quota_error_code and
                     self._retry_reason in {'quota_timeout', 'quota_unavailable', 'quota_unknown', 'account_unavailable'}):
                 self._retry_at = 0
@@ -297,7 +275,6 @@ class BackgroundResearchWorker:
                 'quota_error_code': self._quota_error_code,
                 'quota_attempted_at': self._quota_attempted_at or None,
                 'quota_using_recent': self._quota_using_recent,
-                'budget': self._budget,
                 'available': bool(state.get('authenticated') and not state.get('error_code'))}
 
     def enqueue(self, collection_id, kind='essay'):
@@ -452,7 +429,7 @@ class BackgroundResearchWorker:
             self._retry_at = time.time() + 60
             return False
 
-    def _eligible(self, settings, running=False, include_maintenance=False, allow_reading=False, reserved=False):
+    def _eligible(self, settings, running=False, include_maintenance=False, allow_reading=False):
         if not settings.enabled:
             self._reason = 'disabled'
             return False
@@ -461,10 +438,7 @@ class BackgroundResearchWorker:
             self._reason = 'profile_required'
             return False
         # Foreground priority and a reader's reserved position are enforced by
-        # the shared capacity gate. Reading is not an eligibility failure.
-        if not reserved and not self._remaining_calls(settings):
-            self._reason = 'hourly_budget'
-            return False
+        # the shared capacity gate. Official quota windows are the only usage gate.
         if time.time() < self._retry_at:
             self._reason = self._retry_reason
             return False
@@ -485,9 +459,6 @@ class BackgroundResearchWorker:
         decision = quota_decision(self._quota, age=max(0,time.time()-self._quota_at), running=running,
             start_remaining=settings.start_remaining, stop_remaining=settings.stop_remaining,
             long_reserve=settings.long_reserve)
-        budget = self._observe_budget(state, settings)
-        if decision['allowed'] and not budget['allowed']:
-            decision = budget
         self._reason = decision['reason']
         if not decision['allowed']:
             self._retry_at = time.time() + 60
@@ -524,22 +495,8 @@ class BackgroundResearchWorker:
 
     def _optional_admission(self, settings, **owner):
         self._optional_check(settings, **owner)
-        if not self._eligible(settings, running=True, reserved=True):
-            raise ProviderError('后台任务等待额度或预算策略允许', 409, code='background_preempted')
-
-    def _reserve_optional_call(self, settings):
-        # Call under _mutation, shared with translation's budget reservation.
-        if not self._remaining_calls(settings):
-            self._reason = 'hourly_budget'
-            raise ProviderError('本小时后台调用预算已用完', 409, code='background_preempted')
-
-    def _remaining_calls(self, settings):
-        with self.database.sessions() as db:
-            usage = list(db.scalars(select(ResearchTask.usage_json)).all())
-            usage.extend(db.scalars(select(KnowledgeMaintenanceRun.usage_json)).all())
-            usage.extend(db.scalars(select(TranslationJob.usage_json)).all())
-        count = sum(t > time.time() - 3600 for raw in usage for t in json.loads(raw).get('call_times', []))
-        return max(0, settings.calls_per_hour - count)
+        if not self._eligible(settings, running=True):
+            raise ProviderError('后台任务等待官方额度或前台调度允许', 409, code='background_preempted')
 
     def _maybe_enqueue_maintenance(self, settings):
         if not settings.maintenance_enabled or time.time() < self._next_maintenance_scan:
@@ -635,7 +592,7 @@ class BackgroundResearchWorker:
                         return False
                     maintenance.execute_run(db, current, provider, max_calls=1, issue_id=chosen.id,
                         checkpoint_lock=self._mutation,
-                        reserve_call=lambda: (self._optional_check(settings, **owner), self._reserve_optional_call(settings)))
+                        preflight_call=lambda: self._optional_check(settings, **owner))
                     self._research_served = False
                     self._reason = 'maintenance_working' if current.status == 'running' else (
                         'maintenance_partial' if current.status == 'partial' else 'up_to_date')
@@ -755,10 +712,9 @@ class BackgroundResearchWorker:
                 if settings.maintenance_enabled:
                     if self._process_maintenance(settings):
                         return True
-                    if self._reason in {'reading', 'foreground_queue', 'hourly_budget', 'account_unavailable',
+                    if self._reason in {'reading', 'foreground_queue', 'account_unavailable',
                                         'quota_unknown', 'quota_stale', 'quota_reserve', 'cooldown',
                                         'quota_timeout', 'quota_unavailable',
-                                        'daily_budget',
                                         'maintenance_reading', 'maintenance_error'}:
                         return False
                 if time.time() - self._quota_at >= 60 and self.profiles.priority.idle(settings.idle_seconds):
@@ -797,9 +753,6 @@ class BackgroundResearchWorker:
             task = db.get(ResearchTask, task_id)
             if task is None or task.status not in ACTIVE:
                 return
-            if not self._remaining_calls(settings):
-                self._reason = 'hourly_budget'
-                return False
             previous_error = task.error
             owner = dict(task_id=task_id, collection_id=task.collection_id,
                          deep=task.kind in agenda.DEEP_KINDS,

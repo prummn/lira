@@ -485,12 +485,6 @@ def _record(worker,job_id,item_id,phase):
             raise Deferred('cancelled')
         if job.status not in ('queued','running') or item.status not in ('queued','running'):
             raise Deferred('user_paused' if job.status == 'paused' else 'cancelled')
-        manual = job.mode == 'selected' or item.priority > 0
-        if not manual and not json.loads(job.usage_json or '{}').get('requested'):
-            # Claiming and quota RPCs can overlap. Reserve the hourly call
-            # budget atomically just before recording an optional call.
-            if not worker._remaining_calls(worker.settings()):
-                raise Deferred('hourly_budget')
         usage = json.loads(job.usage_json)
         usage.setdefault('call_times',[]).append(time.time())
         usage.setdefault('events',[]).append({'phase':phase,'at':time.time()})

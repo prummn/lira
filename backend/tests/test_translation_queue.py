@@ -441,9 +441,10 @@ def test_pause_during_return_saves_cache_but_preserves_pause(queue):
         assert db.scalar(select(Translation)) is not None
 
 
-def test_full_unknown_quota_has_no_paid_fallback_and_shared_hourly_ledger(queue, monkeypatch):
+def test_full_unknown_quota_waits_but_legacy_hourly_cap_does_not(queue, monkeypatch):
     _, worker, provider, _, _ = queue
-    worker.settings(ResearchSettings(enabled=True, profile_id='official', idle_seconds=0, calls_per_hour=1))
+    worker.settings(ResearchSettings.model_validate({'enabled':True, 'profile_id':'official',
+        'idle_seconds':0, 'calls_per_hour':1}))
     enqueue(queue, mode='full', automatic=True)
     monkeypatch.setattr(worker.profiles.codex, 'status', lambda **kw: {'authenticated': True, 'limits': []})
     assert not worker.process_next()
@@ -451,10 +452,19 @@ def test_full_unknown_quota_has_no_paid_fallback_and_shared_hourly_ledger(queue,
     monkeypatch.setattr(worker.profiles.codex, 'status', lambda **kw: {'authenticated': True, 'limits': [
         {'name': 'primary', 'used_percent': 10, 'window_minutes': 300, 'resets_at': time.time()+300}]})
     worker._retry_at = 0
-    assert worker.process_next()
-    assert worker._remaining_calls(worker.settings()) == 0
-    assert not worker.process_next()
-    assert latest(queue)['reason'] == 'hourly_budget'
+    with worker.database.sessions() as db:
+        from app.models import TranslationJob
+        row = db.scalar(select(TranslationJob))
+        row.usage_json = json.dumps({'call_times':[time.time()]})
+        db.commit()
+    for _ in range(8):
+        worker._retry_at = 0
+        if not worker.process_next():
+            break
+    result = latest(queue)
+    assert result['status'] == 'completed', result
+    assert result['completed'] == result['total'] == 2
+    assert len(provider.calls) == 2
 
 
 def boundary_queue(queue, monkeypatch):
@@ -487,16 +497,18 @@ def test_boundary_merge_redirects_adjacent_items_and_translates_only_once(queue,
     assert 'Figure 1' not in provider.calls[0]
 
 
-def test_boundary_check_consumes_budget_before_translation_and_checkpoints_merge(queue,monkeypatch):
+def test_boundary_check_does_not_create_a_local_hourly_translation_cap(queue,monkeypatch):
     q = boundary_queue(queue,monkeypatch)
     client,worker,provider,path,_ = q
-    worker.settings(ResearchSettings(enabled=True,profile_id='official',idle_seconds=0,calls_per_hour=1))
+    worker.settings(ResearchSettings.model_validate({'enabled':True,'profile_id':'official','idle_seconds':0,
+        'calls_per_hour':1}))
     enqueue(q,mode='full',automatic=True)
-    worker.process_next()
+    for _ in range(8):
+        if not worker.process_next():
+            break
     result = client.get(path).json()['jobs'][0]
-    assert result['reason'] == 'hourly_budget'
-    assert provider.calls == [] and len(provider.review_calls) == 1
-    assert worker._remaining_calls(worker.settings()) == 0
+    assert result['status'] == 'completed'
+    assert provider.calls and provider.review_calls
     assert client.get('/api/papers/boundary-paper/reading-paragraphs').json()['paragraphs'][0]['review_needed'] is False
 
 

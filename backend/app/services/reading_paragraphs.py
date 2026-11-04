@@ -14,6 +14,8 @@ from .pdf_metadata import body_font, read_lines, section_reading_order
 from .translations import translation_error
 from .visual_regions import CAPTION, visual_regions_for_pdf
 
+MATH_GLYPHS = re.compile(r"[=∈√∑∏×≤≥±∞∂∇∫≈≠∝÷−\uf000-\uf0ff]")
+
 
 def prose_text(source: str) -> str:
     # Join PDF line wrapping, preserving compound prefixes and paragraph breaks.
@@ -52,6 +54,8 @@ def _layout_artifact(raw: str, lines, page_body_size: float, *, caption: bool = 
     if re.match(r'^(?:\d+|[a-z])(?=[A-Z(])', raw) and len(raw) < 220 and (small_type or annotation):
         return True
     if caption:
+        return False
+    if MATH_GLYPHS.search(raw):
         return False
     if lines:
         typical = median(line.size for line in lines)
@@ -121,7 +125,7 @@ def _observed_lines(chunk, lines):
 
 
 def _math_chunks(chunks):
-    seeds = [chunk for chunk in chunks if re.search(r'[=∈√∑∏×≤≥±∞]', chunk.content)]
+    seeds = [chunk for chunk in chunks if MATH_GLYPHS.search(chunk.content)]
     result = {chunk.id for chunk in seeds}
     for chunk in chunks:
         bounds = _bbox(chunk)

@@ -144,7 +144,7 @@ def import_fixture_with_distinct_content(client: TestClient) -> dict:
     return response.json()
 
 
-@pytest.mark.parametrize('text', ['', '  ', '未提供待翻译的原文。', '请提供需要翻译的文本。', 'No source text was provided.'])
+@pytest.mark.parametrize('text', ['', '  ', '未提供待翻译的原文。', '未提供待翻译的原文段落。', '请提供需要翻译的文本。', 'No source text was provided.'])
 def test_translation_validation_rejects_empty_or_missing_source_replies(text):
     from app.services.translations import translation_error
     assert translation_error('The agent executes the repository test suite.', text)
@@ -158,3 +158,44 @@ def test_translation_validation_rejects_empty_or_missing_source_replies(text):
 def test_translation_validation_accepts_source_discussing_missing_input(source, text):
     from app.services.translations import translation_error
     assert translation_error(source, text) is None
+
+
+def test_missing_source_refusal_cache_is_ignored_and_replaced(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    import hashlib
+    from datetime import datetime, timezone
+
+    from app.models import PaperChunk, Translation
+    from app.services.translations import find_cached, identity, save_translation
+
+    paper = import_fixture(client)
+    chunk_data = paper["chunks"][0]
+    provider = remote_provider([], text="这是根据原文给出的有效翻译。")
+    monkeypatch.setattr("app.api.papers.get_model_provider", lambda: provider)
+    expected = identity(provider)
+    source_hash = hashlib.sha256(chunk_data["content"].encode()).hexdigest()
+    with client.app.state.database.sessions() as session:
+        cached_refusal = Translation(
+            id="translation-invalid-refusal",
+            paper_id=paper["id"],
+            chunk_id=chunk_data["id"],
+            source_text=chunk_data["content"],
+            source_hash=source_hash,
+            text="未提供待翻译的原文段落。",
+            provider=expected[0],
+            mode=provider.mode,
+            config_version=expected[1],
+            model_version=provider.model,
+            prompt_version=expected[2],
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(cached_refusal)
+        session.commit()
+
+        chunk = session.get(PaperChunk, chunk_data["id"])
+        assert find_cached(session, paper["id"], chunk, provider) is None
+
+        saved = save_translation(session, paper["id"], chunk, provider, "这是根据原文给出的有效翻译。")
+        session.commit()
+        assert saved.id == "translation-invalid-refusal"
+        assert saved.text == "这是根据原文给出的有效翻译。"
+        assert session.query(Translation).filter_by(chunk_id=chunk_data["id"]).count() == 1
