@@ -8,6 +8,96 @@ from app.providers.validation import canonical_quote
 
 
 @pytest.fixture
+def memory_selection():
+    data = json.loads((Path(__file__).parent / 'fixtures/agentic_memory_selection.json').read_text(encoding='utf-8'))
+    return data['source'], data['selection']
+
+
+def test_rendered_greek_name_and_citation_spacing_resolve_to_original_span(memory_selection):
+    from app.services.selection_source import resolve_pdf_selection
+    source, selection = memory_selection
+    chunk = PaperChunk(id='memory-source', paper_id='memory', page=26, content=source)
+    paper = Paper(id='memory', title='Memory survey', chunks=[chunk])
+    result = resolve_pdf_selection(paper, selection, page=26)
+    assert result is not None
+    assert result.anchor.id == chunk.id
+    assert result.text in source
+    assert 'Mem-α' in result.text
+    assert canonical_quote(source, result.text) == result.text
+    assert source == chunk.content
+
+
+@pytest.mark.parametrize('replacement', ['Mem-β', 'Mem-315', 'Memory-R2', 'Mirax'])
+def test_selection_recovery_preserves_greek_letters_names_and_numbers(memory_selection, replacement):
+    from app.services.selection_source import resolve_pdf_selection
+    source, selection = memory_selection
+    selected = selection.replace('Mem- α', replacement) if replacement.startswith('Mem-') else selection.replace(
+        'Memory-R1' if replacement.startswith('Memory') else 'Mirix', replacement)
+    paper = Paper(id='memory', title='Memory', chunks=[PaperChunk(id='memory-source', paper_id='memory', page=26, content=source)])
+    assert resolve_pdf_selection(paper, selected, page=26) is None
+
+
+@pytest.mark.parametrize('hint', ['header', 'removed-old-chunk', None])
+def test_explain_resolves_actual_selection_despite_guessed_or_stale_chunk(client, memory_selection, monkeypatch, hint):
+    from app.providers.base import AnswerResult, VerifiedCitation
+    source, selection = memory_selection
+    with client.app.state.database.sessions() as session:
+        session.add(Paper(id='memory', title='Memory', chunks=[
+            PaperChunk(id='header', paper_id='memory', page=26, content='Agentic Reasoning for Large Language Models'),
+            PaperChunk(id='memory-source', paper_id='memory', page=26, content=source),
+        ]))
+        session.commit()
+    calls = []
+    class Provider:
+        name, mode, configured = 'MemoryFixture', 'remote', True
+        def ask(self, question, chunks):
+            calls.append((question, chunks))
+            original = next(c for c in chunks if c.id == 'memory-source')
+            return AnswerResult('可以把它理解成会整理自己的研究笔记。', [], False,
+                [VerifiedCitation(original, original.content, '动态整理记忆', 'llm_summary')])
+    monkeypatch.setattr('app.api.papers.get_model_provider', lambda: Provider())
+    payload = {'page':26, 'selected_text':selection, 'question':'给我通俗的讲讲这个方向'}
+    if hint: payload['chunk_id'] = hint
+    context = {**{k:v for k,v in payload.items() if k != 'question'}, 'visual':False}
+    chat = client.post('/api/conversations', json={'kind':'explanation', 'paper_id':'memory', 'context':context}).json()
+    response = client.post('/api/papers/memory/explain', json={**payload, 'conversation_id':chat['id']})
+    assert response.status_code == 200, response.text
+    assert len(calls) == 1
+    assert calls[0][1][0].id == 'memory-source'
+    assert 'Mem-α' in calls[0][0]
+    assert response.json()['citations'][0]['source_text'] in source
+    assert client.get('/api/conversations/'+chat['id']).json()['turns'][0]['status'] == 'completed'
+
+
+def test_selection_recovery_does_not_rebind_another_papers_chunk(client, memory_selection):
+    source, selection = memory_selection
+    with client.app.state.database.sessions() as session:
+        session.add_all([
+            Paper(id='memory', title='Memory', chunks=[PaperChunk(id='memory-source', paper_id='memory', page=26, content=source)]),
+            Paper(id='other', title='Other', chunks=[PaperChunk(id='other-source', paper_id='other', page=26, content=source)]),
+        ])
+        session.commit()
+    response = client.post('/api/papers/memory/explain', json={
+        'page':26, 'chunk_id':'other-source', 'selected_text':selection, 'question':'解释这一段'})
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize('next_page', [26, 27])
+def test_rendered_memory_selection_survives_block_and_page_boundaries(memory_selection, next_page):
+    from app.services.selection_source import resolve_pdf_selection
+    source, selection = memory_selection
+    start = source.index('Similarly,')
+    paper = Paper(id='memory', title='Memory', chunks=[
+        PaperChunk(id='memory-a', paper_id='memory', page=26, content=source[:start]),
+        PaperChunk(id='header', paper_id='memory', page=next_page, content='Agentic Reasoning for Large Language Models'),
+        PaperChunk(id='memory-b', paper_id='memory', page=next_page, content=source[start:]),
+    ])
+    result = resolve_pdf_selection(paper, selection, page=26)
+    assert result is not None
+    assert [chunk.id for chunk in result.chunks] == ['memory-a', 'memory-b']
+
+
+@pytest.fixture
 def metrics():
     data = json.loads((Path(__file__).parent / 'fixtures/deepswe_pass4_selection.json').read_text(encoding='utf-8'))
     chunks = [PaperChunk(id=item['id'], paper_id='metrics-paper', page=item['page'], content=item['content'],

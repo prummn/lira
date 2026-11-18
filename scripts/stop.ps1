@@ -4,7 +4,7 @@ function Get-WorkspaceProcess([object]$ProcessId, [string]$Started, [string]$Rol
     if (-not $Started -or "$ProcessId" -notmatch '^[1-9][0-9]*$' -or "$Port" -notmatch '^[1-9][0-9]*$') { return $null }
     $process = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
     $running = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
-    if (-not $process -or -not $running -or $running.StartTime.ToUniversalTime().Ticks.ToString() -ne $Started) { return $null }
+    if (-not $process -or -not $running -or -not $running.StartTime -or $running.StartTime.ToUniversalTime().Ticks.ToString() -ne $Started) { return $null }
     if (-not $process.CreationDate -or [Math]::Abs(($process.CreationDate.ToUniversalTime() - $running.StartTime.ToUniversalTime()).TotalMilliseconds) -gt 1) { return $null }
     $command = $process.CommandLine
     $portPattern = '(?:^|\s)--port\s+"?' + [regex]::Escape("$Port") + '"?(?=\s|$)'
@@ -22,7 +22,7 @@ function Get-WorkspaceBackendChildren($Parent, [object]$Port) {
     foreach ($child in @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $($Parent.ProcessId)" -ErrorAction SilentlyContinue)) {
         if (-not $child -or -not $child.CreationDate -or $child.CreationDate -lt $Parent.CreationDate) { continue }
         $running = Get-Process -Id $child.ProcessId -ErrorAction SilentlyContinue
-        if (-not $running) { continue }
+        if (-not $running -or -not $running.StartTime) { continue }
         $started = $running.StartTime.ToUniversalTime().Ticks.ToString()
         $verified = Get-WorkspaceProcess $child.ProcessId $started 'backend' $Port
         if (-not $verified -or $verified.ParentProcessId -ne $Parent.ProcessId) { continue }
@@ -54,8 +54,17 @@ foreach ($role in @('backend', 'frontend')) {
     $expectedStarted = $state."${role}Started"
     $port = $state."${role}Port"
     if ("$processId" -notmatch '^[1-9][0-9]*$') { throw '进程记录 PID 无效，记录已保留。' }
+    $recordedTicks = 0L
+    if (-not [long]::TryParse("$expectedStarted", [ref]$recordedTicks) -or
+        $recordedTicks -le 0 -or $recordedTicks -gt [datetime]::MaxValue.Ticks) {
+        throw '进程记录启动时间无效，记录已保留。'
+    }
     $existing = Get-CimInstance Win32_Process -Filter "ProcessId = $processId" -ErrorAction SilentlyContinue
     if (-not $existing) { continue }
+    # Windows can assign an exited service's PID to another application after reboot.
+    # A different creation time proves the recorded service is gone; leave its replacement alone.
+    if ($existing.CreationDate -and
+        [Math]::Abs($existing.CreationDate.ToUniversalTime().Ticks - $recordedTicks) -gt [timespan]::TicksPerMillisecond) { continue }
     $process = Get-WorkspaceProcess $processId $expectedStarted $role $port
     if (-not $process) { $foreign += $processId; continue }
     $children = if ($role -eq 'backend') { @(Get-WorkspaceBackendChildren $process $port) } else { @() }

@@ -6,9 +6,71 @@
     <meta name="theme-color" content="#302f2c" />
     <link rel="icon" type="image/svg+xml" href="/lira-mark.svg" />
     <title>LIRA · Literature Research Atlas</title>
+    <style>
+      body { margin: 0; }
+      #lira-startup { position: fixed; inset: 0; display: grid; place-items: center; background: #f7f5f1; color: #38352f; font: 14px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif; }
+      #lira-startup[hidden] { display: none; }
+      .startup-content { width: min(320px,calc(100vw - 64px)); }
+      .startup-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 32px; font: 22px Georgia,serif; letter-spacing: .12em; }
+      .startup-brand img { width: 36px; height: 36px; }
+      #startup-title { margin: 0 0 8px; font-size: 16px; font-weight: 500; }
+      #startup-detail { margin: 0; color: #7b746b; }
+      #startup-retry { margin-top: 24px; padding: 8px 16px; border: 1px solid #c9c1b6; border-radius: 6px; color: inherit; background: transparent; font: inherit; cursor: pointer; }
+      #startup-retry:focus-visible { outline: 2px solid #776b58; outline-offset: 3px; }
+      @media (prefers-color-scheme: dark) { #lira-startup { background: #242321; color: #eee9e1; } #startup-detail { color: #b4aca1; } }
+    </style>
   </head>
   <body>
     <div id="root"></div>
+    <div id="lira-startup" role="status" aria-live="polite" aria-busy="true">
+      <div class="startup-content">
+        <div class="startup-brand"><img src="/lira-mark.svg" alt="" />LIRA</div>
+        <h1 id="startup-title">正在打开文献库</h1>
+        <p id="startup-detail">正在加载界面，请稍候。</p>
+        <button id="startup-retry" type="button" hidden>重新打开</button>
+        <noscript><p>请允许此页面运行 JavaScript，再重新打开。</p></noscript>
+      </div>
+    </div>
+    <script>
+      (() => {
+        const screen = document.getElementById('lira-startup');
+        const title = document.getElementById('startup-title');
+        const detail = document.getElementById('startup-detail');
+        const retry = document.getElementById('startup-retry');
+        let ready = false;
+        const fail = () => {
+          clearTimeout(slowTimer); clearTimeout(timeout);
+          screen.hidden = false;
+          screen.setAttribute('aria-busy', 'false');
+          document.getElementById('root').hidden = true;
+          title.textContent = '页面未能打开';
+          detail.textContent = '界面加载中断，请重新打开。若仍无法加载，请重新运行启动工作台。';
+          retry.hidden = false;
+        };
+        const onError = event => {
+          if (!ready && (event.target instanceof HTMLScriptElement ||
+              (event.target instanceof HTMLLinkElement && /^(stylesheet|modulepreload)$/.test(event.target.rel)) ||
+              event instanceof ErrorEvent)) fail();
+        };
+        const slowTimer = setTimeout(() => {
+          detail.textContent = '界面加载比平时稍慢，仍在等待本地资源。';
+          retry.hidden = false;
+        }, 15000);
+        const timeout = setTimeout(() => { if (!ready) fail(); }, 60000);
+        retry.addEventListener('click', () => location.reload());
+        window.addEventListener('error', onError, true);
+        window.__liraStartup = {
+          ready() {
+            ready = true;
+            clearTimeout(slowTimer); clearTimeout(timeout);
+            window.removeEventListener('error', onError, true);
+            document.getElementById('root').hidden = false;
+            screen.hidden = true;
+          },
+          fail
+        };
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

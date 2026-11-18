@@ -2,6 +2,7 @@
 $ErrorActionPreference = 'Stop'
 $helper = Join-Path $PSScriptRoot '..\port-selection.ps1'
 . $helper
+. (Join-Path $PSScriptRoot '../frontend-build.ps1')
 
 if (-not $StaticOnly) {
 $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
@@ -123,7 +124,7 @@ Assert-True ($first -match '^[0-9a-f]{64}$' -and $first -eq (Get-SourceFingerpri
     $script:removed = $false
     $rejected = $false
     try { Invoke-Expression $stopBody } catch { $rejected = $true }
-    Assert-True ($rejected -and $script:stopped.Count -eq 0 -and -not $script:removed) 'PID 已回收时不得停止进程或删除记录。'
+    Assert-True (-not $rejected -and $script:stopped.Count -eq 0 -and $script:removed) 'PID 已确认回收时应清理旧记录，不得停止替代进程。'
 }
 
 # 只执行已记录实例分支；任何真实启动/停止/网络操作均由失败桩拦截。
@@ -137,24 +138,40 @@ Assert-True ($first -match '^[0-9a-f]{64}$' -and $first -eq (Get-SourceFingerpri
     $Restart = $false
     $NoBrowser = $true
     $script:record = @{ root=$root; backendPid=101; frontendPid=102; backendPort=8000; frontendPort=5173 }
-    function Test-Path { param($LiteralPath) return $true }
+    $script:recordExists = $true
+    $script:recoveries = 0
+    function Test-Path { param($LiteralPath) return $script:recordExists }
+    function Join-Path { param($Path, $ChildPath) return 'Invoke-MockRecovery' }
+    function Invoke-MockRecovery { $script:recoveries++; $script:recordExists = $false }
     function Get-Content { param([switch]$Raw, $LiteralPath) return ($script:record | ConvertTo-Json) }
     function Get-WorkspaceProcess { throw '版本检查前不得检查进程。' }
     function Invoke-RestMethod { throw '测试禁止网络调用。' }
     function Invoke-WebRequest { throw '测试禁止网络调用。' }
     function Start-Process { throw '测试禁止启动进程。' }
     foreach ($fingerprint in @($null, 'old')) {
+        $script:recordExists = $true
         $script:record.sourceFingerprint = $fingerprint
-        $message = ''
-        try { Invoke-Expression $recordBranch.Extent.Text } catch { $message = $_.Exception.Message }
-        Assert-True ($message -like '*-Restart*' -and $message -like '*指纹*') '旧记录或源码更新必须明确拒绝复用。'
+        Invoke-Expression $recordBranch.Extent.Text
+        Assert-True (-not $script:recordExists) '旧记录或源码更新必须自动安全重启，不复用旧代码。'
     }
+    Assert-True ($script:recoveries -eq 2) '每条失效记录应只执行一次恢复。'
+    $script:recordExists = $true
     $script:record.sourceFingerprint = 'current'
     $script:record.url = 'mock-url'
     function Get-WorkspaceProcess { return [pscustomobject]@{ ProcessId=101 } }
     function Invoke-RestMethod { return [pscustomobject]@{ status='ok' } }
     function Invoke-WebRequest { return [pscustomobject]@{ StatusCode=200 } }
+    function Test-FrontendReady { return $true }
     Invoke-Expression $recordBranch.Extent.Text
+    Assert-True ($script:recoveries -eq 2) '健康实例应直接复用。'
+    function Get-WorkspaceProcess { return $null }
+    Invoke-Expression $recordBranch.Extent.Text
+    Assert-True ($script:recoveries -eq 3 -and -not $script:recordExists) '退出的实例必须自动恢复。'
+    $script:recordExists = $true
+    function Get-WorkspaceProcess { return [pscustomobject]@{ ProcessId=101 } }
+    function Invoke-RestMethod { throw 'mock health failure' }
+    Invoke-Expression $recordBranch.Extent.Text
+    Assert-True ($script:recoveries -eq 4 -and -not $script:recordExists) '健康检查失败必须自动恢复。'
 }
 # 执行真实启动语句和异常分支，所有进程命令均由桩替换。
 & {

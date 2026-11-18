@@ -10,5 +10,5 @@ if errorlevel 1 (
   exit /b 1
 )
 echo.
-echo Workspace started. Browser: http://127.0.0.1:5173
+echo Workspace started. Use the address shown above.
 pause

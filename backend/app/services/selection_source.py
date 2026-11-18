@@ -46,9 +46,30 @@ def visual_selection_chunks(paper: Paper, page: int, bbox) -> list[PaperChunk]:
     return [item[-1] for item in matches]
 
 
-def _view(value: str) -> str:
-    value = re.sub(r'(?<=\w)-\s+(?=\w)', '', value)
+def _view(value: str, *, keep_hyphens: bool = False) -> str:
+    if not keep_hyphens:
+        value = re.sub(r'(?<=\w)-\s+(?=\w)', '', value)
     return ''.join(unicodedata.normalize('NFKC', value).casefold().split())
+
+
+def _rendered_span(source: str, selection: str) -> str | None:
+    """Ignore visual spacing, mapping back to the immutable stored evidence.
+
+    Preserve punctuation and Unicode letters: `Mem- α` is `Mem-α`, not
+    `Memα`. Line-wrap dehyphenation is a separate fallback, never the first
+    transformation of text copied from the PDF text layer.
+    """
+    query = _view(selection, keep_hyphens=True)
+    chars, positions = [], []
+    for index, char in enumerate(source):
+        for normalized in unicodedata.normalize('NFKC', char).casefold():
+            if not normalized.isspace():
+                chars.append(normalized)
+                positions.append(index)
+    start = ''.join(chars).find(query) if query else -1
+    if start < 0:
+        return None
+    return source[positions[start]:positions[start + len(query) - 1] + 1]
 
 
 def _font_aliases(pdf, page) -> dict[str, dict[str, str]]:
@@ -124,18 +145,32 @@ def pdf_comparison_views(paper: Paper, pages: set[int]) -> dict[str, str]:
 
 
 def resolve_pdf_selection(paper: Paper, text: str, *, page: int | None = None) -> SelectionSource | None:
-    strict = resolve_selection_chunks(paper.chunks, text, preferred_page=page)
+    nearby = [chunk for chunk in paper.chunks if page is None or
+              (chunk.page is not None and abs(chunk.page - page) <= 1)]
+    if page is not None:
+        nearby.sort(key=lambda chunk: (abs(chunk.page - page), chunk.page, chunk.id))
+    for chunk in nearby:
+        matched = _rendered_span(chunk.content, text)
+        if matched is not None:
+            return SelectionSource(chunk, [chunk], matched)
+    strict = resolve_selection_chunks(nearby, text, preferred_page=page)
     if strict is not None:
         return SelectionSource(*strict)
     # Formatting recovery is local to the selected page and its continuations.
     # Do not assemble a plausible passage from unrelated parts of the paper.
     if page is None:
         return None
-    nearby = [chunk for chunk in paper.chunks if chunk.page is not None and abs(chunk.page - page) <= 1]
-    nearby.sort(key=lambda chunk: (abs(chunk.page - page), chunk.page, chunk.id))
     corrected = pdf_comparison_views(paper, {chunk.page for chunk in nearby})
-    sources = [(chunk, _view(corrected.get(chunk.id, chunk.content))) for chunk in nearby]
-    query = _view(text)
+    for keep_hyphens in (True, False):
+        result = _recover_layout(nearby, corrected, text, keep_hyphens=keep_hyphens)
+        if result is not None:
+            return result
+    return None
+
+
+def _recover_layout(nearby, corrected, text, *, keep_hyphens):
+    sources = [(chunk, _view(corrected.get(chunk.id, chunk.content), keep_hyphens=keep_hyphens)) for chunk in nearby]
+    query = _view(text, keep_hyphens=keep_hyphens)
     if len(query) < 3:
         return None
     consumed: dict[str, set[int]] = {}

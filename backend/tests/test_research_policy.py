@@ -34,6 +34,26 @@ def test_dynamic_windows_are_not_named_five_hours_and_unknown_expiry_blocks():
     assert not quota_decision([window], age=0, now=1000)['allowed']
 
 
+@pytest.mark.parametrize('running', [False, True])
+@pytest.mark.parametrize('short_used,long_used', [(0, 100), (100, 0), (100, 100)])
+def test_zero_reserve_disables_that_window_reserve_gate(running, short_used, long_used):
+    from app.services.research_policy import quota_decision
+    windows = [dict(used_percent=short_used, window_minutes=300, resets_at=2000),
+               dict(used_percent=long_used, window_minutes=10080, resets_at=3000)]
+    result = quota_decision(windows, age=0, now=1000, running=running,
+                           start_remaining=50, stop_remaining=0, long_reserve=0)
+    # Starting still requires the configured short-window starting balance.
+    assert result['allowed'] is (running or short_used == 0)
+
+
+def test_zero_long_reserve_does_not_disable_positive_short_reserve():
+    from app.services.research_policy import quota_decision
+    windows = [dict(used_percent=65, window_minutes=300, resets_at=2000),
+               dict(used_percent=100, window_minutes=10080, resets_at=3000)]
+    assert quota_decision(windows, age=0, now=1000, running=True,
+                          stop_remaining=35, long_reserve=0)['reason'] == 'quota_reserve'
+
+
 def test_foreground_preempts_background_without_account_overlap(tmp_path):
     from app.providers.profiles import ProfileStore
     from app.providers.priority import background_call, check_background

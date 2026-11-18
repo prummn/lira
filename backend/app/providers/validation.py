@@ -133,7 +133,11 @@ def canonical_quote_across(sources: list[str], quote: str) -> tuple[str, int] | 
 def _selection_tokens(value: str) -> list[str]:
     """Tokenize PDF text after removing line-break hyphenation artifacts."""
     value = re.sub(r"(?<=\w)-\s+(?=\w)", "", value.casefold())
-    return re.findall(r"[a-z0-9]+(?:[-'][a-z0-9]+)*|[\u4e00-\u9fff]+|[^\w\s]", value)
+    # Unicode words retain Greek variables/names and accented prose. The old
+    # ASCII-only pattern silently discarded α/β and could validate a changed
+    # variable as the same source.
+    value = unicodedata.normalize('NFKC', value)
+    return re.findall(r"[^\W_]+(?:[-'][^\W_]+)*|[^\w\s]", value)
 
 
 def resolve_selection_chunks(chunks, quote: str, *, preferred_page: int | None = None):

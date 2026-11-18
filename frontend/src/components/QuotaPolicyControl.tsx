@@ -49,7 +49,7 @@ function QuotaPolicyDialog({status,onSaved,close}:{status?:ResearchStatus;onSave
   <p className="quota-policy-intro">后台研究只在额度宽裕时开始。你选择的是“留多少给自己阅读”，不是每篇文章的消费上限。</p>
   <div className="quota-policy-windows">{snapshot?.quota.filter(q=>q.used_percent!==null).map((q,i)=>{
    const long=(q.window_minutes??0)>=1440,remaining=Math.max(0,100-q.used_percent!),reserve=draft?(long?draft.long_reserve:draft.stop_remaining):0
-   return <div key={i}><span>{long?'较长周期额度':'短周期额度'}</span><strong>{remaining}% <small>剩余</small></strong><p>{remaining<=reserve?`已到后台暂停线（${reserve}%）`:`高于后台暂停线（${reserve}%）`}</p></div>
+   return <div key={i}><span>{long?'较长周期额度':'短周期额度'}</span><strong>{remaining}% <small>剩余</small></strong><p>{reserve===0?'不预留额度 · 由官方请求结果决定是否可用':remaining<=reserve?`已到后台暂停线（${reserve}%）`:`高于后台暂停线（${reserve}%）`}</p></div>
   })}{!snapshot?.quota.some(q=>q.used_percent!==null)&&<p>{t('queueUnknownQuota')}</p>}</div>
   {draft?<form onSubmit={e=>{e.preventDefault();void save()}}>
    <div className="quota-policy-presets" role="group" aria-label="后台额度策略">{quotaPresets.map(preset=><button type="button" key={preset.id} aria-pressed={selected===preset.id} disabled={busy} onClick={()=>{setDraft(applyQuotaPreset(draft,preset.id));setCustomOpen(false);setNotice('')}}><strong>{preset.label}</strong><small>{preset.hint}</small></button>)}</div>
@@ -60,7 +60,7 @@ function QuotaPolicyDialog({status,onSaved,close}:{status?:ResearchStatus;onSave
    ] as const).map(([key,label,hint])=><label key={key}><span>{t(label)}<small>{t(hint)}</small></span><input type="number" aria-label={t(label)} min={key==='start_remaining'?1:0} max={key==='stop_remaining'?99:100} step={1} required value={Number.isNaN(draft[key])?'':draft[key]} onChange={e=>{setDraft({...draft,[key]:e.target.value===''?NaN:Number(e.target.value)});setNotice('')}}/></label>)}</fieldset>
    </details>
    {!valid&&<p className="quota-policy-error">{t('quotaInvalid')}</p>}
-   <p className="quota-policy-footnote">适用于所有官方连接的后台任务。前台提问和手动翻译仍优先；官方服务本身的额度限制照常生效。</p>
+   <p className="quota-policy-footnote">适用于所有官方连接的后台任务。保留线设为 0 时，本应用不按该窗口的剩余百分比暂停任务。前台提问和手动翻译仍优先；官方服务本身的额度限制照常生效。</p>
    {error&&<ErrorBanner error={error}/>}
    <div className="quota-policy-actions"><button type="button" className="text-btn" disabled={refreshing||busy} onClick={()=>void refresh()}><RefreshCw size={13} className={refreshing?'spin':''}/>{t('quotaRefresh')}</button><span role="status">{notice}</span><button className="btn primary" type="submit" disabled={!valid||busy}>{busy&&<LoaderCircle size={14} className="spin"/>}{t('quotaSave')}</button></div>
   </form>:error?<ErrorBanner error={error} retry={()=>void refresh()}/>:<p><LoaderCircle size={14} className="spin"/> {t('loading')}</p>}

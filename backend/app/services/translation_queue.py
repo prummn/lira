@@ -350,7 +350,7 @@ def _refs(paragraph):
     return {(r['chunk_id'],r['start'],r['end']) for r in paragraph['refs']}
 
 
-def _resolve(db, job, item):
+def _resolve(db, job, item, *, projections=None):
     if job is None or item is None:
         raise Deferred('cancelled')
     paper = find_paper(db,job.paper_id)
@@ -365,7 +365,16 @@ def _resolve(db, job, item):
     if source != item.source_text:
         raise ProviderError('论文原文已更新，请重新选择段落',409,code='source_changed')
     wanted = {(r['chunk_id'],r['start'],r['end']) for r in refs}
-    paragraph = next((p for p in paragraphs_for(paper) if wanted <= _refs(p)),None)
+    if projections is None:
+        paragraphs = paragraphs_for(paper)
+    else:
+        # One scheduling pass observes a single immutable source projection.
+        # Rebuilding it per candidate turns a long survey's queue scan into
+        # minutes under the shared mutation lock. Execution still revalidates.
+        if paper.id not in projections:
+            projections[paper.id] = paragraphs_for(paper)
+        paragraphs = projections[paper.id]
+    paragraph = next((p for p in paragraphs if wanted <= _refs(p)),None)
     if paragraph is None:
         raise ProviderError('论文分段已更新，请重新选择段落',409,code='source_changed')
     return paragraph
@@ -536,12 +545,20 @@ def _choose_next(worker, *, allow_idle=True, blocked_jobs=()):
         # Equal-priority papers share capacity; urgent selections keep precedence.
         eligible.sort(key=lambda candidate: (-candidate[2], candidate[3] != 'selected',
             counts.get(jobs[candidate[0]].paper_id, 0)))
+        projections, draining_papers = {}, set()
         for candidate in eligible:
             job = jobs[candidate[0]]
+            if job.paper_id in draining_papers:
+                continue
             if counts.get(job.paper_id):
                 try:
                     item = db.get(TranslationItem, candidate[1])
-                    if _resolve(db, job, item).get('review_needed'):
+                    if _resolve(db, job, item, projections=projections).get('review_needed'):
+                        # Boundary edits need exclusive paper access. Let the
+                        # admitted translations finish, then run this boundary;
+                        # continually admitting later prose would starve it.
+                        # Other papers retain access to unused provider slots.
+                        draining_papers.add(job.paper_id)
                         continue
                 except (ProviderError, HTTPException):
                     pass  # The execution path records permanent source errors.

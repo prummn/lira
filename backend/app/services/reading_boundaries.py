@@ -186,6 +186,15 @@ def _review(database,paper_id,paragraph_id,provider, *, before_call=None, max_ca
             if chosen is None:
                 raise HTTPException(409,'段落已更新，请重新选择要检查的原文')
             component_ids = {p['id'] for p in current if _ref_keys(p) <= _ref_keys(chosen)}
+            # Once both edges of the selected unit are decided, its reading
+            # boundary is ready. Do not keep walking into unrelated neighbors
+            # merely to fill a four-decision batch. A genuine merge expands
+            # component_ids and exposes the next edge on the following pass.
+            if not any(b['key'] not in records and
+                       (b['left']['id'] in component_ids or b['right']['id'] in component_ids)
+                       for b in boundaries):
+                remaining = []
+                break
             relevant = []
             search_ids = set(component_ids)
             while len(relevant) < BOUNDARIES_PER_CALL:

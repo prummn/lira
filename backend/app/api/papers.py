@@ -532,7 +532,11 @@ def _explain_response(paper_id: str,payload: ExplainRequest,session: Session) ->
     else:
         chunk = None
     if payload.chunk_id and chunk is None and not visual_requested:
-        raise HTTPException(404,'未找到这篇论文中的原文块')
+        # A removed extraction ID can be recovered from this paper's selected
+        # page. An ID owned by another paper must never be silently rebound.
+        if (payload.page is None or not payload.selected_text or
+                session.get(PaperChunk, payload.chunk_id) is not None):
+            raise HTTPException(404,'未找到这篇论文中的原文块')
     matched_chunks: list[PaperChunk] = []
     if visual_requested and payload.page is not None and payload.bbox is not None:
         matched_chunks = visual_selection_chunks(paper, payload.page, payload.bbox)

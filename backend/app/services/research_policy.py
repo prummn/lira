@@ -18,6 +18,8 @@ def quota_decision(windows, *, age, running=False, now=None, start_remaining=50,
             return denied('quota_stale')
         remaining = 100 - used
         reserve = long_reserve if minutes >= 1440 else (stop_remaining if running else start_remaining)
-        if remaining <= reserve:
+        # Zero explicitly disables this application's reserve gate. Reported
+        # exhaustion is still subject to the provider's actual request limits.
+        if reserve > 0 and remaining <= reserve:
             return denied('quota_reserve')
     return {'allowed': True, 'reason': 'ready'}

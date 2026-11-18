@@ -1148,7 +1148,7 @@
   "quotaLongReserve": "长窗口至少保留（%）",
   "quotaLongHint": "通常是周额度；设为 0 表示不额外保留。",
   "quotaShortReserve": "短窗口至少保留（%）",
-  "quotaShortHint": "通常是五小时额度；预译达到此线后等待。",
+  "quotaShortHint": "通常是五小时额度；设为 0 时不按该窗口的剩余百分比暂停。",
   "quotaStartReserve": "闲时研究启动阈值（%）",
   "quotaStartHint": "仅当剩余额度高于此值，才启动可选研究；须高于短窗口保留线。",
   "quotaPolicyScope": "此策略为所有官方连接共享，也影响闲时研究。单段手动翻译和提问不受这条后台保留线约束；官方服务额度仍然生效。",

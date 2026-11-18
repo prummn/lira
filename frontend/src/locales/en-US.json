@@ -1148,7 +1148,7 @@
   "quotaLongReserve": "Long window reserve (%)",
   "quotaLongHint": "Usually weekly quota. Set 0 to keep no additional reserve.",
   "quotaShortReserve": "Short window reserve (%)",
-  "quotaShortHint": "Usually five-hour quota. Pretranslation waits at this level.",
+  "quotaShortHint": "Usually five-hour quota. Set 0 to disable pausing based on this window's remaining percentage.",
   "quotaStartReserve": "Idle research start threshold (%)",
   "quotaStartHint": "Optional research starts above this level. Must exceed the short window reserve.",
   "quotaPolicyScope": "Shared across official connections and idle research. Manual paragraph translation and questions bypass these background reserves; official service limits still apply.",

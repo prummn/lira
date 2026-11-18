@@ -1,5 +1,20 @@
 import {test,expect} from '@playwright/test'
 
+test('zero reserves do not label exhausted windows as locally paused',async({page})=>{
+ const settings={enabled:true,profile_id:'official',idle_seconds:60,start_remaining:50,stop_remaining:0,long_reserve:0,maintenance_enabled:false,maintenance_interval_minutes:720,maintenance_calls_per_run:3,maintenance_scope:'library'}
+ await page.route('**/api/research/status',route=>route.fulfill({json:{settings,reason:'ready',quota:[
+  {name:'primary',used_percent:0,window_minutes:300,resets_at:1999999999},
+  {name:'secondary',used_percent:100,window_minutes:10080,resets_at:1999999999},
+ ],tasks:[],scope_ids:[],maintenance:null,translation_jobs:[],analysis_tasks:[]}}))
+ await page.goto('/')
+ await page.getByRole('button',{name:/后台任务/}).click()
+ await page.getByRole('button',{name:'调整保留线',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'额度保留线',exact:true})
+ await expect(dialog.locator('.quota-policy-windows')).toContainText('0%')
+ await expect(dialog.getByText('不预留额度 · 由官方请求结果决定是否可用',{exact:true})).toHaveCount(2)
+ await expect(dialog.locator('.quota-policy-windows')).not.toContainText('已到后台暂停线')
+})
+
 test('quota reserves can be edited from the monitor, persist and retain drafts on failure',async({page})=>{
  let settings={enabled:false,profile_id:null,idle_seconds:180,start_remaining:50,stop_remaining:35,long_reserve:30,maintenance_enabled:false,maintenance_interval_minutes:720,maintenance_calls_per_run:3,maintenance_scope:'library'}
  let fail=false

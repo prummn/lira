@@ -11,6 +11,7 @@ import './explain-panel.css'
 import { useConversation } from '../lib/useConversation'
 import { ConversationHistory } from './ConversationHistory'
 import { QuestionSource } from './QuestionSource'
+import { selectionChunk } from '../lib/selectionSource'
 
 type ContextScope = 'auto' | 'paragraph' | 'section' | 'full'
 const normalize = (value: string) => value.replace(/\s+/g, ' ').trim()
@@ -79,18 +80,19 @@ export function ExplainPanel({ paper, selection, visualPage, visualImage, close,
   const visualKind=selection?.visualKind??(savedContext?.visual_kind==='figure'||savedContext?.visual_kind==='table'||savedContext?.visual_kind==='equation'?savedContext.visual_kind:undefined)
   const visualLabel=selection?.visualLabel??(typeof savedContext?.visual_label==='string'?savedContext.visual_label:'')
   const sourceSelection = selection?.sourceText ?? selection?.text ?? (typeof savedContext?.selected_text==='string'?savedContext.selected_text:'')
+  const selectionPage = selection?.page ?? (typeof savedContext?.page === 'number' ? savedContext.page : undefined)
+  const translatedSelection = selection?.origin === 'translation' ? selection.text : typeof savedContext?.translated_text === 'string' ? savedContext.translated_text : ''
   const formulaImageOnly=visualKind==='equation'&&/[\uf000-\uf8ff\ufffd■]/.test(sourceSelection)
   const chunk = savedContext?.chunk_id
     ? paper.chunks.find(c => c.id === savedContext.chunk_id)
     : visual
     ? paper.chunks.find(c => c.page === visualPage)
     : selection
-      ? (paper.chunks.find(c => c.page === selection.page && normalize(c.content).includes(normalize(sourceSelection)))
-        ?? paper.chunks.find(c => c.page === selection.page))
+      ? selectionChunk(paper.chunks, sourceSelection, selectionPage)
       : undefined
   // A rendered page can be image-only, so visual questions do not require a
   // text chunk. Text questions still carry a verified page anchor.
-  const hasContext = visual ? Boolean(image) : Boolean(chunk)
+  const hasContext = visual ? Boolean(image) : Boolean(sourceSelection && (chunk || selectionPage))
   const bbox=selection?.bbox??(Array.isArray(savedContext?.bbox)?savedContext.bbox as number[]:undefined)
   const context = savedContext ?? {page:visual?visualPage:selection?.page,chunk_id:visual?undefined:chunk?.id,selected_text:normalize(sourceSelection),...(visual&&bbox?{bbox}:{}),...(visualKind?{visual_kind:visualKind}:{}),...(visualLabel?{visual_label:visualLabel}:{}),visual,...(selection?.origin==='translation'?{translated_text:selection.text}:{})}
   const chat=useConversation<Answer>('explanation',paper.id,context,conversationId)
@@ -179,7 +181,7 @@ export function ExplainPanel({ paper, selection, visualPage, visualImage, close,
       // conversation is being created. SQLite owns the eventual response.
       const result = await api.explain(paper.id, {
         conversation_id,request_id:crypto.randomUUID(),
-        ...(visual ? { page: visualPage, image_data_url: image, ...(bbox?{bbox}:{}), ...(sourceSelection ? { selected_text: sourceSelection } : {}),...(visualKind?{visual_kind:visualKind}:{}),...(visualLabel?{visual_label:visualLabel}:{}) } : { page:selection?.page, chunk_id: chunk?.id, selected_text: sourceSelection, ...(selection?.origin === 'translation' ? { translated_text: selection.text } : {}) }),
+        ...(visual ? { page: visualPage, image_data_url: image, ...(bbox?{bbox}:{}), ...(sourceSelection ? { selected_text: sourceSelection } : {}),...(visualKind?{visual_kind:visualKind}:{}),...(visualLabel?{visual_label:visualLabel}:{}) } : { page:selectionPage, chunk_id: savedContext?.chunk_id as string | undefined ?? chunk?.id, selected_text: sourceSelection, ...(translatedSelection ? { translated_text: translatedSelection } : {}) }),
         question: trimmed,
         style: 'technical',
         context_scope: scope,
@@ -218,20 +220,20 @@ export function ExplainPanel({ paper, selection, visualPage, visualImage, close,
       </div>}
       <div className="explain-composer">
         {!hasConversation && <p className="explain-paper-name" title={paper.title}>{paper.title}</p>}
-        {!visual && !chunk && <ErrorBanner error={t('selectionNoChunk')}/>}
+        {!visual && !hasContext && <ErrorBanner error={t('selectionNoChunk')}/>}
         {imageError&&<ErrorBanner error={imageError} retry={()=>setImageAttempt(value=>value+1)}/>}
         {(error||chat.error||archive.error) && <ErrorBanner error={error||chat.error||archive.error}/>}
         <form className="explain-question-form" onSubmit={submit}>
           <details className="explain-context" open={contextOpen} onToggle={event => setContextOpen(event.currentTarget.open)}>
             <summary className="explain-context-toggle">
               {visual ? visualKind==='equation'?<Sigma size={15}/>:visualKind==='table'?<Table2 size={15}/>:<ChartNoAxesCombined size={15}/> : <FileText size={15}/>}
-              <span className="explain-context-label">{visual ? visualContextLabel : t('selectedPassage')}{visualLabel&&<span> · {visualLabel}</span>}<span> · {t('page')} {visual ? visualPage : selection?.page}</span></span>
-              {(visual ? sourceSelection : selection?.text) && <span className="explain-context-excerpt">{formulaImageOnly?t('equationImageSource'):visual ? sourceSelection : selection?.text}</span>}
+              <span className="explain-context-label">{visual ? visualContextLabel : t('selectedPassage')}{visualLabel&&<span> · {visualLabel}</span>}<span> · {t('page')} {visual ? visualPage : selectionPage}</span></span>
+              {sourceSelection && <span className="explain-context-excerpt">{formulaImageOnly?t('equationImageSource'):translatedSelection || sourceSelection}</span>}
               <ChevronDown className="explain-context-chevron" size={14}/>
             </summary>
             {visual ? image ? <><figure className="explain-page-preview"><img src={image} alt={t('explainVisualPreview')}/></figure>{formulaImageOnly?<p className="explain-selection-quote">{t('equationImageSource')}</p>:sourceSelection && <ScientificText text={sourceSelection} className="explain-selection-quote"/>}</> : <p className="explain-restoring-page"><LoaderCircle size={14} className="spin"/>{t('loading')}</p> : <>
-              <ScientificText text={selection?.text ?? ''} className="explain-selection-quote"/>
-              {selection?.origin === 'translation' && <div className="explain-selection-source"><span>{t('translationSource')}</span><ScientificText text={sourceSelection} /></div>}
+              <ScientificText text={translatedSelection || sourceSelection} className="explain-selection-quote"/>
+              {translatedSelection && <div className="explain-selection-source"><span>{t('translationSource')}</span><ScientificText text={sourceSelection} /></div>}
             </>}
           </details>
           <textarea ref={inputRef} disabled={chat.loading} aria-label={t('explainQuestion')} value={question} onChange={event => setQuestion(event.target.value)} placeholder={t(hasConversation ? 'explainFollowUp' : visual ? 'explainVisualQuestionPlaceholder' : 'explainQuestionPlaceholder')} rows={2} onKeyDown={event => {

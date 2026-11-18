@@ -8,6 +8,62 @@ from test_remote_provider import import_fixture
 from test_translation_cache import remote_provider
 
 
+@pytest.fixture
+def lightning_page5(monkeypatch):
+    from pathlib import Path
+    from app.models import PaperChunk
+    from app.services import reading_paragraphs as reading
+    from app.services.pdf_metadata import LayoutLine
+    data = json.loads((Path(__file__).parent/'fixtures/agent_lightning_page5.json').read_text(encoding='utf-8'))
+    lines = [LayoutLine(**{**line, 'key': tuple(line['key']), 'bbox': tuple(line['bbox'])}) for line in data['lines']]
+    monkeypatch.setattr(reading, '_read_layout', lambda _: ({5: lines}, {5: {key: rank for rank,key in enumerate(data['order'])}}))
+    chunks = [PaperChunk(**{key:value for key,value in chunk.items() if key != 'bbox'},
+                        paper_id='lightning', bbox_json=json.dumps(chunk['bbox'])) for chunk in data['chunks']]
+    return chunks, reading.build_reading_paragraphs(chunks)
+
+
+def test_lightning_math_fragments_preserve_every_body_source_slice(lightning_page5):
+    chunks, paragraphs = lightning_page5
+    for chunk in chunks:
+        if chunk.content == '5':  # printed page number
+            continue
+        refs = sorted((r for p in paragraphs for r in p['refs'] if r['chunk_id'] == chunk.id), key=lambda r:r['start'])
+        restored = '\n'.join(chunk.content[r['start']:r['end']] for r in refs)
+        assert restored == chunk.content, chunk.id
+
+
+def test_lightning_inline_subscripts_do_not_split_running_prose(lightning_page5):
+    _, paragraphs = lightning_page5
+    for beginning, ending in [
+        ('where the harness sends', 'the next prompt, e.g.'),
+        ('RL training operates', '1 , atok'),
+        ('In practice, Equation 8', 'sampled IDs in atok'),
+    ]:
+        paragraph = next(p for p in paragraphs if p['text'].startswith(beginning))
+        assert ending in paragraph['source_text'] or ending in paragraph['text']
+    training = next(p for p in paragraphs if p['text'].startswith('RL training operates'))
+    assert 'The response returned' in training['source_text']
+    assert 'Token-prefix continuity between consecutive calls requires' not in training['text']
+    practice = next(p for p in paragraphs if p['text'].startswith('In practice, Equation 8'))
+    assert 'This mismatch can arise' not in practice['text']
+
+
+def test_lightning_numbered_items_keep_their_hanging_continuation(lightning_page5):
+    _, paragraphs = lightning_page5
+    for number, continuation in [(1, 'equivalent to concatenating'), (2, 'text and tokenizing'), (3, 'normalize, repair')]:
+        item = next(p for p in paragraphs if p['text'].startswith(f'({number}) '))
+        assert continuation in item['text']
+    assert any(p['text'].startswith('A template may insert') for p in paragraphs)
+    assert any(p['text'].startswith('Besides, when') for p in paragraphs)
+
+
+def test_lightning_display_equation_fragments_stay_in_one_reading_unit(lightning_page5):
+    _, paragraphs = lightning_page5
+    for ids in [range(123,130), range(133,137), range(146,151), range(162,167)]:
+        expected = {f'chunk-paper-7ca1c77cfaa945e9-{i:06d}' for i in ids}
+        assert any(expected <= {r['chunk_id'] for r in p['refs']} for p in paragraphs), expected
+
+
 def test_reading_paragraphs_exclude_headings_and_keep_pdf_anchors(client: TestClient):
     paper = import_fixture(client)
     response = client.get(f"/api/papers/{paper['id']}/reading-paragraphs")

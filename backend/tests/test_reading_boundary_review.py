@@ -173,6 +173,7 @@ def test_immediate_right_boundary_is_checked_before_distant_cached_neighbors(cli
     assert any(b['left_end'].startswith('Fragment 4') and b['right_start'].startswith('Fragment 5') for b in provider.calls[0]['boundaries'])
     current=next(p for p in response.json()['paragraphs'] if p['id']==selected['id'])
     assert current['review_needed'] is False
+    assert len(provider.calls) == 1, 'resolved selected boundaries must not trigger reviews of unrelated paragraphs'
 
 
 def test_review_redirects_another_selected_fragment_into_the_merged_unit(client,monkeypatch):

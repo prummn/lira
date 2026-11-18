@@ -600,6 +600,21 @@ def test_lowering_weekly_reserve_resumes_existing_pretranslation_without_reenque
     assert len(provider.calls) == 1
 
 
+@pytest.mark.parametrize('automatic', [False, True])
+def test_zero_reserves_allow_full_translation_with_reported_weekly_zero(queue, monkeypatch, automatic):
+    client, worker, provider, _, _ = queue
+    monkeypatch.setattr(worker.profiles.codex, 'status', lambda **kw: {'authenticated': True, 'limits': [
+        {'used_percent': 0, 'window_minutes': 300, 'resets_at': time.time()+300},
+        {'used_percent': 100, 'window_minutes': 10080, 'resets_at': time.time()+86400}]})
+    worker.settings(ResearchSettings(enabled=True, profile_id='official', idle_seconds=0,
+                                    stop_remaining=0, long_reserve=0))
+    job = enqueue(queue, mode='full', automatic=automatic).json()
+    assert worker.process_next()
+    resumed = latest(queue)
+    assert resumed['id'] == job['id'] and resumed['completed'] == 1
+    assert len(provider.calls) == 1
+
+
 def test_full_disabled_is_durable_and_returns_waiting_reason(queue):
     _,worker,provider,_,_ = queue
     worker.settings(ResearchSettings(enabled=False,profile_id='official',idle_seconds=0))
@@ -723,6 +738,40 @@ def test_paused_shared_selected_work_can_be_fulfilled_by_full_without_resuming_p
 def test_source_lock_normalizes_url_encoding_and_windows_case():
     from app.services.translations import source_lock
     assert source_lock('sqlite:///D%3A/papers.db','p','fragment') is source_lock('sqlite:///d:/papers.db','p','merged fragment')
+
+
+def test_busy_paper_is_projected_once_when_many_candidates_need_boundary_review(queue, monkeypatch):
+    from app.services import translation_queue as tasks
+    _, worker, _, _, paragraphs = queue
+    enqueue(queue)
+    calls = []
+    def project(paper):
+        calls.append(paper.id)
+        return [{**p, 'refs': [{'chunk_id': f'q{index}', 'start': 0, 'end': len(p['source_text'])}],
+                 'review_needed': True} for index, p in enumerate(paragraphs)]
+    monkeypatch.setattr(tasks, 'paragraphs_for', project)
+    worker._translation_claims['in-flight'] = ('queue-paper', False)
+    assert tasks._choose_next(worker) is None
+    assert calls == ['queue-paper']
+
+
+def test_pending_boundary_review_drains_its_paper_instead_of_being_overtaken(queue, monkeypatch):
+    from app.services import translation_queue as tasks
+    _, worker, _, _, paragraphs = queue
+    enqueue(queue)
+    original = tasks._resolve
+    def resolve(*args, **kwargs):
+        paragraph = original(*args, **kwargs)
+        return {**paragraph, 'review_needed': paragraph['id'] == paragraphs[0]['id']}
+    monkeypatch.setattr(tasks, '_resolve', resolve)
+    worker._translation_claims['in-flight'] = ('queue-paper', False)
+    assert tasks._choose_next(worker) is None
+    worker._translation_claims.clear()
+    chosen = tasks._choose_next(worker)
+    assert chosen is not None
+    with worker.database.sessions() as db:
+        from app.models import TranslationItem
+        assert db.get(TranslationItem, chosen[1]).paragraph_id == paragraphs[0]['id']
 
 
 def test_resume_fully_cached_paused_job_finishes_immediately(queue):

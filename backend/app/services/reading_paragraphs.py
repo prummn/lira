@@ -14,7 +14,7 @@ from .pdf_metadata import body_font, read_lines, section_reading_order
 from .translations import translation_error
 from .visual_regions import CAPTION, visual_regions_for_pdf
 
-MATH_GLYPHS = re.compile(r"[=∈√∑∏×≤≥±∞∂∇∫≈≠∝÷−\uf000-\uf0ff]")
+MATH_GLYPHS = re.compile(r"[=×±÷−\u2200-\u22ff\u2a00-\u2aff\uf000-\uf0ff]")
 
 
 def prose_text(source: str) -> str:
@@ -39,7 +39,7 @@ def _heading(text: str, section: str | None):
     return bool(section and clean(text) == clean(section)) or bool(re.fullmatch(r'\d+(?:\.\d+)*\.?', text.strip()))
 
 
-def _layout_artifact(raw: str, lines, page_body_size: float, *, caption: bool = False, annotation: bool = False) -> bool:
+def _layout_artifact(raw: str, lines, page_body_size: float, *, caption: bool = False, annotation: bool = False, math: bool = False) -> bool:
     """Recognize blocks emitted by PDF layout for tables, footnotes and chrome.
 
     These blocks are useful as source evidence, but they must not become prose
@@ -55,7 +55,7 @@ def _layout_artifact(raw: str, lines, page_body_size: float, *, caption: bool = 
         return True
     if caption:
         return False
-    if MATH_GLYPHS.search(raw):
+    if math or MATH_GLYPHS.search(raw):
         return False
     if lines:
         typical = median(line.size for line in lines)
@@ -124,8 +124,13 @@ def _observed_lines(chunk, lines):
             and bounds[1] - 1 <= line.bbox[1] and line.bbox[3] <= bounds[3] + 1]
 
 
-def _math_chunks(chunks):
-    seeds = [chunk for chunk in chunks if MATH_GLYPHS.search(chunk.content)]
+def _math_chunks(chunks, observed=None):
+    # Inline variables need not contain an operator: a subscript or the tail
+    # of a sentence may be extracted as its own short PDF block. Mathematical
+    # font evidence keeps these fragments out of the table/short-label filter.
+    seeds = [chunk for chunk in chunks if MATH_GLYPHS.search(chunk.content) or any(
+        'math' in span.get('font', '').casefold()
+        for line in (observed or {}).get(chunk.id, []) for span in line.spans)]
     result = {chunk.id for chunk in seeds}
     for chunk in chunks:
         bounds = _bbox(chunk)
@@ -138,6 +143,13 @@ def _math_chunks(chunks):
                 result.add(chunk.id)
                 break
     return result
+
+
+def _source_math(source, lines):
+    source_lines = set(source.splitlines())
+    return bool(MATH_GLYPHS.search(source)) or any(
+        'math' in span.get('font', '').casefold()
+        for line in lines if line.text in source_lines for span in line.spans)
 
 
 def _math_continuation(previous, current):
@@ -155,7 +167,8 @@ def _math_continuation(previous, current):
 
 
 def _piece_position(source, anchor, lines):
-    exact = [line for line in lines if line.text in source]
+    source_lines = set(source.splitlines())
+    exact = [line for line in lines if line.text in source_lines]
     if exact:
         top = min(line.bbox[1] for line in exact)
         row = [line for line in exact if line.bbox[1] - top <= max(4, line.size * .8)]
@@ -200,7 +213,7 @@ def _ordered_pieces(pieces):
     return [piece for row in rows for piece in sorted(row, key=lambda value: value['position'][1])]
 
 
-def _ranges(chunk, lines):
+def _ranges(chunk, lines, page_lines=()):
     if not lines:
         return [(0, len(chunk.content), _bbox(chunk))]
     offsets, offset = [], 0
@@ -210,11 +223,16 @@ def _ranges(chunk, lines):
     advances = [b.bbox[1] - a.bbox[1] for a, b in zip(lines, lines[1:]) if b.bbox[1] > a.bbox[1] + 2]
     advance = median(advances) if advances else 12
     left = min(line.bbox[0] for line in lines)
+    # A fragment can begin midway through a formula and end with a fresh
+    # indented prose paragraph. Its own minimum x is then not the column margin.
+    margin = _typography(chunk.content, lines, page_lines) if page_lines else None
     cuts = [0]
     for index in range(1, len(lines)):
         previous, current = lines[index - 1], lines[index]
         ends_sentence = _ends_sentence(previous.text)
-        indentation = current.bbox[0] - left >= max(6, current.size * .55)
+        math_before = _source_math('\n'.join(line.text for line in lines[:index]), lines[:index])
+        column_left = min(left, margin['margin']) if margin and math_before else left
+        indentation = current.bbox[0] - column_left >= max(6, current.size * .55)
         gap = current.bbox[1] - previous.bbox[1] > advance * 1.45
         if ends_sentence and (indentation or gap) and current.bbox[1] > previous.bbox[1] + 2:
             cuts.append(index)
@@ -235,7 +253,8 @@ def _ends_sentence(text):
 
 
 def _typography(source, lines, page_lines):
-    exact = [line for line in lines if line.text in source]
+    source_lines = set(source.splitlines())
+    exact = [line for line in lines if line.text in source_lines]
     if not exact:
         return None
     first = min(exact, key=lambda line: (line.bbox[1], line.bbox[0]))
@@ -249,7 +268,7 @@ def _typography(source, lines, page_lines):
     margin = min((line.bbox[0] for line in column), default=min(line.bbox[0] for line in exact))
     advances = [b.bbox[1] - a.bbox[1] for a,b in zip(exact,exact[1:])
                 if 2 < b.bbox[1] - a.bbox[1] < first.size * 2]
-    return {'indented': first.bbox[0] - margin >= max(6,first.size * .55),
+    return {'indented': first.bbox[0] - margin >= max(6,first.size * .55), 'margin': margin,
             'first': first.bbox, 'last': last.bbox,
             'advance': median(advances) if advances else first.size * 1.22}
 
@@ -285,6 +304,18 @@ def _continuation(previous, current, *, first_prose_on_page=False):
         return False
     current_layout = current.get('_layout')
     previous_layout = previous.get('_layout')
+    if (previous['_math'] and re.search(r'\(\d+\)\s*$', previous['text'])
+            and re.match(r'^[A-Z]', current['text']) and not current['_math']):
+        return False
+    if (flow == 'same' and current_layout and previous_layout
+            and re.match(r'^(?:\(\d+\)|\d+[.)]|[•])\s', previous['text'])
+            and not _ends_sentence(previous['text'])
+            and not re.match(r'^(?:\(\d+\)|\d+[.)]|[•])\s', current['text'])):
+        first, last = current_layout['first'], previous_layout['last']
+        if (previous['anchors'][-1]['page'] == current['anchors'][0]['page']
+                and 6 <= first[0] - previous_layout['first'][0] <= 40
+                and -2 <= first[1] - last[3] <= current_layout['advance'] * .6):
+            return True
     if (flow == 'same' and current_layout and previous_layout
             and current_layout['indented'] and previous['_math']):
         first, last = current_layout['first'], previous_layout['last']
@@ -397,7 +428,7 @@ def build_reading_paragraphs(chunks, pdf_path: Path | str | None = None, *, titl
                        for region in visual_regions_for_pdf(pdf_path)} if pdf_path else set()
     matched = {chunk.id: _matched_lines(chunk, layouts.get(chunk.page, [])) for chunk in chunks}
     observed = {chunk.id: matched[chunk.id] or _observed_lines(chunk, layouts.get(chunk.page, [])) for chunk in chunks}
-    math_chunks = _math_chunks(chunks)
+    math_chunks = _math_chunks(chunks, observed)
     def order(chunk):
         return _source_order(chunk, observed[chunk.id], layouts, ranks)
     paragraphs = []
@@ -431,7 +462,7 @@ def build_reading_paragraphs(chunks, pdf_path: Path | str | None = None, *, titl
         caption_before = paragraphs[-1]['anchors'][-1] if paragraphs and paragraphs[-1]['kind'] == 'caption' else None
         annotation = bool(caption_before and bounds and caption_before['bbox'] and caption_before['page'] == chunk.page
                           and abs(caption_before['bbox'][0]-bounds[0]) < 22 and 0 <= bounds[1]-caption_before['bbox'][3] < 35)
-        layout_artifact = _layout_artifact(raw, lines, page_body_size, caption=caption_like,annotation=annotation)
+        layout_artifact = _layout_artifact(raw, lines, page_body_size, caption=caption_like,annotation=annotation,math=is_math)
         footnote = bool(lines and median(line.size for line in lines) < page_body_size * .94
                         and bounds and bounds[1] > (chunk.page_height or 800) * .82)
         short_continuation = bool(re.match(r'^[a-z]', raw) and any(
@@ -447,12 +478,12 @@ def build_reading_paragraphs(chunks, pdf_path: Path | str | None = None, *, titl
                 or (not section and chunk.page == 1 and len(raw) < 120)
                 or (bounds and bounds[1] > (chunk.page_height or 800) * .92)):
             continue
-        for start, end, bbox in _ranges(chunk, matched[chunk.id]):
+        for start, end, bbox in _ranges(chunk, matched[chunk.id], layouts.get(chunk.page, [])):
             source = chunk.content[start:end]
             if not source.strip():
                 continue
             kind = 'caption' if caption_like else 'prose'
-            item = {'section': section, 'kind': kind, 'source_text': source, 'text': prose_text(source), '_math': is_math and len(source) < 150,
+            item = {'section': section, 'kind': kind, 'source_text': source, 'text': prose_text(source), '_math': is_math and len(source) < 150 and (source == chunk.content or not lines or _source_math(source, lines)),
                     '_layout': _typography(source,lines,layouts.get(chunk.page,[])),
                     'refs': [{'chunk_id': chunk.id, 'start': start, 'end': end}],
                     'anchors': [{'chunk_id': chunk.id, 'page': chunk.page or 1, 'bbox': bbox,

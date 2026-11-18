@@ -749,7 +749,7 @@ class ExplainRequest(ChatRequest):
         # single canonical chunk id. The cropped image is the primary evidence
         # in that case, so do not reject the request when the region crosses
         # columns, captions, or layout fragments.
-        if self.selected_text and not self.chunk_id and not self.image_data_url:
+        if self.selected_text and not self.chunk_id and self.page is None and not self.image_data_url:
             raise ValueError('原文选段缺少来源')
         return self
 
